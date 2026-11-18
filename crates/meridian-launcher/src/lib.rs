@@ -66,6 +66,48 @@ pub enum Setup {
     Ready,
 }
 
+/// The profile with no modpack. It plays in the game root itself, so worlds made before profiles
+/// existed stay where they were.
+pub const VANILLA: &str = "vanilla";
+
+/// A profile, as PC launchers' installations: a game folder of its own (worlds, settings, mods)
+/// played with a modpack (Horizon's `.hpack`), or with none for [`VANILLA`]. Horizon only runs
+/// 26.3, so profiles differ by their mods, not by version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Profile {
+    /// Stable id: [`VANILLA`], or the folder name under `profiles/` (see [`profile_dir`]).
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Mods in its modpack; 0 for vanilla.
+    pub mods: usize,
+    /// Bytes: on disk once installed, else the download.
+    pub size: u64,
+    pub state: ProfileState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProfileState {
+    /// Offered, not installed: Install downloads its mods.
+    Available,
+    /// Installing or updating, in the setup screen's units (stage Download, bytes).
+    Installing(Progress),
+    /// Ready to play.
+    Installed,
+    /// Install stopped; already checked files stay, so installing again continues.
+    Failed(String),
+}
+
+/// A profile's game folder under the launcher's game root: the root itself for [`VANILLA`],
+/// `profiles/<id>` otherwise. Ids are folder names the backend chose, never player input.
+pub fn profile_dir(root: &std::path::Path, id: &str) -> std::path::PathBuf {
+    if id == VANILLA {
+        root.to_path_buf()
+    } else {
+        root.join("profiles").join(id)
+    }
+}
+
 /// Sensitive session data for the in-process Play handoff. This type has no Debug implementation.
 pub struct GameSession(String);
 
@@ -98,6 +140,35 @@ pub trait Backend: Send {
     /// Starts setup, or retries it after a failure.
     fn start_setup(&mut self);
     fn cancel_setup(&mut self);
+    /// Every profile, installed or offered: [`VANILLA`] first, then the modpacks.
+    fn profiles(&self) -> Vec<Profile> {
+        vec![Profile {
+            id: VANILLA.into(),
+            name: "Vanilla".into(),
+            description: "Minecraft as it comes, no mods.".into(),
+            mods: 0,
+            size: 0,
+            state: ProfileState::Installed,
+        }]
+    }
+    /// Starts installing (or updating) a profile's modpack; [`Self::profiles`] follows it.
+    fn install_profile(&mut self, _id: &str) {}
+    /// The profile Play starts (in [`profile_dir`]).
+    fn selected_profile(&self) -> String {
+        VANILLA.into()
+    }
+    fn select_profile(&mut self, id: &str) -> Result<(), String> {
+        if id == VANILLA {
+            Ok(())
+        } else {
+            Err("Profiles are unavailable in this launcher.".into())
+        }
+    }
+    /// Deletes an installed profile's folder, **its worlds included**: the screen asks first.
+    /// Vanilla can't be removed.
+    fn remove_profile(&mut self, _id: &str) -> Result<(), String> {
+        Err("This profile can't be removed.".into())
+    }
 }
 
 /// A player name Minecraft accepts: 1 to 16 of `A-Z`, `a-z`, `0-9` and `_`.
@@ -108,7 +179,7 @@ pub fn valid_offline_name(name: &str) -> bool {
 /// A backend that only pretends, so the screens can be built on a desktop before the real one
 /// lands. Sign-in shows a code for 5 s, then succeeds. Setup runs through the four stages in about
 /// 20 s; the first run fails at 40 % of the download, so the failure screen can be seen, and a
-/// retry then succeeds.
+/// retry then succeeds. A pretend "Performance" modpack installs in 5 s.
 // ponytail: delete once the real backend is wired in.
 #[derive(Default)]
 pub struct Fake {
@@ -116,6 +187,13 @@ pub struct Fake {
     microsoft_since: Option<Instant>,
     setup_since: Option<Instant>,
     runs: u32,
+    modpack_since: Option<Instant>,
+    selected: Option<String>,
+}
+
+impl Fake {
+    const MODPACK: &'static str = "performance";
+    const MODPACK_BYTES: u64 = 48_000_000;
 }
 
 impl Backend for Fake {
@@ -198,11 +276,89 @@ impl Backend for Fake {
     fn cancel_setup(&mut self) {
         self.setup_since = None;
     }
+    fn profiles(&self) -> Vec<Profile> {
+        let state = match self.modpack_since.map(|t| t.elapsed()) {
+            None => ProfileState::Available,
+            Some(t) if t >= Duration::from_secs(5) => ProfileState::Installed,
+            Some(t) => ProfileState::Installing(Progress {
+                stage: Stage::Download,
+                done: Self::MODPACK_BYTES * t.as_millis() as u64 / 5000,
+                total: Self::MODPACK_BYTES,
+                bytes_per_second: Self::MODPACK_BYTES / 5,
+                note: None,
+            }),
+        };
+        let mut profiles = vec![Profile {
+            id: VANILLA.into(),
+            name: "Vanilla".into(),
+            description: "Minecraft as it comes, no mods.".into(),
+            mods: 0,
+            size: 0,
+            state: ProfileState::Installed,
+        }];
+        profiles.push(Profile {
+            id: Self::MODPACK.into(),
+            name: "Performance".into(),
+            description: "Pretend modpack: faster chunks and lighting.".into(),
+            mods: 6,
+            size: Self::MODPACK_BYTES,
+            state,
+        });
+        profiles
+    }
+    fn install_profile(&mut self, id: &str) {
+        if id == Self::MODPACK && self.modpack_since.is_none() {
+            self.modpack_since = Some(Instant::now());
+        }
+    }
+    fn selected_profile(&self) -> String {
+        self.selected.clone().unwrap_or_else(|| VANILLA.into())
+    }
+    fn select_profile(&mut self, id: &str) -> Result<(), String> {
+        match self.profiles().into_iter().find(|p| p.id == id) {
+            Some(p) if p.state == ProfileState::Installed => {
+                self.selected = Some(id.into());
+                Ok(())
+            }
+            Some(_) => Err("Install this profile first.".into()),
+            None => Err("No such profile.".into()),
+        }
+    }
+    fn remove_profile(&mut self, id: &str) -> Result<(), String> {
+        if id != Self::MODPACK {
+            return Err("This profile can't be removed.".into());
+        }
+        self.modpack_since = None;
+        if self.selected.as_deref() == Some(id) {
+            self.selected = None;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vanilla_plays_in_the_root_and_modpacks_in_their_own_folder() {
+        let root = std::path::Path::new("game");
+        assert_eq!(profile_dir(root, VANILLA), root);
+        assert_eq!(profile_dir(root, "performance"), root.join("profiles").join("performance"));
+    }
+
+    #[test]
+    fn fake_profiles_install_select_and_remove() {
+        let mut fake = Fake::default();
+        assert_eq!(fake.selected_profile(), VANILLA);
+        assert_eq!(fake.profiles()[1].state, ProfileState::Available);
+        assert!(fake.select_profile("performance").is_err());
+        fake.install_profile("performance");
+        assert!(matches!(fake.profiles()[1].state, ProfileState::Installing(_)));
+        assert!(fake.remove_profile(VANILLA).is_err());
+        fake.remove_profile("performance").unwrap();
+        assert_eq!(fake.profiles()[1].state, ProfileState::Available);
+    }
 
     #[test]
     fn offline_names() {
