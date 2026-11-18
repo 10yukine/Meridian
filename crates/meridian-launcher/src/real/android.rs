@@ -52,7 +52,7 @@ pub(super) fn install(
             .ok()
             != Some(DIGEST)
     {
-        let bytes = fetch(agent, URL, cancel, progress)?;
+        let bytes = fetch(agent, URL, LENGTH as u64, cancel, progress)?;
         if bytes.len() != LENGTH || format!("{:x}", Sha256::digest(&bytes)) != DIGEST {
             return Err("The Android Java runtime checksum did not match.".into());
         }

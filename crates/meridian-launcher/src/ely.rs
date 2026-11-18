@@ -19,6 +19,10 @@ pub(crate) struct Session {
 }
 
 impl Session {
+    pub(crate) fn uuid(&self) -> &str {
+        &self.uuid
+    }
+
     pub fn game_session(&self) -> Result<String, String> {
         if self.expires_at <= now() {
             return Err("Ely.by session expired. Sign in again.".into());
