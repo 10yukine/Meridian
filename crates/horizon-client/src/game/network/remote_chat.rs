@@ -215,6 +215,9 @@ impl Game<'_> {
         let Some(account) = self.auth() else {
             return;
         };
+        if account.is_ely() {
+            return;
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };

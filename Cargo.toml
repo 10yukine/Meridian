@@ -49,6 +49,7 @@ members = [
     "crates/horizon-protocol",
     "crates/horizon-theme",
     "crates/horizon-prepare",
+    "crates/meridian-launcher",
     "crates/horizon-system",
     "crates/horizon-bench",
     "crates/horizon-perf-format",

@@ -1,4 +1,6 @@
-//! The Microsoft account the launcher signed in, handed over in a session
+// Copyright (c) 2026 Ludovic Marie and the Horizon contributors.
+// SPDX-License-Identifier: MIT
+//! The account the launcher signed in, handed over in a session
 //! file (docs/microsoft-account.md), and the Minecraft services call
 //! online-mode servers need: authlib's MinecraftServicesSessionService.joinServer
 //! through the services discovery document. The access token stays in this
@@ -20,6 +22,7 @@ pub struct AuthSession {
     pub uuid: u128,
     pub xuid: Option<String>,
     access_token: String,
+    ely: bool,
 }
 impl std::fmt::Debug for AuthSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,11 +50,15 @@ impl AuthSession {
             uuid,
             xuid: None,
             access_token: access_token.to_owned(),
+            ely: false,
         }
     }
 
     pub fn access_token(&self) -> &str {
         &self.access_token
+    }
+    pub fn is_ely(&self) -> bool {
+        self.ely
     }
     /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa", "xuid"}.
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -68,14 +75,17 @@ impl AuthSession {
         let access_token = field("access_token")
             .filter(|t| !t.is_empty())
             .ok_or("the session has no access token")?;
-        if field("user_type").is_some_and(|t| t != "msa") {
-            return Err("the session is not a Microsoft account session".into());
-        }
+        let ely = match field("user_type") {
+            Some("ely") => true,
+            Some("msa") | None => false,
+            Some(_) => return Err("the session names an unsupported account provider".into()),
+        };
         Ok(Self {
             name: name.to_owned(),
             uuid,
             xuid: field("xuid").map(str::to_owned),
             access_token: access_token.to_owned(),
+            ely,
         })
     }
     /// Read the session file the launcher wrote and delete it at once. It
@@ -192,10 +202,13 @@ pub fn discovery_url() -> String {
 }
 
 pub(crate) fn agent() -> ureq::Agent {
+    agent_builder().build()
+}
+
+fn agent_builder() -> ureq::AgentBuilder {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))
         .user_agent(&format!("Horizon/{}", horizon_core::release::VERSION))
-        .build()
 }
 
 /// Whether `HORIZON_API_DISCOVERY` names another services environment.
@@ -235,6 +248,9 @@ pub fn endpoint(doc: &serde_json::Value, service: &str, name: &str) -> Option<St
 /// attributes call falls back to the offline properties, a failed profile call
 /// to no actions, as vanilla does. Blocks: call it off the main thread.
 pub fn fetch_account_status(session: &AuthSession) -> crate::ban_notice::AccountStatus {
+    if session.is_ely() {
+        return Default::default();
+    }
     use crate::ban_notice::{AccountStatus, parse_profile_actions, parse_properties};
     let Ok(doc) = discovery() else {
         return AccountStatus::default();
@@ -306,9 +322,19 @@ pub fn join_server(session: &AuthSession, server_hash: &str) -> Result<(), JoinE
 }
 
 fn join_server_once(session: &AuthSession, server_hash: &str) -> Result<(), JoinError> {
-    let doc = discovery()?;
-    let url = endpoint(&doc, "session", "join").ok_or(JoinError::Unavailable)?;
-    match agent()
+    let (url, agent) = if session.is_ely() {
+        (
+            "https://authserver.ely.by/session/join".to_owned(),
+            agent_builder().redirects(0).build(),
+        )
+    } else {
+        let doc = discovery()?;
+        (
+            endpoint(&doc, "session", "join").ok_or(JoinError::Unavailable)?,
+            agent(),
+        )
+    };
+    match agent
         .post(&url)
         .set("Content-Type", "application/json; charset=utf-8")
         .send_string(&join_request(session, server_hash))
@@ -428,6 +454,9 @@ pub fn parse_certificates(body: &str) -> Option<ChatKeyPair> {
 /// UserApiService.getKeyPair: the certificates endpoint, POSTed with the
 /// access token.
 pub fn fetch_chat_keys(session: &AuthSession) -> Result<ChatKeyPair, JoinError> {
+    if session.is_ely() {
+        return Err(JoinError::Unavailable);
+    }
     let doc = discovery()?;
     let url = endpoint(&doc, "player", "getCertificates").ok_or(JoinError::Unavailable)?;
     let body = match agent()
@@ -476,6 +505,9 @@ pub fn prepare_chat_keys(now: bool) {
 
 /// Prepare keys for this player, independently of the other local accounts.
 pub fn prepare_chat_keys_for(session: Arc<AuthSession>, now: bool) {
+    if session.is_ely() {
+        return;
+    }
     let uuid = session.uuid;
     let mut accounts = CHAT_KEYS.lock().unwrap();
     let keys = accounts.entry(uuid).or_default();
@@ -532,6 +564,9 @@ const MINECRAFT_PROFILE: &str = "https://api.minecraftservices.com/minecraft/pro
 /// Single-player and integrated servers often send no `textures` property, or
 /// one without the equipped cape; the client asks the profile endpoint once.
 pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
+    if session.is_ely() {
+        return None;
+    }
     let response = agent()
         .get(MINECRAFT_PROFILE)
         .set("Authorization", &format!("Bearer {}", session.access_token))
@@ -629,6 +664,25 @@ pub fn parse_joined(body: &str) -> Option<JoinedProfile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ely_handoff_is_redacted_and_has_no_mojang_account_features() {
+        let session = AuthSession::parse(
+            r#"{"name":"Player","uuid":"00000000000000000000000000000001","access_token":"fixture-token","user_type":"ely"}"#,
+        )
+        .unwrap();
+        assert!(session.is_ely());
+        assert!(!format!("{session:?}").contains("fixture-token"));
+        assert!(own_textures(&session).is_none());
+        assert!(matches!(
+            fetch_chat_keys(&session),
+            Err(JoinError::Unavailable)
+        ));
+        let join: serde_json::Value =
+            serde_json::from_str(&join_request(&session, "hash")).unwrap();
+        assert_eq!(join["selectedProfile"], "00000000000000000000000000000001");
+        assert_eq!(join["accessToken"], "fixture-token");
+    }
 
     const UUID: u128 = 0x069a79f444e94726a5befca90e38aaf5;
 

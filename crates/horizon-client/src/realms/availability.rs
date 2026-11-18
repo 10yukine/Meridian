@@ -197,7 +197,7 @@ static SHARED: AvailabilityCache = AvailabilityCache::new();
 /// `RealmsAvailability.get()` for `session` against the production service. Without a
 /// session: [`Availability::AuthenticationError`], already answered, nothing asked.
 pub fn get(session: Option<&Arc<AuthSession>>) -> Pending {
-    match session {
+    match session.filter(|session| !session.is_ely()) {
         Some(session) => SHARED.get(session, || RealmsClient::production(session)),
         None => Pending::ready(Availability::AuthenticationError),
     }

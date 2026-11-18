@@ -1,7 +1,7 @@
 //! Java discovery and execution for the vanilla exporters. They call Mojang's own code, so they
 //! stay Java; everything around them is here.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 pub struct Jdk {
     pub javac: PathBuf,
     pub java: PathBuf,
+    launcher: Option<(PathBuf, Vec<(OsString, OsString)>)>,
 }
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
@@ -332,6 +333,7 @@ fn find_tools(major: i64, more: &[PathBuf], compiler: bool) -> Result<Jdk, Strin
                 return Ok(Jdk {
                     javac: std::path::absolute(&javac).unwrap_or(javac),
                     java: std::path::absolute(&java).unwrap_or(java),
+                    launcher: None,
                 });
             }
             Err(e) => problems.push(format!("{from}: {e}")),
@@ -386,6 +388,30 @@ pub fn classpath<'a>(paths: impl IntoIterator<Item = &'a Path>) -> String {
 }
 
 impl Jdk {
+    /// Launch a Java home through an installed helper. The compiler runs as a Java module.
+    pub fn with_launcher(home: &Path, executable: PathBuf, env: Vec<(OsString, OsString)>) -> Self {
+        Self {
+            java: home.join("bin/java"),
+            javac: home.join("bin/javac"),
+            launcher: Some((executable, env)),
+        }
+    }
+
+    pub(crate) fn java_command(&self) -> Command {
+        match &self.launcher {
+            Some((executable, env)) => {
+                let mut child = command(executable);
+                child.envs(env.iter().map(|(key, value)| (key, value)));
+                child
+            }
+            None => command(&self.java),
+        }
+    }
+
+    pub(crate) fn has_launcher(&self) -> bool {
+        self.launcher.is_some()
+    }
+
     /// The JDK's home, the folder above `bin` (what `JAVA_HOME` names).
     pub fn home(&self) -> PathBuf {
         self.java
@@ -398,16 +424,25 @@ impl Jdk {
     /// `javac --release <major> -proc:none` with Python's `subprocess.run(..., check=True,
     /// stdout=log, stderr=STDOUT, timeout=3600)`.
     pub fn javac(&self, major: i64, args: &[String], log: &fs::File) -> Result<(), String> {
-        let mut command = command(&self.javac);
+        let mut command = if self.has_launcher() {
+            let mut child = self.java_command();
+            child
+                .args(BATCH_OPTIONS)
+                .args(["-m", "jdk.compiler/com.sun.tools.javac.Main"]);
+            child
+        } else {
+            let mut child = command(&self.javac);
+            child.args(BATCH_OPTIONS.map(|option| format!("-J{option}")));
+            child
+        };
         command
-            .args(BATCH_OPTIONS.map(|option| format!("-J{option}")))
             .args(["--release", &major.to_string(), "-proc:none"])
             .args(args);
         run(command, log)
     }
 
     pub fn java(&self, args: &[String], cwd: Option<&Path>, log: &fs::File) -> Result<(), String> {
-        let mut command = command(&self.java);
+        let mut command = self.java_command();
         command.args(BATCH_OPTIONS).args(args);
         if let Some(dir) = cwd {
             command.current_dir(dir);

@@ -36,3 +36,9 @@ The capture includes game output under `RustStdoutStderr` and Android activity m
 The resource copy is for the first setup. It refuses to replace existing resources and checks that the PC output matches the checkout's Minecraft and preparation versions. On repeat launches, omit `-Resources` to use the existing copy. Use `-InstallOnly` to stage the APK and optional resources without opening the app.
 
 The native bootstrap smoke check ends when Android opens the activity and the app has a live process. Test rendering, touch, and save/resume separately on a disposable world.
+
+## Launcher setup
+
+The APK includes an executable Java launcher and the NDK C++ runtime. On first setup, Meridian downloads and verifies the pinned Android ARM64 Java 25 archive and prepares the Mojang resources in app-private storage.
+
+Set `HORIZON_MSA_CLIENT_ID` before building to enable Microsoft device-code sign-in, using the same app registration as the desktop launcher. The offline setup flow needs no Microsoft account.
