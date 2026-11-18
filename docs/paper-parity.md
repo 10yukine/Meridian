@@ -85,7 +85,7 @@ to repeat the moisture final-block checks; those worlds are deliberately exclude
 from CI artifacts, so an artifact alone cannot replay that check.
 The CLI returns 0 for matches and 1 for mismatches, including caught harness errors.
 
-[Paper event parity CI](../.github/workflows/paper-parity.yml) runs manually or
+[Paper event parity CI](https://github.com/horizon-rust/horizon/blob/main/.github/workflows/paper-parity.yml) runs manually or
 nightly at 04:37 UTC, never on pushes or pull requests. Like the existing parity
 jobs, it uses a self-hosted macOS `horizon-game` runner, the runner's pinned JDK,
 imported Mojang files and version-keyed `horizon-prepare` resource cache via

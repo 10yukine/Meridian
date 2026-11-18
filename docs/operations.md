@@ -2,7 +2,7 @@
 
 How the Horizon Team and the council keep Horizon working when no AI agent is running and the maintainer's machines
 are off. Each section says what normally happens by itself, who can do it by hand, and what to do when it breaks.
-How decisions are made is in [GOVERNANCE.md](../GOVERNANCE.md); how a change reaches players is in
+How decisions are made is in [GOVERNANCE.md](https://github.com/horizon-rust/horizon/blob/main/GOVERNANCE.md); how a change reaches players is in
 [release-flow.md](release-flow.md). This page only says how to operate them.
 
 ## Who can do what

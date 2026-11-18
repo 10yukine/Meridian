@@ -10,7 +10,7 @@ The website (playhorizon.dev) is built in a separate repository from this one's 
 else (videos, Discord and other community material) lives elsewhere.
 
 **Where to start: [playhorizon.dev/hub](https://playhorizon.dev/hub).** It shows what is being done now and next
-([ROADMAP.md](ROADMAP.md) in the repository), the work board, good first tasks, and the forms to report a bug or
+([ROADMAP.md](https://github.com/horizon-rust/horizon/blob/main/ROADMAP.md) in the repository), the work board, good first tasks, and the forms to report a bug or
 suggest something. A pull request for a roadmap item carries its `roadmap:<id>` label; ideas go to the suggestion
 queue (the hub, or `/suggest` on Discord) rather than to issues, which are for bugs.
 
@@ -219,4 +219,4 @@ new pushes, we add it again.
 [Discord](https://discord.gg/playhorizon) for questions and ideas, [issues](https://github.com/horizon-rust/horizon/issues)
 for bugs. To take something on, `/claim` its issue ([above](#claim-before-you-start)).
 
-How Horizon is run, and how people join the Team or lead a group: [GOVERNANCE.md](GOVERNANCE.md).
+How Horizon is run, and how people join the Team or lead a group: [GOVERNANCE.md](https://github.com/horizon-rust/horizon/blob/main/GOVERNANCE.md).

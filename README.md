@@ -6,9 +6,7 @@ An unofficial Android port of [Horizon](https://github.com/horizon-rust/horizon)
 
 ## Credits
 
-Meridian is a fork of Horizon and builds on its work. It also draws on the community Android ports
-[Starling](https://github.com/starling-client/starling) and [Rayan-XOO/horizon](https://github.com/Rayan-XOO/horizon),
-and on [Amethyst](https://github.com/AngelAuraMC/Amethyst-Android).
+Meridian is a fork of Horizon and builds on its work.
 
 Not affiliated with Mojang, Microsoft or the Horizon project. You need your own copy of Minecraft: Java Edition; this repository contains no Mojang files.
 
