@@ -603,7 +603,7 @@ impl Run<'_> {
 
 /// Prepares the resources; returns their folder (`resources_dir`).
 pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
-    prepare_impl(options, log, &|_| {}, false)
+    prepare_impl(options, log, &|_| {}, false, None)
 }
 
 /// `prepare`, telling `progress` the fraction done as each stage begins, and 1 at the end.
@@ -612,12 +612,22 @@ pub fn prepare_with_progress(
     log: Log,
     progress: Progress,
 ) -> Result<PathBuf, String> {
-    prepare_impl(options, log, progress, false)
+    prepare_impl(options, log, progress, false, None)
 }
 
 /// Release build tool: compile and link-check only Horizon's original exporter classes.
 pub fn compile_exporters(options: &Options, log: Log) -> Result<PathBuf, String> {
-    prepare_impl(options, log, &|_| {}, true)
+    prepare_impl(options, log, &|_| {}, true, None)
+}
+
+/// Prepare with an explicitly supplied Java launcher, such as the executable installed by Android.
+pub fn prepare_with_java(
+    options: &Options,
+    log: Log,
+    progress: Progress,
+    jdk: java::Jdk,
+) -> Result<PathBuf, String> {
+    prepare_impl(options, log, progress, false, Some(jdk))
 }
 
 fn prepare_impl(
@@ -625,6 +635,7 @@ fn prepare_impl(
     log: Log,
     progress: Progress,
     compile_only: bool,
+    jdk: Option<java::Jdk>,
 ) -> Result<PathBuf, String> {
     let started = Instant::now();
     let root = &std::path::absolute(&options.root)
@@ -635,7 +646,10 @@ fn prepare_impl(
     homes.extend(java::minecraft_runtimes(
         &artifacts::game_files(options.minecraft_dir.as_deref(), &lock.version).runtimes,
     ));
-    let jdk = java::find_runtime(lock.java_major, &homes)?;
+    let jdk = match jdk {
+        Some(jdk) => jdk,
+        None => java::find_runtime(lock.java_major, &homes)?,
+    };
     // The import and the exporters' scratch files.
     let _local_lock = hold_lock(&root.join(".local"), log)?;
     let reused = if options.import {

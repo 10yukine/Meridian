@@ -1974,6 +1974,7 @@ dependencies = [
  "horizon-threads",
  "horizon-world",
  "log",
+ "meridian-launcher",
  "miniz_oxide 0.8.9",
  "mio",
  "naga",
@@ -3506,6 +3507,21 @@ dependencies = [
  "horizon-game",
  "horizon-guest-stack",
  "winit",
+]
+
+[[package]]
+name = "meridian-launcher"
+version = "0.1.0"
+dependencies = [
+ "horizon-prepare",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tar",
+ "ureq",
+ "xz4rust",
 ]
 
 [[package]]
@@ -6000,6 +6016,8 @@ dependencies = [
  "once_cell",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "socks",
  "url",
  "webpki-roots 0.26.11",

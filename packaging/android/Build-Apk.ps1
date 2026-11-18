@@ -18,11 +18,14 @@ $platform = Join-Path $env:ANDROID_HOME 'platforms/android-36/android.jar'
 $ndk = if ($env:ANDROID_NDK_HOME) { $env:ANDROID_NDK_HOME } else {
     Join-Path $env:ANDROID_HOME 'ndk/28.2.13676358'
 }
-$readelf = Join-Path $ndk 'toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-readelf.exe'
+$toolchain = Join-Path $ndk 'toolchains/llvm/prebuilt/windows-x86_64'
+$readelf = Join-Path $toolchain 'bin/llvm-readelf.exe'
+$clang = Join-Path $toolchain 'bin/aarch64-linux-android26-clang.cmd'
+$cxx = Join-Path $toolchain 'sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'
 $aapt2 = Join-Path $tools 'aapt2.exe'
 $zipalign = Join-Path $tools 'zipalign.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
-foreach ($required in $aapt2, $zipalign, $apksigner, $readelf, $platform) {
+foreach ($required in $aapt2, $zipalign, $apksigner, $readelf, $clang, $cxx, $platform) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Android SDK file is missing: $required"
     }
@@ -80,7 +83,9 @@ $work = [IO.Directory]::CreateTempSubdirectory('meridian-apk-').FullName
 $unsigned = Join-Path $work 'unsigned.apk'
 $aligned = Join-Path $work 'aligned.apk'
 $signed = Join-Path $work 'signed.apk'
+$java = Join-Path $work 'libmeridian_java.so'
 try {
+    & $clang (Join-Path $PSScriptRoot 'Java-Launcher.c') -ldl -o $java
     & $aapt2 link -o $unsigned --manifest (Join-Path $PSScriptRoot 'AndroidManifest.xml') -I $platform
     $zip = [IO.Compression.ZipFile]::Open($unsigned, [IO.Compression.ZipArchiveMode]::Update)
     try {
@@ -88,6 +93,13 @@ try {
             $zip, $library, 'lib/arm64-v8a/libmeridian.so',
             [IO.Compression.CompressionLevel]::NoCompression
         ) | Out-Null
+        foreach ($native in $java, $cxx) {
+            $name = Split-Path -Leaf $native
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip, $native, "lib/arm64-v8a/$name",
+                [IO.Compression.CompressionLevel]::NoCompression
+            ) | Out-Null
+        }
     } finally {
         $zip.Dispose()
     }
@@ -99,7 +111,7 @@ try {
     Move-Item -LiteralPath $signed -Destination $apk -Force
     Write-Output $apk
 } finally {
-    foreach ($file in $unsigned, $aligned, $signed) {
+    foreach ($file in $unsigned, $aligned, $signed, $java) {
         if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file }
     }
     [IO.Directory]::Delete($work)

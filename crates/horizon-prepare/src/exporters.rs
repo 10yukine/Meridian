@@ -118,7 +118,13 @@ pub(crate) fn classes(run: &Run) -> Result<PathBuf, String> {
         fs::remove_dir_all(&cached).map_err(|e| e.to_string())?;
     }
     mkdir(&cached)?;
-    let jdk = java::find(run.java_major, &[run.jdk.home()])?;
+    let discovered;
+    let jdk = if run.jdk.has_launcher() {
+        &run.jdk
+    } else {
+        discovered = java::find(run.java_major, &[run.jdk.home()])?;
+        &discovered
+    };
     // The two sides compile at once: neither reads the other's classes.
     let sides = [
         ("server", SERVER, &run.server_classpath),

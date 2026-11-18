@@ -13,7 +13,9 @@ pub(crate) struct Worker {
 impl Worker {
     pub(crate) fn new(run: &Run, name: &str, classes: &Path, cp: &str) -> Result<Self, String> {
         let log = run.log_file(&run.local.join(format!("{name}-worker.log")))?;
-        let mut child = java::command(&run.jdk.java)
+        let mut child = run
+            .jdk
+            .java_command()
             .args(java::BATCH_OPTIONS)
             .args([
                 "-Xmx2G",
