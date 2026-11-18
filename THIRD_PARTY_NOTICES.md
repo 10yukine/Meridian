@@ -427,6 +427,11 @@ Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
 `crates/horizon-client-render/src/android_runtime.rs` and `android_runtime/tests/` are adapted from the
 input part of Starling's `crates/horizon-client-render/src/android_runtime.rs` at the same commit.
 
+`crates/horizon-client-render/src/touch/editor.rs` adapts the drag handling,
+preview, and save/cancel model in Starling's
+`crates/horizon-client-render/src/android_controls/editor.rs` at
+[5432370d5736](https://github.com/starling-client/starling/tree/5432370d573642041585c69b40fb045b27133488).
+
 ## PCG3D hash
 
 `hash3` in `crates/horizon-client-render/src/hdr.wgsl`, the noise HDR10 output's dither is made from, is the

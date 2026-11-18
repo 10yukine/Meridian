@@ -103,6 +103,10 @@ impl Game<'_> {
         if self.screen == Screen::Options {
             self.ui.options.discard_draw();
         }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        if screen != Screen::Paused {
+            self.pad.touch.cancel_editor();
+        }
         self.apply_screen_with_mod_book(screen, owner);
     }
     /// Whether a change of screen asks the screen hooks: a mod listens to

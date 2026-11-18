@@ -5235,6 +5235,10 @@ impl Game<'_> {
         };
         let drawn = self.draw_screen_with_pre_hook(&mut batch);
         match screen {
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            Screen::Paused if self.pad.touch.editing() => {
+                self.pad.touch.draw_editor(&mut batch, &self.gui.atlas);
+            }
             _ if !drawn => {}
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -10760,7 +10764,7 @@ impl<'a> Game<'a> {
             spectator_gui: Default::default(),
             previous: now,
             last_input: now,
-            pad: Default::default(),
+            pad: pad::Pads::new(),
             frames: 0,
             glint_frame: Default::default(),
             kept_block_entities: Default::default(),
