@@ -40,12 +40,19 @@ if (!$LibraryPath) {
         throw 'The meridian-android crate has not landed yet. Supply -LibraryPath to exercise packaging.'
     }
     $previousNdk = $env:ANDROID_NDK_HOME
+    $previousClientId = $env:HORIZON_MSA_CLIENT_ID
     Push-Location -LiteralPath $root
     try {
         $env:ANDROID_NDK_HOME = $ndk
+        if ($null -eq $previousClientId) {
+            $env:HORIZON_MSA_CLIENT_ID = 'a3834636-8758-4bc7-9767-35c8ccc9d45d'
+        } elseif ([string]::IsNullOrWhiteSpace($previousClientId)) {
+            Write-Warning 'Microsoft sign-in disabled.'
+        }
         cargo ndk -t arm64-v8a -P 26 build --locked -p meridian-android --profile $Profile --target-dir $cargoOutput
     } finally {
         $env:ANDROID_NDK_HOME = $previousNdk
+        $env:HORIZON_MSA_CLIENT_ID = $previousClientId
         Pop-Location
     }
     $LibraryPath = Join-Path $cargoOutput "aarch64-linux-android/$Profile/libmeridian.so"
