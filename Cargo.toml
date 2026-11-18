@@ -9,6 +9,7 @@ members = [
     "crates/horizon-hooks",
     "crates/horizon-mod-host",
     "crates/horizon-game",
+    "crates/meridian-android",
     "crates/horizon-official",
     "crates/horizon-heartbeat",
 

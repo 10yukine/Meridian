@@ -3499,6 +3499,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "meridian-android"
+version = "0.1.0"
+dependencies = [
+ "horizon-client",
+ "horizon-game",
+ "horizon-guest-stack",
+ "libc",
+ "winit",
+]
+
+[[package]]
 name = "miette"
 version = "7.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

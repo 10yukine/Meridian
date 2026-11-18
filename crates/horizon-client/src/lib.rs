@@ -8,6 +8,12 @@ pub use horizon_client_lib::*;
 #[doc(hidden)]
 pub mod entry;
 
+/// The app Android handed `android_main` (Meridian's `meridian-android`), stored before the game
+/// starts: winit needs it to make the event loop (`game::event_loop::new_event_loop`).
+#[cfg(target_os = "android")]
+pub static ANDROID_APP: std::sync::OnceLock<winit::platform::android::activity::AndroidApp> =
+    std::sync::OnceLock::new();
+
 // The game's allocator lives in the library, not the executable: the prebuilt game (arismoko/horizon#589) is this crate as a
 // dylib, and the allocator must be the one its code and the mods' executable share. The Windows and macOS archives
 // build with `system-allocator`: their loaders bind each library to std's own allocator, which everything then

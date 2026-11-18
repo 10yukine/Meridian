@@ -20,6 +20,25 @@ pub(super) fn redraw_flow(frame_drawn: &mut bool, offscreen: bool, now: Instant)
     }
 }
 
+/// winit's event loop for the game's window. On Android it is built with the app that
+/// `android_main` received (`horizon_client::ANDROID_APP`).
+pub(super) fn new_event_loop()
+-> Result<winit::event_loop::EventLoop<()>, winit::error::EventLoopError> {
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        let app = crate::ANDROID_APP
+            .get()
+            .expect("android_main stores the AndroidApp before the game starts")
+            .clone();
+        winit::event_loop::EventLoop::builder()
+            .with_android_app(app)
+            .build()
+    }
+    #[cfg(not(target_os = "android"))]
+    winit::event_loop::EventLoop::new()
+}
+
 pub(super) trait EventLoopCtl {
     /// Ends the loop after the current iteration (`ActiveEventLoop::exit`).
     fn exit(&self);
