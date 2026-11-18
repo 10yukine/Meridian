@@ -93,9 +93,16 @@ impl Loading {
         }
     }
     pub(super) fn ready_for_handoff(&self) -> bool {
-        self.title_drawn
-            || self.menu.pending.is_some()
-            || self.ui_at.is_none_or(|at| at.elapsed() >= TITLE_FRAME_WAIT)
+        // Not while Android has the app in the background: the window is there but has nothing
+        // to draw into, and the game's renderer needs a surface (`resumed` brings one back).
+        let backgrounded = self.window.as_ref().is_some_and(|window| {
+            use winit::raw_window_handle::HasWindowHandle;
+            window.window_handle().is_err()
+        });
+        !backgrounded
+            && (self.title_drawn
+                || self.menu.pending.is_some()
+                || self.ui_at.is_none_or(|at| at.elapsed() >= TITLE_FRAME_WAIT))
     }
     pub(super) fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {

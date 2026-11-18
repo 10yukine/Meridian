@@ -7320,6 +7320,11 @@ impl Renderer {
                 return Ok(false);
             }
         };
+        // Nowhere to draw: Android took the window's surface away (`drop_surface`) until the
+        // app is back on screen. Skip the frame as an occluded one.
+        if surface_frame.is_none() && !fg && self.offscreen.is_none() {
+            return Ok(false);
+        }
         if surface_frame.is_some() {
             self.acquire_validation_failures = 0;
             self.frame_gen.paused = false;
