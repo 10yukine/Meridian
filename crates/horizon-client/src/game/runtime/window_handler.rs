@@ -141,6 +141,17 @@ impl Game<'_> {
         if !ours {
             return;
         }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        if self.pad.touch.editing() && is_input(&event) {
+            if let WindowEvent::KeyboardInput { event, .. } = &event
+                && event.state == ElementState::Pressed
+                && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+            {
+                self.pad.touch.cancel_editor();
+                self.set_screen(Screen::Playing);
+            }
+            return;
+        }
         if let Some(modifiers) = held_modifiers(origin, self.unclaimed_window, &event) {
             self.unclaimed_modifiers = Some(modifiers);
         }
@@ -488,8 +499,7 @@ impl ApplicationHandler for Game<'_> {
             // (layout_key_name lowercases letters).
             #[cfg(any(target_os = "android", target_os = "ios"))]
             let layout = event.logical_key.clone();
-            let layout_key =
-                horizon_client::keybinds::layout_key_name(event.physical_key, &layout);
+            let layout_key = horizon_client::keybinds::layout_key_name(event.physical_key, &layout);
             let raw_code = horizon_client::keybinds::raw_key_code(event.physical_key);
             let action = match (event.state, event.repeat) {
                 (winit::event::ElementState::Released, _) => mod_api::KeyAction::Release,
@@ -561,6 +571,18 @@ impl Game<'_> {
             .map_or([1, 1], |r| [r.config.width.max(1), r.config.height.max(1)]);
         let started = touch.phase == TouchPhase::Started;
         let ended = matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled);
+        let point = [
+            touch.location.x as f32 / w as f32,
+            touch.location.y as f32 / h as f32,
+        ];
+        if self.pad.touch.editing() {
+            self.pad.touch.viewport(w, h);
+            self.pad.touch.editor_touch(touch.id, point, touch.phase);
+            if !self.pad.touch.editing() {
+                self.set_screen(Screen::Playing);
+            }
+            return;
+        }
         let device_id = touch.device_id;
         let release = |game: &mut Self, event_loop: &ActiveEventLoop| {
             game.window_event(
@@ -577,16 +599,13 @@ impl Game<'_> {
             let controls = &mut self.pad.touch;
             controls.force_crosshair = true;
             controls.viewport(w, h);
-            let point = [
-                touch.location.x as f32 / w as f32,
-                touch.location.y as f32 / h as f32,
-            ];
             let drag = controls.update(touch.id, point, started, ended);
             // Degrees, as the touch settings scale them; the game turns in 0.15° units.
-            let turn = (drag != [0.0; 2])
-                .then(|| horizon_client_render::touch::camera_delta(drag, w, h, &controls.settings));
+            let turn = (drag != [0.0; 2]).then(|| {
+                horizon_client_render::touch::camera_delta(drag, w, h, &controls.settings)
+            });
             // The controls' key presses (the offhand swap) and the top bar's Chat, F3 and F5 act
-            // as those key bindings; its Touch button opens the options.
+            // as those key bindings; its Touch button opens the control hub.
             let chat = controls.chat_requested;
             let mut actions = controls.key_events();
             for (requested, action) in [
@@ -610,7 +629,10 @@ impl Game<'_> {
                 }
             }
             if settings {
-                self.open_options(false);
+                self.set_screen(Screen::Paused);
+                if self.screen == Screen::Paused {
+                    self.pad.touch.open_editor();
+                }
             }
             // The Chat button asks to type: the keyboard comes with it.
             if chat {

@@ -5,8 +5,7 @@
 
 //! Drawing the touch controls on the HUD, in GUI pixels. Buttons use the
 //! resource pack's own button sprite (`widget/button`, highlighted while held)
-//! with a short label; the joystick, the D-pad and the tap marker are plain
-//! shapes. No art of its own ships with the game.
+//! with a short label. Movement uses Meridian's geometric tiles.
 use super::{Control, Mode, Placement, Role, TouchControls, layout};
 use crate::gamepad::{Button, PadState};
 use crate::hud::{HudAtlas, HudBatch, rgba};
@@ -90,7 +89,7 @@ impl TouchControls {
         lang::get(key)
     }
 
-    /// The joystick (a rim and a knob) or the D-pad (four arrow buttons).
+    /// The joystick or the D-pad, with movement highlighted while held.
     fn draw_move(
         &self,
         b: &mut HudBatch,
@@ -109,22 +108,115 @@ impl TouchControls {
             None if self.dynamic_joystick() => return,
             _ => p.center,
         };
-        let [x, y, size, _] = square(b, center, p.size);
-        if self.settings.mode == Mode::Dpad {
-            let cell = size / 3.0;
-            for ([dx, dy], label, pressed) in dpad(state.left) {
-                let bounds = [x + cell * dx, y + cell * dy, cell, cell];
-                button(b, a, bounds, label, pressed, color);
-            }
-            return;
+        let bounds = square(b, center, p.size);
+        draw_movement(
+            b,
+            a,
+            bounds,
+            self.settings.mode,
+            state.left,
+            anchor.is_some(),
+            color,
+        );
+    }
+}
+
+/// Draws Meridian's movement tiles for both gameplay and the layout preview.
+pub(super) fn draw_movement(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y, size, _]: [f32; 4],
+    mode: Mode,
+    axis: [f32; 2],
+    held: bool,
+    color: u32,
+) {
+    let opacity = color.to_le_bytes()[3];
+    if mode == Mode::Dpad {
+        let cell = size / 3.0;
+        for ([dx, dy], label, pressed) in dpad(axis) {
+            let center = [x + cell * (dx + 0.5), y + cell * (dy + 0.5)];
+            movement_tile(b, a, center, (cell - 1.0).max(1.0), pressed, opacity);
+            arrow(b, a, center, cell, label, color);
         }
-        let middle = [x + size / 2.0, y + size / 2.0];
-        let [r, g, blue, opacity] = color.to_le_bytes();
-        ring(b, a, middle, size / 2.0, color);
-        disc(b, a, middle, size / 2.0, rgba(0, 0, 0, opacity / 3));
-        let knob = knob(middle, state.left, size);
-        disc(b, a, knob, size * 0.17, rgba(r, g, blue, opacity / 2));
-        ring(b, a, knob, size * 0.17, color);
+        return;
+    }
+    let middle = [x + size / 2.0, y + size / 2.0];
+    movement_tile(b, a, middle, size, false, opacity / 2);
+    let knob = knob(middle, axis, size);
+    movement_tile(b, a, knob, size * 0.36, held, opacity);
+    let r = size * 0.065;
+    let [x, y] = knob;
+    b.fill_quad(a, [[x, y - r], [x + r, y], [x, y + r], [x - r, y]], color);
+}
+
+/// A frosted square with stepped corners and a short highlight on its top edge.
+fn movement_tile(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y]: [f32; 2],
+    size: f32,
+    pressed: bool,
+    opacity: u8,
+) {
+    let edge = (size / 16.0).max(1.0).min(size / 6.0);
+    let x = x - size / 2.0;
+    let y = y - size / 2.0;
+    let outline = rgba(17, 24, 39, opacity);
+    let face = if pressed {
+        rgba(83, 115, 147, opacity)
+    } else {
+        rgba(37, 49, 68, opacity / 2)
+    };
+    b.fill(a, x + edge, y, size - 2.0 * edge, size, outline);
+    b.fill(a, x, y + edge, edge, size - 2.0 * edge, outline);
+    b.fill(
+        a,
+        x + size - edge,
+        y + edge,
+        edge,
+        size - 2.0 * edge,
+        outline,
+    );
+    b.fill(
+        a,
+        x + edge,
+        y + edge,
+        size - 2.0 * edge,
+        size - 2.0 * edge,
+        face,
+    );
+    b.fill(
+        a,
+        x + 3.0 * edge,
+        y + edge,
+        size - 6.0 * edge,
+        edge,
+        rgba(169, 207, 225, opacity),
+    );
+}
+
+fn arrow(b: &mut HudBatch, a: &HudAtlas, [x, y]: [f32; 2], cell: f32, direction: &str, color: u32) {
+    let step = (cell / 10.0).max(1.0);
+    let at = |u: f32, v: f32| {
+        let [u, v] = match direction {
+            "<" => [v, -u],
+            ">" => [-v, u],
+            "v" => [-u, -v],
+            _ => [u, v],
+        };
+        [x + u * step, y + v * step]
+    };
+    // Chevron formed from two stepped arms, with its tip filled only once.
+    for [u, v] in [
+        [-2.0, 1.0],
+        [-1.0, 0.0],
+        [0.0, -1.0],
+        [1.0, 0.0],
+        [2.0, 1.0],
+    ] {
+        let [left, top] = at(u, v);
+        b.fill(a, left - step / 2.0, top - step / 2.0, step, step, color);
     }
 }
 

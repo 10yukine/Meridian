@@ -197,6 +197,21 @@ pub struct Settings {
     pub circle_size: f32,
 }
 
+// Starling's default D-pad already supplies the movement, sneak and jump slots.
+// Space the crosshair action squares out so they also fit narrower surfaces.
+const DPAD_ACTION_POSITIONS: [(Control, Placement, Placement); 2] = [
+    (
+        Control::Attack,
+        Placement::new(0.80, 0.64, 0.16),
+        Placement::new(0.80, 0.60, 0.14),
+    ),
+    (
+        Control::Use,
+        Placement::new(0.92, 0.52, 0.16),
+        Placement::new(0.92, 0.42, 0.14),
+    ),
+];
+
 impl Default for Settings {
     fn default() -> Self {
         let row = [
@@ -219,6 +234,9 @@ impl Default for Settings {
         // The D-pad sits where the joystick does; sneak becomes its centre.
         layouts[Mode::Dpad.index()][Control::Sneak as usize] = Placement::new(0.13, 0.76, 0.10);
         layouts[Mode::Dpad.index()][Control::Jump as usize] = Placement::new(0.90, 0.78, 0.14);
+        for (control, _, placement) in DPAD_ACTION_POSITIONS {
+            layouts[Mode::Dpad.index()][control as usize] = placement;
+        }
         Self {
             mode: Mode::Crosshair,
             split_controls: false,
@@ -253,6 +271,15 @@ impl Settings {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        // Update the old factory geometry on load, even if other buttons were edited.
+        // A moved or resized action keeps its saved geometry and opacity.
+        for (control, old, new) in DPAD_ACTION_POSITIONS {
+            let place = &mut settings.layouts[Mode::Dpad.index()][control as usize];
+            if place.center == old.center && place.size == old.size {
+                place.center = new.center;
+                place.size = new.size;
+            }
+        }
         settings.sanitize();
         settings
     }

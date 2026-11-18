@@ -12,6 +12,7 @@
 //! lifts, so moving, looking and pressing never take each other's fingers.
 pub mod aim;
 mod draw;
+mod editor;
 pub mod layout;
 pub use aim::{
     attack_indicator, camera_delta, hotbar_slot, item_places_entity_on_tap, item_uses_on_tap,
@@ -115,6 +116,7 @@ pub struct TouchControls {
     last_sneak_tap: Option<Instant>,
     sprint_latched: bool,
     aspect: f32,
+    editor: Option<editor::Editor>,
 }
 
 impl TouchControls {

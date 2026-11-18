@@ -279,6 +279,14 @@ mod hardware {
 }
 
 impl Pads {
+    pub(super) fn new() -> Self {
+        Self {
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            touch: horizon_client_render::touch::TouchControls::with_saved_layout(),
+            ..Self::default()
+        }
+    }
+
     /// The digital buttons the person's pad changed since the last poll.
     pub(super) fn hardware_edges(&mut self, hardware: PadState) -> Vec<(Button, bool)> {
         let edges = Button::ALL
@@ -387,6 +395,10 @@ impl Game<'_> {
 
     /// Once per loop iteration: read the pads and act on button changes.
     pub(super) fn poll_pads(&mut self, event_loop: &dyn EventLoopCtl) {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        if self.pad.touch.editing() {
+            return;
+        }
         self.pad.virtual_input = self.pad.injected != PadState::default();
         let context = self.pad_context();
         if let Some(old) = self.pad.context.filter(|old| *old != context) {
@@ -397,7 +409,8 @@ impl Game<'_> {
         }
         self.pad.context = Some(context);
         // On phones the touch controls are the built-in input: they don't switch off with pads.
-        if !self.settings.controller.enabled && !cfg!(any(target_os = "android", target_os = "ios")) {
+        if !self.settings.controller.enabled && !cfg!(any(target_os = "android", target_os = "ios"))
+        {
             self.pad_output_off();
             self.pad_cancel_inputs(event_loop);
             // The radial menu closed with the pad: its overlay fades out, as for a cancel.

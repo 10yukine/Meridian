@@ -5235,6 +5235,10 @@ impl Game<'_> {
         };
         let drawn = self.draw_screen_with_pre_hook(&mut batch);
         match screen {
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            Screen::Paused if self.pad.touch.editing() => {
+                self.pad.touch.draw_editor(&mut batch, &self.gui.atlas);
+            }
             _ if !drawn => {}
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -5315,7 +5319,10 @@ impl Game<'_> {
         // after this point and so over what a mod drew.
         self.draw_screen_with_post_hook(&mut batch);
         self.draw_saving_indicator(&mut batch);
-        self.draw_every_toast(&mut batch, !show_hud);
+        let hide_toasts = !show_hud;
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let hide_toasts = hide_toasts || self.pad.touch.editing();
+        self.draw_every_toast(&mut batch, hide_toasts);
         if self.server_packs.prompt.is_none() {
             self.remote_hud(&mut batch);
             self.draw_sign_editor(&mut batch);
@@ -10760,7 +10767,7 @@ impl<'a> Game<'a> {
             spectator_gui: Default::default(),
             previous: now,
             last_input: now,
-            pad: Default::default(),
+            pad: pad::Pads::new(),
             frames: 0,
             glint_frame: Default::default(),
             kept_block_entities: Default::default(),
