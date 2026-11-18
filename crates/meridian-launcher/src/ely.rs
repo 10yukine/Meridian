@@ -7,11 +7,14 @@ use std::time::Duration;
 
 const AUTH: &str = "https://authserver.ely.by";
 
-/// The access token lives only as long as the launcher's selected account.
+/// The token pair is the only credential kept after authentication.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Session {
     pub name: String,
     uuid: String,
     token: String,
+    client: String,
+    #[serde(skip)]
     expires_at: u64,
 }
 
@@ -30,14 +33,18 @@ impl Session {
     }
 }
 
-fn exchange(endpoint: &str, body: Value) -> Result<Value, String> {
+fn post(endpoint: &str, body: Value) -> Result<(u16, Value), String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
         .timeout_connect(Duration::from_secs(10))
         .redirects(0)
         .user_agent(concat!("meridian/", env!("CARGO_PKG_VERSION")))
         .build();
-    let (status, value) = send(agent.post(endpoint), Some(Body::Json(body)), "Ely.by")?;
+    send(agent.post(endpoint), Some(Body::Json(body)), "Ely.by")
+}
+
+fn exchange(endpoint: &str, body: Value) -> Result<Value, String> {
+    let (status, value) = post(endpoint, body)?;
     match status {
         200 => Ok(value),
         401 if value["errorMessage"] == "Account protected with two factor auth." => {
@@ -76,8 +83,29 @@ fn decode(value: &Value, client: &str) -> Result<Session, String> {
         name,
         uuid,
         token,
+        client: client.into(),
         expires_at: now().saturating_add(3600),
     })
+}
+
+pub(crate) fn restore(session: Session) -> Result<Session, String> {
+    restore_with(AUTH, session)
+}
+
+fn restore_with(base: &str, mut session: Session) -> Result<Session, String> {
+    let body = json!({"accessToken": session.token, "clientToken": session.client});
+    let (status, _) = post(&format!("{base}/auth/validate"), body.clone())?;
+    match status {
+        200 | 204 => {
+            session.expires_at = now().saturating_add(3600);
+            Ok(session)
+        }
+        400 | 401 | 403 => {
+            let value = exchange(&format!("{base}/auth/refresh"), body)?;
+            decode(&value, &session.client)
+        }
+        _ => Err("Could not validate the Ely.by session. Try again later.".into()),
+    }
 }
 
 // Passwords and OTPs are used only for this request, never stored or included in errors.
@@ -118,35 +146,49 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
 
+    fn request(listener: &std::net::TcpListener, path: &str) -> (std::net::TcpStream, Value) {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.starts_with(&format!("POST {path} ")));
+        let mut length = None;
+        loop {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+            if let Some((key, value)) = line.split_once(':')
+                && key.eq_ignore_ascii_case("content-length")
+            {
+                length = Some(value.trim().parse::<usize>().unwrap());
+            }
+        }
+        let mut bytes = vec![0; length.unwrap()];
+        reader.read_exact(&mut bytes).unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        (stream, body)
+    }
+
+    fn respond(mut stream: std::net::TcpStream, status: &str, body: &str) {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    }
+
     #[test]
     fn ely_sign_in_sends_otp_and_returns_a_provider_specific_session() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let fixture = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.starts_with("POST /auth/authenticate "));
-            let mut length = None;
-            loop {
-                line.clear();
-                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some((key, value)) = line.split_once(':')
-                    && key.eq_ignore_ascii_case("content-length")
-                {
-                    length = Some(value.trim().parse::<usize>().unwrap());
-                }
-            }
-            let mut bytes = vec![0; length.unwrap()];
-            reader.read_exact(&mut bytes).unwrap();
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            let (stream, body) = request(&listener, "/auth/authenticate");
             assert_eq!(body["username"], "Player");
             assert_eq!(body["password"], "test-password:123456");
             let response = json!({
@@ -154,12 +196,7 @@ mod tests {
                 "selectedProfile": {"name": "Player", "id": "0123456789abcdef0123456789abcdef"}
             })
             .to_string();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
-                response.len()
-            )
-            .unwrap();
+            respond(stream, "200 OK", &response);
         });
         let session = authenticate_with(&base, "Player", "test-password", "123456").unwrap();
         fixture.join().unwrap();
@@ -168,6 +205,42 @@ mod tests {
         assert_eq!(handoff["access_token"], "fixture-token");
         assert!(handoff.get("password").is_none());
         assert!(handoff.get("clientToken").is_none());
+    }
+
+    #[test]
+    fn restores_valid_ely_tokens_and_refreshes_expired_ones() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let fixture =
+            std::thread::spawn(move || {
+                let expected =
+                    json!({"accessToken": "fixture-old", "clientToken": "fixture-client"});
+                for status in ["204 No Content", "403 Forbidden"] {
+                    let (stream, body) = request(&listener, "/auth/validate");
+                    assert_eq!(body, expected);
+                    respond(stream, status, "");
+                }
+                let (stream, body) = request(&listener, "/auth/refresh");
+                assert_eq!(body, expected);
+                respond(stream, "200 OK", &json!({
+                "accessToken": "fixture-new", "clientToken": "fixture-client",
+                "selectedProfile": {"name": "Player", "id": "0123456789abcdef0123456789abcdef"}
+            }).to_string());
+            });
+        let saved = decode(
+            &json!({
+                "accessToken": "fixture-old", "clientToken": "fixture-client",
+                "selectedProfile": {"name": "Player", "id": "0123456789abcdef0123456789abcdef"}
+            }),
+            "fixture-client",
+        )
+        .unwrap();
+        let valid = restore_with(&base, saved.clone()).unwrap();
+        assert_eq!(valid.token, "fixture-old");
+        assert!(valid.game_session().is_ok());
+        let refreshed = restore_with(&base, saved).unwrap();
+        assert_eq!(refreshed.token, "fixture-new");
+        fixture.join().unwrap();
     }
 
     #[test]
