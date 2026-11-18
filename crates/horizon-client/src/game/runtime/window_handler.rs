@@ -603,7 +603,7 @@ impl Game<'_> {
                 horizon_client_render::touch::camera_delta(drag, w, h, &controls.settings)
             });
             // The controls' key presses (the offhand swap) and the top bar's Chat, F3 and F5 act
-            // as those key bindings; its Touch button opens the options.
+            // as those key bindings; its Touch button opens the control hub.
             let chat = controls.chat_requested;
             let mut actions = controls.key_events();
             for (requested, action) in [

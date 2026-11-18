@@ -5319,7 +5319,10 @@ impl Game<'_> {
         // after this point and so over what a mod drew.
         self.draw_screen_with_post_hook(&mut batch);
         self.draw_saving_indicator(&mut batch);
-        self.draw_every_toast(&mut batch, !show_hud);
+        let hide_toasts = !show_hud;
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let hide_toasts = hide_toasts || self.pad.touch.editing();
+        self.draw_every_toast(&mut batch, hide_toasts);
         if self.server_packs.prompt.is_none() {
             self.remote_hud(&mut batch);
             self.draw_sign_editor(&mut batch);
