@@ -83,6 +83,8 @@ pub struct Profile {
     pub mods: usize,
     /// Bytes: on disk once installed, else the download.
     pub size: u64,
+    /// Worlds in its own folder (worlds are separate per profile).
+    pub worlds: usize,
     pub state: ProfileState,
 }
 
@@ -107,6 +109,65 @@ pub fn profile_dir(root: &std::path::Path, id: &str) -> std::path::PathBuf {
         root.join("profiles").join(id)
     }
 }
+
+/// A profile name as the player types it: 1 to 32 characters, no control characters.
+pub fn valid_profile_name(name: &str) -> bool {
+    let name = name.trim();
+    (1..=32).contains(&name.chars().count()) && !name.chars().any(char::is_control)
+}
+
+/// The folder name for a new profile called `name`: lowercase ASCII letters and digits joined by
+/// `-` (never a path, `..` or [`VANILLA`]), made unique among `taken` with `-2`, `-3`…
+pub fn profile_id(name: &str, taken: &[String]) -> String {
+    let mut slug = String::new();
+    for c in name.trim().chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+    }
+    let mut slug: String = slug.trim_end_matches('-').chars().take(32).collect();
+    if slug.is_empty() {
+        slug = "profile".into();
+    }
+    let free = |id: &str| id != VANILLA && !taken.iter().any(|t| t == id);
+    if free(&slug) {
+        return slug;
+    }
+    (2..).map(|n| format!("{slug}-{n}")).find(|id| free(id)).expect("unbounded")
+}
+
+/// A mod as the mod manager shows it, from Horizon's mod registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    /// Download bytes.
+    pub size: u64,
+}
+
+/// A mod in a profile, switched on or off for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileMod {
+    pub info: ModInfo,
+    pub enabled: bool,
+}
+
+/// The mod manager's registry search ([`Backend::search_mods`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ModSearch {
+    #[default]
+    Idle,
+    Searching,
+    Done(Vec<ModInfo>),
+    Failed(String),
+}
+
+/// A player's face to draw: the skin's 8×8 front with the hat layer over it, RGBA rows.
+pub type Head = [u8; 8 * 8 * 4];
 
 /// Sensitive session data for the in-process Play handoff. This type has no Debug implementation.
 pub struct GameSession(String);
@@ -148,6 +209,7 @@ pub trait Backend: Send {
             description: "Minecraft as it comes, no mods.".into(),
             mods: 0,
             size: 0,
+            worlds: 0,
             state: ProfileState::Installed,
         }]
     }
@@ -169,6 +231,73 @@ pub trait Backend: Send {
     fn remove_profile(&mut self, _id: &str) -> Result<(), String> {
         Err("This profile can't be removed.".into())
     }
+    /// Starting points for a new profile (Performance, Quality of life…): name, description and
+    /// mods, state `Available`.
+    fn presets(&self) -> Vec<Profile> {
+        Vec::new()
+    }
+    /// Makes a profile named `name` (see [`valid_profile_name`]), from `preset`'s mods plus `mods`,
+    /// and returns its id ([`profile_id`]). It needs [`Self::install_profile`] before Play.
+    fn create_profile(
+        &mut self,
+        _name: &str,
+        _preset: Option<&str>,
+        _mods: &[String],
+    ) -> Result<String, String> {
+        Err("Profiles are unavailable in this launcher.".into())
+    }
+    /// Renames a profile; its id and folder stay.
+    fn rename_profile(&mut self, _id: &str, _name: &str) -> Result<(), String> {
+        Err("Profiles are unavailable in this launcher.".into())
+    }
+
+    /// Every signed-in account, for the account switcher. Signing in adds one and makes it active.
+    fn accounts(&self) -> Vec<Account> {
+        self.account().into_iter().collect()
+    }
+    /// The index in [`Self::accounts`] of the account that plays.
+    fn active_account(&self) -> Option<usize> {
+        self.account().map(|_| 0)
+    }
+    fn switch_account(&mut self, index: usize) -> Result<(), String> {
+        if self.active_account() == Some(index) {
+            Ok(())
+        } else {
+            Err("No such account.".into())
+        }
+    }
+    /// Signs one account out and forgets it.
+    fn remove_account(&mut self, index: usize) -> Result<(), String> {
+        if self.active_account() != Some(index) {
+            return Err("No such account.".into());
+        }
+        self.sign_out();
+        Ok(())
+    }
+    /// The account's face for the home screen and the switcher; `None` draws a default head.
+    fn player_head(&self, _account: &Account) -> Option<Head> {
+        None
+    }
+
+    /// A profile's mods (none for Vanilla).
+    fn mods(&self, _profile: &str) -> Vec<ProfileMod> {
+        Vec::new()
+    }
+    fn set_mod_enabled(&mut self, _profile: &str, _id: &str, _enabled: bool) -> Result<(), String> {
+        Err("Mods are unavailable in this launcher.".into())
+    }
+    /// Searches Horizon's mod registry; [`Self::mod_search`] follows it. Empty `query`: browse.
+    fn search_mods(&mut self, _query: &str) {}
+    fn mod_search(&self) -> ModSearch {
+        ModSearch::Idle
+    }
+    /// Adds a registry mod to a profile, switched on; the profile then needs installing again.
+    fn add_mod(&mut self, _profile: &str, _id: &str) -> Result<(), String> {
+        Err("Mods are unavailable in this launcher.".into())
+    }
+    fn remove_mod(&mut self, _profile: &str, _id: &str) -> Result<(), String> {
+        Err("Mods are unavailable in this launcher.".into())
+    }
 }
 
 /// A player name Minecraft accepts: 1 to 16 of `A-Z`, `a-z`, `0-9` and `_`.
@@ -177,34 +306,74 @@ pub fn valid_offline_name(name: &str) -> bool {
 }
 
 /// A backend that only pretends, so the screens can be built on a desktop before the real one
-/// lands. Sign-in shows a code for 5 s, then succeeds. Setup runs through the four stages in about
-/// 20 s; the first run fails at 40 % of the download, so the failure screen can be seen, and a
-/// retry then succeeds. A pretend "Performance" modpack installs in 5 s.
+/// lands. Microsoft sign-in shows a code for 5 s, then adds "Player". Setup runs through the four
+/// stages in about 20 s; the first run fails at 40 % of the download, so the failure screen can be
+/// seen, and a retry then succeeds. Profiles install their mods in 3 s; the pretend registry
+/// answers a search after 1 s.
 // ponytail: delete once the real backend is wired in.
 #[derive(Default)]
 pub struct Fake {
-    account: Option<Account>,
+    /// Offline accounts; a finished Microsoft sign-in adds "Player" after them.
+    accounts: Vec<Account>,
+    active: Option<usize>,
     microsoft_since: Option<Instant>,
     setup_since: Option<Instant>,
     runs: u32,
-    modpack_since: Option<Instant>,
+    profiles: Vec<FakeProfile>,
     selected: Option<String>,
+    search: Option<(String, Instant)>,
+}
+
+struct FakeProfile {
+    id: String,
+    name: String,
+    mods: Vec<(String, bool)>,
+    installed_since: Option<Instant>,
+}
+
+/// The pretend registry: id, name, description, bytes.
+const FAKE_REGISTRY: [(&str, &str, &str, u64); 5] = [
+    ("faster-chunks", "Faster Chunks", "Builds chunk meshes sooner.", 2_400_000),
+    ("better-lighting", "Better Lighting", "Smoother light falloff.", 1_100_000),
+    ("minimap", "Minimap", "A map in the corner.", 3_900_000),
+    ("zoom", "Zoom", "Hold a key to zoom in.", 300_000),
+    ("more-ores", "More Ores", "Adds three new ores.", 5_600_000),
+];
+const FAKE_PRESETS: [(&str, &str, &str, &[&str]); 2] = [
+    ("performance", "Performance", "Smoother play on phones.", &["faster-chunks", "better-lighting"]),
+    ("quality-of-life", "Quality of life", "Small helpers for every day.", &["minimap", "zoom"]),
+];
+
+fn fake_mod(id: &str) -> Option<ModInfo> {
+    FAKE_REGISTRY.iter().find(|m| m.0 == id).map(|&(id, name, description, size)| ModInfo {
+        id: id.into(),
+        name: name.into(),
+        description: description.into(),
+        version: "1.0.0".into(),
+        size,
+    })
 }
 
 impl Fake {
-    const MODPACK: &'static str = "performance";
-    const MODPACK_BYTES: u64 = 48_000_000;
+    fn microsoft(&self) -> Option<Account> {
+        let done = self.microsoft_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(6));
+        done.then(|| Account::Microsoft { name: "Player".into() })
+    }
+    fn custom(&mut self, id: &str) -> Result<&mut FakeProfile, String> {
+        if id == VANILLA {
+            return Err("Vanilla has no mods: make a new profile for them.".into());
+        }
+        self.profiles.iter_mut().find(|p| p.id == id).ok_or_else(|| "No such profile.".into())
+    }
 }
 
 impl Backend for Fake {
     fn account(&self) -> Option<Account> {
-        match self.sign_in() {
-            SignIn::Done(account) => Some(account),
-            _ => self.account.clone(),
-        }
+        self.active_account().map(|i| self.accounts()[i].clone())
     }
     fn sign_in_microsoft(&mut self) {
         self.microsoft_since = Some(Instant::now());
+        self.active = None;
     }
     fn sign_in(&self) -> SignIn {
         let Some(since) = self.microsoft_since else {
@@ -216,9 +385,7 @@ impl Backend for Fake {
                 url: "https://www.microsoft.com/link".into(),
                 code: "MERIDIAN".into(),
             },
-            _ => SignIn::Done(Account::Microsoft {
-                name: "Player".into(),
-            }),
+            _ => SignIn::Done(Account::Microsoft { name: "Player".into() }),
         }
     }
     fn sign_in_offline(&mut self, name: &str) -> Result<Account, String> {
@@ -226,12 +393,71 @@ impl Backend for Fake {
             return Err("Use 1 to 16 letters, digits or underscores.".into());
         }
         let account = Account::Offline { name: name.into() };
-        self.account = Some(account.clone());
+        let index = match self.accounts.iter().position(|a| *a == account) {
+            Some(index) => index,
+            None => {
+                self.accounts.push(account.clone());
+                self.accounts.len() - 1
+            }
+        };
+        self.active = Some(index);
         Ok(account)
     }
     fn sign_out(&mut self) {
-        self.account = None;
-        self.microsoft_since = None;
+        if let Some(index) = self.active_account() {
+            let _ = self.remove_account(index);
+        }
+    }
+    fn accounts(&self) -> Vec<Account> {
+        self.accounts.iter().cloned().chain(self.microsoft()).collect()
+    }
+    fn active_account(&self) -> Option<usize> {
+        // A Microsoft sign-in that just finished plays until another account is picked.
+        match (self.active, self.microsoft()) {
+            (Some(index), _) => Some(index),
+            (None, Some(_)) => Some(self.accounts.len()),
+            (None, None) => None,
+        }
+    }
+    fn switch_account(&mut self, index: usize) -> Result<(), String> {
+        if index >= self.accounts().len() {
+            return Err("No such account.".into());
+        }
+        self.active = Some(index);
+        Ok(())
+    }
+    fn remove_account(&mut self, index: usize) -> Result<(), String> {
+        if index < self.accounts.len() {
+            self.accounts.remove(index);
+        } else if index == self.accounts.len() && self.microsoft().is_some() {
+            self.microsoft_since = None;
+        } else {
+            return Err("No such account.".into());
+        }
+        self.active = match self.active {
+            Some(a) if a == index => None,
+            Some(a) if a > index => Some(a - 1),
+            other => other,
+        };
+        Ok(())
+    }
+    fn player_head(&self, account: &Account) -> Option<Head> {
+        let (Account::Microsoft { name } | Account::Ely { name } | Account::Offline { name }) =
+            account;
+        // Hair over two rows, skin below, two eyes: a different hair colour per name.
+        let hue = name.bytes().fold(0u8, |h, b| h.wrapping_mul(31).wrapping_add(b));
+        let mut head = [0u8; 8 * 8 * 4];
+        for (i, px) in head.chunks_exact_mut(4).enumerate() {
+            let (x, y) = (i % 8, i / 8);
+            let rgb = match (x, y) {
+                (_, 0..=1) | (0 | 7, 2) => [hue / 2, hue / 3, 40],
+                (1 | 6, 4) => [255, 255, 255],
+                (2 | 5, 4) => [60, 40, 160],
+                _ => [198, 144, 110],
+            };
+            px.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+        }
+        Some(head)
     }
     fn setup(&self) -> Setup {
         let Some(since) = self.setup_since else {
@@ -277,60 +503,179 @@ impl Backend for Fake {
         self.setup_since = None;
     }
     fn profiles(&self) -> Vec<Profile> {
-        let state = match self.modpack_since.map(|t| t.elapsed()) {
-            None => ProfileState::Available,
-            Some(t) if t >= Duration::from_secs(5) => ProfileState::Installed,
-            Some(t) => ProfileState::Installing(Progress {
-                stage: Stage::Download,
-                done: Self::MODPACK_BYTES * t.as_millis() as u64 / 5000,
-                total: Self::MODPACK_BYTES,
-                bytes_per_second: Self::MODPACK_BYTES / 5,
-                note: None,
-            }),
-        };
-        let mut profiles = vec![Profile {
+        let vanilla = Profile {
             id: VANILLA.into(),
             name: "Vanilla".into(),
             description: "Minecraft as it comes, no mods.".into(),
             mods: 0,
-            size: 0,
-            state: ProfileState::Installed,
-        }];
-        profiles.push(Profile {
-            id: Self::MODPACK.into(),
-            name: "Performance".into(),
-            description: "Pretend modpack: faster chunks and lighting.".into(),
-            mods: 6,
-            size: Self::MODPACK_BYTES,
-            state,
+            size: 672_000_000,
+            worlds: 1,
+            state: match self.setup() {
+                Setup::Needed => ProfileState::Available,
+                Setup::Running(progress) => ProfileState::Installing(progress),
+                Setup::Failed { error, .. } => ProfileState::Failed(error),
+                Setup::Ready => ProfileState::Installed,
+            },
+        };
+        let custom = self.profiles.iter().map(|p| {
+            let size: u64 = p.mods.iter().filter_map(|(id, _)| fake_mod(id)).map(|m| m.size).sum();
+            let state = match p.installed_since.map(|t| t.elapsed()) {
+                None => ProfileState::Available,
+                Some(t) if t >= Duration::from_secs(3) => ProfileState::Installed,
+                Some(t) => ProfileState::Installing(Progress {
+                    stage: Stage::Download,
+                    done: size * t.as_millis() as u64 / 3000,
+                    total: size,
+                    bytes_per_second: size / 3,
+                    note: None,
+                }),
+            };
+            Profile {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                description: format!("{} mods", p.mods.len()),
+                mods: p.mods.len(),
+                size,
+                worlds: 0,
+                state,
+            }
         });
-        profiles
+        std::iter::once(vanilla).chain(custom).collect()
     }
     fn install_profile(&mut self, id: &str) {
-        if id == Self::MODPACK && self.modpack_since.is_none() {
-            self.modpack_since = Some(Instant::now());
+        if id == VANILLA {
+            self.start_setup();
+        } else if let Ok(profile) = self.custom(id) {
+            profile.installed_since = Some(Instant::now());
         }
     }
     fn selected_profile(&self) -> String {
         self.selected.clone().unwrap_or_else(|| VANILLA.into())
     }
     fn select_profile(&mut self, id: &str) -> Result<(), String> {
-        match self.profiles().into_iter().find(|p| p.id == id) {
-            Some(p) if p.state == ProfileState::Installed => {
-                self.selected = Some(id.into());
-                Ok(())
-            }
-            Some(_) => Err("Install this profile first.".into()),
-            None => Err("No such profile.".into()),
+        if id != VANILLA && !self.profiles.iter().any(|p| p.id == id) {
+            return Err("No such profile.".into());
         }
+        self.selected = Some(id.into());
+        Ok(())
     }
     fn remove_profile(&mut self, id: &str) -> Result<(), String> {
-        if id != Self::MODPACK {
+        let index = self.profiles.iter().position(|p| p.id == id);
+        let Some(index) = index.filter(|_| id != VANILLA) else {
             return Err("This profile can't be removed.".into());
-        }
-        self.modpack_since = None;
+        };
+        self.profiles.remove(index);
         if self.selected.as_deref() == Some(id) {
             self.selected = None;
+        }
+        Ok(())
+    }
+    fn presets(&self) -> Vec<Profile> {
+        FAKE_PRESETS
+            .iter()
+            .map(|&(id, name, description, mods)| Profile {
+                id: id.into(),
+                name: name.into(),
+                description: description.into(),
+                mods: mods.len(),
+                size: mods.iter().filter_map(|m| fake_mod(m)).map(|m| m.size).sum(),
+                worlds: 0,
+                state: ProfileState::Available,
+            })
+            .collect()
+    }
+    fn create_profile(
+        &mut self,
+        name: &str,
+        preset: Option<&str>,
+        mods: &[String],
+    ) -> Result<String, String> {
+        if !valid_profile_name(name) {
+            return Err("Name it with 1 to 32 characters.".into());
+        }
+        let mut chosen: Vec<String> = match preset {
+            None => Vec::new(),
+            Some(preset) => FAKE_PRESETS
+                .iter()
+                .find(|p| p.0 == preset)
+                .ok_or("No such preset.")?
+                .3
+                .iter()
+                .map(|m| m.to_string())
+                .collect(),
+        };
+        for id in mods {
+            fake_mod(id).ok_or("No such mod.")?;
+            if !chosen.contains(id) {
+                chosen.push(id.clone());
+            }
+        }
+        let taken: Vec<String> = self.profiles.iter().map(|p| p.id.clone()).collect();
+        let id = profile_id(name, &taken);
+        self.profiles.push(FakeProfile {
+            id: id.clone(),
+            name: name.trim().into(),
+            mods: chosen.into_iter().map(|m| (m, true)).collect(),
+            installed_since: None,
+        });
+        Ok(id)
+    }
+    fn rename_profile(&mut self, id: &str, name: &str) -> Result<(), String> {
+        if !valid_profile_name(name) {
+            return Err("Name it with 1 to 32 characters.".into());
+        }
+        self.custom(id)?.name = name.trim().into();
+        Ok(())
+    }
+    fn mods(&self, profile: &str) -> Vec<ProfileMod> {
+        let Some(p) = self.profiles.iter().find(|p| p.id == profile) else {
+            return Vec::new();
+        };
+        p.mods
+            .iter()
+            .filter_map(|(id, enabled)| Some(ProfileMod { info: fake_mod(id)?, enabled: *enabled }))
+            .collect()
+    }
+    fn set_mod_enabled(&mut self, profile: &str, id: &str, enabled: bool) -> Result<(), String> {
+        let profile = self.custom(profile)?;
+        let entry = profile.mods.iter_mut().find(|(m, _)| m == id).ok_or("No such mod.")?;
+        entry.1 = enabled;
+        Ok(())
+    }
+    fn search_mods(&mut self, query: &str) {
+        self.search = Some((query.into(), Instant::now()));
+    }
+    fn mod_search(&self) -> ModSearch {
+        let Some((query, since)) = &self.search else {
+            return ModSearch::Idle;
+        };
+        if since.elapsed() < Duration::from_secs(1) {
+            return ModSearch::Searching;
+        }
+        let query = query.to_lowercase();
+        ModSearch::Done(
+            FAKE_REGISTRY
+                .iter()
+                .filter(|m| m.1.to_lowercase().contains(&query))
+                .filter_map(|m| fake_mod(m.0))
+                .collect(),
+        )
+    }
+    fn add_mod(&mut self, profile: &str, id: &str) -> Result<(), String> {
+        fake_mod(id).ok_or("No such mod.")?;
+        let profile = self.custom(profile)?;
+        if !profile.mods.iter().any(|(m, _)| m == id) {
+            profile.mods.push((id.into(), true));
+            profile.installed_since = Some(Instant::now());
+        }
+        Ok(())
+    }
+    fn remove_mod(&mut self, profile: &str, id: &str) -> Result<(), String> {
+        let profile = self.custom(profile)?;
+        let before = profile.mods.len();
+        profile.mods.retain(|(m, _)| m != id);
+        if profile.mods.len() == before {
+            return Err("No such mod.".into());
         }
         Ok(())
     }
@@ -348,16 +693,47 @@ mod tests {
     }
 
     #[test]
-    fn fake_profiles_install_select_and_remove() {
+    fn profile_ids_are_safe_unique_folder_names() {
+        let none: Vec<String> = Vec::new();
+        assert_eq!(profile_id("My Pack!", &none), "my-pack");
+        assert_eq!(profile_id("../../evil", &none), "evil");
+        assert_eq!(profile_id("ünïcode", &none), "n-code");
+        assert_eq!(profile_id("   ", &none), "profile");
+        assert_eq!(profile_id("Vanilla", &none), "vanilla-2");
+        let taken = vec!["my-pack".to_string()];
+        assert_eq!(profile_id("my pack", &taken), "my-pack-2");
+        assert!(valid_profile_name(" Survival "));
+        assert!(!valid_profile_name("   "));
+        assert!(!valid_profile_name(&"x".repeat(33)));
+    }
+
+    #[test]
+    fn fake_accounts_profiles_and_mods() {
         let mut fake = Fake::default();
-        assert_eq!(fake.selected_profile(), VANILLA);
-        assert_eq!(fake.profiles()[1].state, ProfileState::Available);
-        assert!(fake.select_profile("performance").is_err());
-        fake.install_profile("performance");
+        fake.sign_in_offline("Steve").unwrap();
+        fake.sign_in_offline("Alex").unwrap();
+        assert_eq!(fake.accounts().len(), 2);
+        assert_eq!(fake.account(), Some(Account::Offline { name: "Alex".into() }));
+        fake.switch_account(0).unwrap();
+        assert_eq!(fake.account(), Some(Account::Offline { name: "Steve".into() }));
+        assert!(fake.player_head(&fake.account().unwrap()).is_some());
+        fake.remove_account(0).unwrap();
+        assert_eq!(fake.account(), None);
+
+        assert_eq!(fake.profiles()[0].state, ProfileState::Available);
+        let id = fake.create_profile("Survival", Some("performance"), &["zoom".into()]).unwrap();
+        assert_eq!(id, "survival");
+        assert_eq!(fake.mods(&id).len(), 3);
+        fake.select_profile(&id).unwrap();
+        fake.install_profile(&id);
         assert!(matches!(fake.profiles()[1].state, ProfileState::Installing(_)));
-        assert!(fake.remove_profile(VANILLA).is_err());
-        fake.remove_profile("performance").unwrap();
-        assert_eq!(fake.profiles()[1].state, ProfileState::Available);
+        fake.set_mod_enabled(&id, "zoom", false).unwrap();
+        assert!(!fake.mods(&id).iter().find(|m| m.info.id == "zoom").unwrap().enabled);
+        assert!(fake.add_mod(VANILLA, "zoom").is_err());
+        fake.search_mods("map");
+        assert_eq!(fake.mod_search(), ModSearch::Searching);
+        fake.remove_profile(&id).unwrap();
+        assert_eq!(fake.selected_profile(), VANILLA);
     }
 
     #[test]
