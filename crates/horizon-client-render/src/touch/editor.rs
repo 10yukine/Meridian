@@ -277,17 +277,38 @@ impl TouchControls {
                     } else {
                         rgba(43, 62, 81, (p.opacity.max(0.3) * 255.0) as u8)
                     };
+                    let rect = preview(p.rect(self.aspect()));
+                    if control == Control::Move {
+                        let bounds = [
+                            rect[0] * b.width,
+                            rect[1] * b.height,
+                            rect[3] * b.height,
+                            rect[3] * b.height,
+                        ];
+                        let opacity = if editor.selected == Some(control) {
+                            1.0
+                        } else {
+                            p.opacity
+                        };
+                        super::draw::draw_movement(
+                            b,
+                            a,
+                            bounds,
+                            self.settings.mode,
+                            [0.0; 2],
+                            editor.selected == Some(control),
+                            rgba(225, 243, 252, (opacity * 255.0) as u8),
+                        );
+                        continue;
+                    }
                     let name = match control {
-                        Control::Move => {
-                            if self.settings.mode == Mode::Dpad {
-                                "D-pad"
-                            } else {
-                                "Joystick"
-                            }
-                        }
+                        Control::Debug => "F3",
+                        Control::Perspective => "F5",
+                        Control::Inventory => "...",
+                        Control::Settings => "Touch",
                         _ => control.name().split(" / ").next().unwrap_or(control.name()),
                     };
-                    plate(b, a, preview(p.rect(self.aspect())), name, color);
+                    plate(b, a, rect, name, color);
                 }
             }
         }
