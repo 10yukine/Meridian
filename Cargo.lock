@@ -3505,7 +3505,6 @@ dependencies = [
  "horizon-client",
  "horizon-game",
  "horizon-guest-stack",
- "libc",
  "winit",
 ]
 

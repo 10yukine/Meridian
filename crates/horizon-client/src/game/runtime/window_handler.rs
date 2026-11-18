@@ -362,6 +362,13 @@ impl Game<'_> {
 impl ApplicationHandler for Game<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
+            // Back on screen after `suspended` (Android): a new surface for the same window.
+            if let Some(renderer) = &mut self.renderer
+                && let Err(error) = renderer.recreate_surface()
+            {
+                log::error!("Horizon: the window's surface did not come back: {error}");
+            }
+            self.audio.resume();
             return;
         }
         debug_keys::warm_debug_cpu();
@@ -421,6 +428,31 @@ impl ApplicationHandler for Game<'_> {
         self.apply_settings();
         self.previous = Instant::now();
     }
+    /// Android takes the window's surface whenever the app leaves the screen, and may end the
+    /// process afterwards without warning: pause, let the surface go, and save the world
+    /// (on the server thread, so Android isn't kept waiting). Desktop platforms never call it.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.screen == Screen::Playing && self.player.is_some() && !self.options.no_pause {
+            self.pause_focus = None;
+            self.set_screen(Screen::Paused);
+        }
+        if let Some(renderer) = &mut self.renderer {
+            renderer.drop_surface();
+        }
+        // ponytail: the audio stream keeps running silently in the background; stop the
+        // stream itself if battery use while away matters.
+        self.audio.pause();
+        self.audio
+            .stop_sounds(None, Some(horizon_client_render::sound_engine::MUSIC));
+        if let Some(server) = &self.integrated {
+            server.post(|game| {
+                if let Err(error) = game.save_game() {
+                    log::error!("Horizon: saving the world before the background failed: {error}");
+                }
+            });
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let key = if self.window.as_ref().is_some_and(|w| w.id() == id)
             && !self.scripted_run()

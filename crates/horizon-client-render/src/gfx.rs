@@ -4738,6 +4738,15 @@ impl Renderer {
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             self.surface.take().and_then(|s| Arc::try_unwrap(s).ok());
     }
+    /// Drop the window surface for good, as Android asks whenever the app leaves the screen:
+    /// that window is gone, so [`Self::recreate_surface`] then makes a new one (Meridian).
+    pub fn drop_surface(&mut self) {
+        self.release_surface();
+        self.spare_surface
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
     /// Reattach a window after surface loss or a failed renderer replacement.
     pub fn recreate_surface(&mut self) -> Result<()> {
         self.queue.wait();

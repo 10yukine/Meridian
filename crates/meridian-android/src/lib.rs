@@ -1,15 +1,34 @@
 //! Meridian's Android entry (`libmeridian.so`). NativeActivity calls [`android_main`], which runs
 //! the game with the app's private folder as its game folder and home: saves, options and logs,
 //! and the prepared resources at `.local/horizon-client/<version>`, where horizon-prepare writes
-//! them on a PC.
+//! them on a PC. android-activity sends stdout and stderr to logcat (tag `RustStdoutStderr`).
 #![cfg(target_os = "android")]
 
-use std::io::BufRead;
 use winit::platform::android::activity::AndroidApp;
+
+/// The guest stack Horizon's main thread needs (`horizon_guest_stack`), as `RUST_MIN_STACK` reads it.
+const MAIN_STACK: &str = "142606336";
+const _: () = assert!(
+    horizon_guest_stack::GUEST_STACK_BYTES + horizon_guest_stack::HOST_HEADROOM == 142_606_336
+);
+
+/// Runs when Android loads the library, before NativeActivity starts the thread that calls
+/// [`android_main`]: android-activity spawns it with std's default stack, so the default becomes
+/// the guest stack. The game must run on that thread (its looper is the app's).
+// ponytail: every std thread spawned without a stack size now reserves 136 MiB of address space
+// (not memory); give android_main its own sized thread if android-activity ever allows it.
+#[used]
+#[unsafe(link_section = ".init_array")]
+static MAIN_STACK_AT_LOAD: extern "C" fn() = {
+    extern "C" fn set_main_stack() {
+        // SAFETY: runs while the library loads, before any thread of this library exists.
+        unsafe { std::env::set_var("RUST_MIN_STACK", MAIN_STACK) };
+    }
+    set_main_stack
+};
 
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    stdio_to_logcat();
     let Some(home) = app.internal_data_path() else {
         eprintln!("Meridian: Android gave the app no internal data folder");
         return;
@@ -19,8 +38,8 @@ fn android_main(app: AndroidApp) {
         eprintln!("Meridian: cannot use {}: {error}", home.display());
         return;
     }
-    // SAFETY: no other thread reads the environment: the game has not started, and the logcat
-    // thread only reads its pipe. Android's /data/local/tmp is not the app's to write.
+    // SAFETY: no thread of ours reads the environment yet: the game has not started.
+    // Android's /data/local/tmp is not the app's to write.
     unsafe {
         std::env::set_var("HORIZON_HOME", &home);
         std::env::set_var("TMPDIR", &tmp);
@@ -30,59 +49,7 @@ fn android_main(app: AndroidApp) {
         eprintln!("Meridian: activity started again in a running process; exiting for a fresh one");
         std::process::exit(0);
     }
-    match horizon_guest_stack::builder()
-        .name("game".into())
-        .spawn(horizon_game::main)
-    {
-        Ok(game) => {
-            let _ = game.join();
-        }
-        Err(error) => eprintln!("Meridian: cannot start the game thread: {error}"),
-    }
+    horizon_game::main();
     // Ending the process when the game ends keeps Android from reusing it for the next launch.
     std::process::exit(0);
-}
-
-/// Android discards a native app's stdout and stderr: send both to logcat (tag `Meridian`), line
-/// by line, so the game's messages and panics show up in `adb logcat -s Meridian`.
-fn stdio_to_logcat() {
-    let mut fds = [0; 2];
-    // SAFETY: fds has room for the two descriptors pipe writes.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return;
-    }
-    // SAFETY: both descriptors are open; stdout and stderr now write into the pipe.
-    unsafe {
-        libc::dup2(fds[1], libc::STDOUT_FILENO);
-        libc::dup2(fds[1], libc::STDERR_FILENO);
-        libc::close(fds[1]);
-    }
-    // SAFETY: fds[0] is the pipe's open read end, owned by this File from here on.
-    let read = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[0]) };
-    let _ = std::thread::Builder::new()
-        .name("logcat".into())
-        .spawn(move || {
-            let mut reader = std::io::BufReader::new(read);
-            let mut line = Vec::new();
-            // Lossy, so a line that isn't UTF-8 can't stop the reader and fill the pipe.
-            while reader.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
-                let text = String::from_utf8_lossy(&line).trim_end().replace('\0', "");
-                if let Ok(text) = std::ffi::CString::new(text) {
-                    // SAFETY: tag and text are NUL-terminated and live through the call.
-                    unsafe { __android_log_write(ANDROID_LOG_INFO, c"Meridian".as_ptr(), text.as_ptr()) };
-                }
-                line.clear();
-            }
-        });
-}
-
-const ANDROID_LOG_INFO: libc::c_int = 4;
-
-#[link(name = "log")]
-unsafe extern "C" {
-    fn __android_log_write(
-        priority: libc::c_int,
-        tag: *const libc::c_char,
-        text: *const libc::c_char,
-    ) -> libc::c_int;
 }

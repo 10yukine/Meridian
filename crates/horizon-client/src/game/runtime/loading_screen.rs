@@ -85,6 +85,13 @@ impl Loading {
     /// The world renderer is built on the main thread, so building it before
     /// the title is on the screen holds the title back by that build. Wait for
     /// one title frame first, unless a world is waiting to open.
+    /// Android takes the window's surface whenever the app leaves the screen (`resumed` makes a
+    /// new one).
+    pub(super) fn suspended(&mut self) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.drop_surface();
+        }
+    }
     pub(super) fn ready_for_handoff(&self) -> bool {
         self.title_drawn
             || self.menu.pending.is_some()
@@ -92,6 +99,12 @@ impl Loading {
     }
     pub(super) fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
+            // Back on screen after `suspended` (Android): a new surface for the same window.
+            if let Some(renderer) = &mut self.renderer
+                && let Err(error) = renderer.recreate_surface()
+            {
+                log::error!("Horizon: the window's surface did not come back: {error}");
+            }
             return;
         }
         // The Window constructor: created fullscreen when options.txt or --fullscreen says so.
@@ -435,6 +448,12 @@ impl ApplicationHandler for App {
         match self {
             App::Loading(loading) => loading.resumed(event_loop),
             App::Ready(game) => game.resumed(event_loop),
+        }
+    }
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        match self {
+            App::Loading(loading) => loading.suspended(),
+            App::Ready(game) => game.suspended(event_loop),
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
