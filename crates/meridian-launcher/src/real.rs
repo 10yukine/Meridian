@@ -16,10 +16,25 @@ const LOCK: &str = include_str!("../../../research-lock.json");
 const EXPORTER_SOURCES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/exporters.rs"));
 const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
 
+enum Session {
+    Microsoft(account::Account, account::Secrets),
+    Ely(ely::Session),
+}
+
+impl Session {
+    fn game_session(&self) -> Result<GameSession, String> {
+        match self {
+            Self::Microsoft(profile, secrets) => account::game_session(profile, secrets),
+            Self::Ely(session) => session.game_session(),
+        }
+        .map(GameSession)
+    }
+}
+
 struct Identity {
     account: Option<Account>,
     sign_in: SignIn,
-    session: Option<(account::Account, account::Secrets)>,
+    session: Option<Session>,
 }
 impl Default for Identity {
     fn default() -> Self {
@@ -51,6 +66,40 @@ impl Real {
         }
     }
 
+    fn start_sign_in(
+        &mut self,
+        run: impl FnOnce(&Mutex<Identity>, &AtomicBool) -> Result<(Account, Session), String>
+        + Send
+        + 'static,
+    ) {
+        self.cancel_sign_in();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.sign_in_cancel = cancel.clone();
+        let identity = self.identity.clone();
+        identity.lock().unwrap().sign_in = SignIn::Starting;
+        let worker = std::thread::Builder::new()
+            .name("launcher-sign-in".into())
+            .spawn(move || {
+                let result = run(&identity, &cancel);
+                let mut state = identity.lock().unwrap();
+                if cancel.load(Relaxed) {
+                    return;
+                }
+                match result {
+                    Ok((account, session)) => {
+                        state.sign_in = SignIn::Done(account.clone());
+                        state.account = Some(account);
+                        state.session = Some(session);
+                    }
+                    Err(error) => state.sign_in = SignIn::Failed(error),
+                }
+            });
+        if let Err(e) = worker {
+            self.identity.lock().unwrap().sign_in =
+                SignIn::Failed(format!("Could not start sign-in: {e}"));
+        }
+    }
+
     fn cancel_sign_in(&mut self) {
         self.sign_in_cancel.store(true, Relaxed);
     }
@@ -69,56 +118,43 @@ impl Backend for Real {
     }
 
     fn sign_in_microsoft(&mut self) {
-        self.cancel_sign_in();
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.sign_in_cancel = cancel.clone();
-        let identity = self.identity.clone();
-        identity.lock().unwrap().sign_in = SignIn::Starting;
-
-        let worker = std::thread::Builder::new()
-            .name("launcher-sign-in".into())
-            .spawn(move || {
-                let result = (|| {
-                    let client = account::client_id().ok_or(account::NOT_CONFIGURED)?;
-                    let endpoints = account::Endpoints::live();
-                    let code = account::device_code(&endpoints, &client)?;
-                    {
-                        let mut state = identity.lock().unwrap();
-                        if cancel.load(Relaxed) {
-                            return Err("Sign-in cancelled.".into());
-                        }
-                        state.sign_in = SignIn::Code {
-                            url: code.verification_uri.clone(),
-                            code: code.user_code.clone(),
-                        };
-                    }
-                    let token = account::wait_for_sign_in(&endpoints, &client, &code, &|| {
-                        cancel.load(Relaxed)
-                    })?;
-                    account::finish_sign_in(&endpoints, token)
-                })();
+        self.start_sign_in(|identity, cancel| {
+            let client = account::client_id().ok_or(account::NOT_CONFIGURED)?;
+            let endpoints = account::Endpoints::live();
+            let code = account::device_code(&endpoints, &client)?;
+            {
                 let mut state = identity.lock().unwrap();
                 if cancel.load(Relaxed) {
-                    return;
+                    return Err("Sign-in cancelled.".into());
                 }
-                match result {
-                    Ok((profile, secrets)) => {
-                        let account = Account::Microsoft {
-                            name: profile.name.clone(),
-                        };
-                        state.sign_in = SignIn::Done(account.clone());
-                        state.account = Some(account);
-                        state.session = Some((profile, secrets));
-                    }
-                    Err(error) => state.sign_in = SignIn::Failed(error),
-                }
-            });
-        if let Err(e) = worker {
-            self.identity.lock().unwrap().sign_in =
-                SignIn::Failed(format!("Could not start sign-in: {e}"));
-        }
+                state.sign_in = SignIn::Code {
+                    url: code.verification_uri.clone(),
+                    code: code.user_code.clone(),
+                };
+            }
+            let token =
+                account::wait_for_sign_in(&endpoints, &client, &code, &|| cancel.load(Relaxed))?;
+            let (profile, secrets) = account::finish_sign_in(&endpoints, token)?;
+            let account = Account::Microsoft {
+                name: profile.name.clone(),
+            };
+            Ok((account, Session::Microsoft(profile, secrets)))
+        });
     }
 
+    fn sign_in_ely(&mut self, username: &str, password: &str, otp: &str) -> Result<(), String> {
+        let username = username.to_owned();
+        let password = password.to_owned();
+        let otp = otp.to_owned();
+        self.start_sign_in(move |_, _| {
+            let session = ely::authenticate(&username, &password, &otp)?;
+            let account = Account::Ely {
+                name: session.name.clone(),
+            };
+            Ok((account, Session::Ely(session)))
+        });
+        Ok(())
+    }
     fn sign_in(&self) -> SignIn {
         self.identity.lock().unwrap().sign_in.clone()
     }
@@ -147,7 +183,7 @@ impl Backend for Real {
             .unwrap()
             .session
             .as_ref()
-            .map(|(account, secrets)| account::game_session(account, secrets).map(GameSession))
+            .map(Session::game_session)
             .transpose()
     }
 

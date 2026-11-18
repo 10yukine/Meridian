@@ -112,7 +112,11 @@ fn request_to(method: &str, url: &str) -> ureq::Request {
 
 /// One request's result: the status and the JSON body (empty when there is none). Transport
 /// errors name the service, never the URL's query or the request.
-fn send(request: ureq::Request, body: Option<Body>, service: &str) -> Result<(u16, Value), String> {
+pub(crate) fn send(
+    request: ureq::Request,
+    body: Option<Body>,
+    service: &str,
+) -> Result<(u16, Value), String> {
     let result = match body {
         None => request.call(),
         Some(Body::Form(fields)) => request.send_form(&fields),
@@ -132,16 +136,16 @@ fn send(request: ureq::Request, body: Option<Body>, service: &str) -> Result<(u1
     Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
 }
 
-enum Body<'a> {
+pub(crate) enum Body<'a> {
     Form(Vec<(&'a str, &'a str)>),
     Json(Value),
 }
 
-fn str_field(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn str_field(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

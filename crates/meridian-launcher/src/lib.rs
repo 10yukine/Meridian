@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 pub enum Account {
     /// Signed in with Microsoft: online servers that check accounts work.
     Microsoft { name: String },
+    /// Signed in with Ely.by, for servers using Ely.by authentication.
+    Ely { name: String },
     /// A name only: single player, LAN, and servers in offline mode.
     Offline { name: String },
 }
@@ -79,11 +81,16 @@ pub trait Backend: Send {
     fn account(&self) -> Option<Account>;
     /// Starts Microsoft sign-in; [`Self::sign_in`] follows it.
     fn sign_in_microsoft(&mut self);
+    /// Starts Ely.by sign-in on a worker. The password and optional OTP
+    /// exist only for this request.
+    fn sign_in_ely(&mut self, _username: &str, _password: &str, _otp: &str) -> Result<(), String> {
+        Err("Ely.by sign-in is unavailable in this launcher.".into())
+    }
     fn sign_in(&self) -> SignIn;
     /// Makes `name` the offline account, or says why it can't be (see [`valid_offline_name`]).
     fn sign_in_offline(&mut self, name: &str) -> Result<Account, String>;
     fn sign_out(&mut self);
-    /// The current Microsoft session, if any. Offline accounts return None.
+    /// The current online session, if any. Offline accounts return None.
     fn game_session(&self) -> Result<Option<GameSession>, String> {
         Ok(None)
     }
@@ -235,6 +242,7 @@ mod tests {
     }
 }
 mod account;
+mod ely;
 mod mojang;
 mod real;
 mod sources;
