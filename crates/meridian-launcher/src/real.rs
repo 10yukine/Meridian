@@ -11,6 +11,8 @@ use std::{
 
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
 mod android;
+mod remembered;
+use remembered::Remembered;
 
 const LOCK: &str = include_str!("../../../research-lock.json");
 const EXPORTER_SOURCES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/exporters.rs"));
@@ -22,6 +24,26 @@ enum Session {
 }
 
 impl Session {
+    fn account(&self) -> Account {
+        match self {
+            Self::Microsoft(profile, _) => Account::Microsoft {
+                name: profile.name.clone(),
+            },
+            Self::Ely(session) => Account::Ely {
+                name: session.name.clone(),
+            },
+        }
+    }
+
+    fn remembered(&self) -> Remembered {
+        match self {
+            Self::Microsoft(_, secrets) => Remembered::Microsoft {
+                refresh_token: secrets.refresh_token().into(),
+            },
+            Self::Ely(session) => Remembered::Ely(session.clone()),
+        }
+    }
+
     fn game_session(&self) -> Result<GameSession, String> {
         match self {
             Self::Microsoft(profile, secrets) => account::game_session(profile, secrets),
@@ -49,6 +71,7 @@ impl Default for Identity {
 /// Launcher workers and their frame-safe snapshots. Pass the absolute app-private game directory.
 pub struct Real {
     root: PathBuf,
+    account_file: Option<PathBuf>,
     identity: Arc<Mutex<Identity>>,
     sign_in_cancel: Arc<AtomicBool>,
     setup: Arc<Mutex<Setup>>,
@@ -57,25 +80,60 @@ pub struct Real {
 
 impl Real {
     pub fn new(root: PathBuf) -> Self {
-        Self {
+        let account_file = if cfg!(target_os = "android") {
+            remembered::private_account_file(&root)
+        } else {
+            None
+        };
+        Self::with_store(root, account_file)
+    }
+
+    fn with_store(root: PathBuf, account_file: Option<PathBuf>) -> Self {
+        let mut backend = Self {
             root,
+            account_file,
             identity: Arc::default(),
             sign_in_cancel: Arc::default(),
             setup: Arc::new(Mutex::new(Setup::Needed)),
             setup_cancel: Arc::default(),
+        };
+        let Some(path) = backend.account_file.as_deref() else {
+            return backend;
+        };
+        match Remembered::load(path) {
+            Ok(Some(Remembered::Offline { name })) if valid_offline_name(&name) => {
+                backend.identity.lock().unwrap().account = Some(Account::Offline { name });
+            }
+            Ok(Some(Remembered::Microsoft { refresh_token })) => {
+                backend.start_sign_in(move |_, _| {
+                    let client = account::client_id().ok_or(account::NOT_CONFIGURED)?;
+                    let endpoints = account::Endpoints::live();
+                    let ms = account::refresh(&endpoints, &client, &refresh_token)?;
+                    let (profile, secrets) = account::finish_sign_in(&endpoints, ms)?;
+                    Ok(Session::Microsoft(profile, secrets))
+                });
+            }
+            Ok(Some(Remembered::Ely(session))) => {
+                backend.start_sign_in(move |_, _| ely::restore(session).map(Session::Ely));
+            }
+            Ok(None) => {}
+            Ok(Some(Remembered::Offline { .. })) | Err(_) => {
+                backend.identity.lock().unwrap().sign_in =
+                    SignIn::Failed("Could not restore your saved account. Sign in again.".into());
+            }
         }
+        backend
     }
 
     fn start_sign_in(
         &mut self,
-        run: impl FnOnce(&Mutex<Identity>, &AtomicBool) -> Result<(Account, Session), String>
-        + Send
-        + 'static,
+        run: impl FnOnce(&Mutex<Identity>, &AtomicBool) -> Result<Session, String> + Send + 'static,
     ) {
         self.cancel_sign_in();
         let cancel = Arc::new(AtomicBool::new(false));
         self.sign_in_cancel = cancel.clone();
         let identity = self.identity.clone();
+        let file = self.account_file.clone();
         identity.lock().unwrap().sign_in = SignIn::Starting;
         let worker = std::thread::Builder::new()
             .name("launcher-sign-in".into())
@@ -86,7 +144,14 @@ impl Real {
                     return;
                 }
                 match result {
-                    Ok((account, session)) => {
+                    Ok(session) => {
+                        if let Some(path) = file.as_deref()
+                            && session.remembered().save(path).is_err()
+                        {
+                            state.sign_in = SignIn::Failed(remembered::SAVE_ERROR.into());
+                            return;
+                        }
+                        let account = session.account();
                         state.sign_in = SignIn::Done(account.clone());
                         state.account = Some(account);
                         state.session = Some(session);
@@ -135,10 +200,7 @@ impl Backend for Real {
             let token =
                 account::wait_for_sign_in(&endpoints, &client, &code, &|| cancel.load(Relaxed))?;
             let (profile, secrets) = account::finish_sign_in(&endpoints, token)?;
-            let account = Account::Microsoft {
-                name: profile.name.clone(),
-            };
-            Ok((account, Session::Microsoft(profile, secrets)))
+            Ok(Session::Microsoft(profile, secrets))
         });
     }
 
@@ -147,11 +209,7 @@ impl Backend for Real {
         let password = password.to_owned();
         let otp = otp.to_owned();
         self.start_sign_in(move |_, _| {
-            let session = ely::authenticate(&username, &password, &otp)?;
-            let account = Account::Ely {
-                name: session.name.clone(),
-            };
-            Ok((account, Session::Ely(session)))
+            ely::authenticate(&username, &password, &otp).map(Session::Ely)
         });
         Ok(())
     }
@@ -164,8 +222,14 @@ impl Backend for Real {
             return Err("Use 1 to 16 letters, digits or underscores.".into());
         }
         self.cancel_sign_in();
+        let mut state = self.identity.lock().unwrap();
+        if let Some(path) = self.account_file.as_deref() {
+            Remembered::Offline { name: name.into() }
+                .save(path)
+                .map_err(|_| remembered::SAVE_ERROR)?;
+        }
         let account = Account::Offline { name: name.into() };
-        *self.identity.lock().unwrap() = Identity {
+        *state = Identity {
             account: Some(account.clone()),
             ..Identity::default()
         };
@@ -174,7 +238,15 @@ impl Backend for Real {
 
     fn sign_out(&mut self) {
         self.cancel_sign_in();
-        *self.identity.lock().unwrap() = Identity::default();
+        let mut state = self.identity.lock().unwrap();
+        if let Some(path) = self.account_file.as_deref()
+            && remembered::remove(path).is_err()
+        {
+            state.sign_in =
+                SignIn::Failed("Could not remove the saved account. Try signing out again.".into());
+            return;
+        }
+        *state = Identity::default();
     }
 
     fn game_session(&self) -> Result<Option<GameSession>, String> {
@@ -415,5 +487,41 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
         Ok(())
     } else {
         Err(missing.join("; "))
+    }
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    #[test]
+    fn selected_account_survives_relaunch_until_sign_out() {
+        let mut nonce = [0u8; 8];
+        getrandom::fill(&mut nonce).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "meridian-account-test-{}",
+            u64::from_ne_bytes(nonce)
+        ));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("launcher-account.json");
+        let launcher = || Real::with_store(dir.clone(), Some(path.clone()));
+
+        let mut first = launcher();
+        first.sign_in_offline("First").unwrap();
+        let expected = first.sign_in_offline("Offline_2").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        drop(first);
+
+        let mut second = launcher();
+        assert_eq!(second.account(), Some(expected));
+        assert!(second.game_session().unwrap().is_none());
+        second.sign_out();
+        assert!(!path.exists());
+        assert!(launcher().account().is_none());
+        fs::remove_dir(dir).unwrap();
     }
 }

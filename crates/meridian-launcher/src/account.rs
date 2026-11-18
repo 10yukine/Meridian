@@ -235,8 +235,7 @@ fn oauth_error(v: &Value) -> String {
         Some("invalid_client" | "unauthorized_client") => {
             "Microsoft refused this launcher's app registration (client ID).".into()
         }
-        Some(other) => format!("Microsoft sign-in failed ({other})."),
-        None => "Microsoft sign-in failed.".into(),
+        _ => "Microsoft sign-in failed.".into(),
     }
 }
 
@@ -296,6 +295,20 @@ pub fn wait_for_sign_in(
             Poll::Done(tokens) => return Ok(tokens),
         }
     }
+}
+
+pub(crate) fn refresh(ep: &Endpoints, client_id: &str, refresh: &str) -> Result<MsTokens, String> {
+    let (status, v) = send(
+        request_to("POST", &format!("{}/token", ep.microsoft)),
+        Some(Body::Form(vec![
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("refresh_token", refresh),
+            ("scope", SCOPE),
+        ])),
+        "Microsoft",
+    )?;
+    ms_tokens(status, &v)
 }
 
 // ----- Xbox Live, XSTS, Minecraft ----------------------------------------------------------------
@@ -536,6 +549,10 @@ pub fn finish_sign_in_with_progress(
 }
 
 impl Secrets {
+    pub(crate) fn refresh_token(&self) -> &str {
+        &self.refresh_token
+    }
+
     fn new(refresh_token: String, mc: Minecraft) -> Self {
         Self {
             refresh_token,
@@ -560,4 +577,63 @@ pub fn game_session(account: &Account, secrets: &Secrets) -> Result<String, Stri
         "xuid": secrets.xuid,
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    #[test]
+    fn refresh_uses_the_saved_token_and_accepts_rotation() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ep = Endpoints {
+            microsoft: format!("http://{}", listener.local_addr().unwrap()),
+            ..Endpoints::live()
+        };
+        let fixture = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("POST /token "));
+            let mut length = None;
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((key, value)) = line.split_once(':')
+                    && key.eq_ignore_ascii_case("content-length")
+                {
+                    length = Some(value.trim().parse::<usize>().unwrap());
+                }
+            }
+            let mut bytes = vec![0; length.unwrap()];
+            reader.read_exact(&mut bytes).unwrap();
+            let form = String::from_utf8(bytes).unwrap();
+            for field in [
+                "grant_type=refresh_token",
+                "client_id=fixture-id",
+                "refresh_token=fixture-old",
+            ] {
+                assert!(form.split('&').any(|entry| entry == field));
+            }
+            let body = r#"{"access_token":"fixture-access","refresh_token":"fixture-new"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let tokens = refresh(&ep, "fixture-id", "fixture-old").unwrap();
+        assert_eq!(tokens.access, "fixture-access");
+        assert_eq!(tokens.refresh, "fixture-new");
+        fixture.join().unwrap();
+    }
 }
