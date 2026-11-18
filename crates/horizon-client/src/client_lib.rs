@@ -109,6 +109,7 @@ pub use horizon_core::json_nbt;
 pub mod lan;
 pub mod landing;
 pub mod launcher_backend;
+pub mod mobile_launcher;
 pub mod legacy_combat;
 pub mod living_attributes;
 pub mod locator_bar;
