@@ -102,7 +102,8 @@ pub(crate) fn download(
     log(format!(
         "Downloading Minecraft {v} from Mojang: the game and {libraries} libraries"
     ));
-    fetch_all(&game, jobs, fetch, cancel, log)?;
+    // The JARs are buffered for verification. Keep the larger transfers at their old limit.
+    fetch_all(&game, jobs.min(8), fetch, cancel, log)?;
     let index = &manifest["assetIndex"];
     let index = File {
         url: text(index, "url")?,
@@ -115,7 +116,7 @@ pub(crate) fn download(
     let assets = fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)
         .and_then(|_| objects(&read_json(&index.path)?, dir))
         .and_then(|objects| {
-            log(format!("Downloading the sounds ({} files)", objects.len()));
+            log(format!("Downloading game assets ({} files)", objects.len()));
             // A connection that fails now and then is tried again, and a file that still fails
             // does not stop the others: the next download fetches what is left.
             let retrying = |url: &str| {
@@ -179,24 +180,23 @@ pub(crate) fn native_classifier(library: &Value, os: &str) -> Option<String> {
         .map(|key| key.replace("${arch}", arch))
 }
 
-/// The asset index's objects, once each.
+/// The objects preparation uses, once per hash even if several names refer to it.
 fn objects(index: &Value, dir: &Path) -> Result<Vec<File>, String> {
     let objects = index["objects"]
         .as_object()
         .ok_or("The asset index has no objects")?;
-    let sizes: std::collections::HashMap<&str, u64> = objects
-        .values()
-        .filter_map(|o| Some((o["hash"].as_str()?, o["size"].as_u64()?)))
-        .collect();
-    let mut hashes: Vec<&str> = objects
-        .values()
-        .filter_map(|o| o["hash"].as_str())
-        .collect();
-    hashes.sort_unstable();
-    hashes.dedup();
-    hashes
+    let mut wanted = std::collections::BTreeMap::new();
+    for (name, object) in objects {
+        if horizon_prepare::includes_index_asset(name) {
+            let hash = text(object, "hash")?;
+            wanted
+                .entry(hash)
+                .or_insert_with(|| object["size"].as_u64());
+        }
+    }
+    wanted
         .into_iter()
-        .map(|hash| {
+        .map(|(hash, size)| {
             if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(format!("Bad asset hash {hash:?} in the asset index"));
             }
@@ -204,7 +204,7 @@ fn objects(index: &Value, dir: &Path) -> Result<Vec<File>, String> {
             Ok(File {
                 url: format!("{OBJECTS}/{path}"),
                 sha1: hash.to_string(),
-                size: sizes.get(hash).copied(),
+                size,
                 path: dir.join("assets/objects").join(path),
             })
         })
@@ -272,6 +272,7 @@ fn fetch_each(
                             if let Err(e) = got {
                                 errors.fetch_add(1, Relaxed);
                                 failed.lock().unwrap().get_or_insert(e);
+                                continue;
                             }
                         }
                         done.fetch_add(1, Relaxed);
@@ -284,7 +285,11 @@ fn fetch_each(
             std::thread::sleep(Duration::from_millis(100));
             waited += 1;
             if waited % 10 == 0 {
-                log(format!("{} of {} files", done.load(Relaxed), files.len()));
+                log(format!(
+                    "{} of {} files verified",
+                    done.load(Relaxed),
+                    files.len()
+                ));
             }
         }
     });
@@ -297,5 +302,30 @@ fn fetch_each(
         )),
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_downloads_match_preparation_and_deduplicate_hashes() {
+        let sound = "a".repeat(40);
+        let extra = "b".repeat(40);
+        let font = "c".repeat(40);
+        let index = serde_json::json!({
+            "objects": {
+                "minecraft/sounds/example.ogg": {"hash": sound, "size": 11},
+                "minecraft/sounds/shared.ogg": {"hash": sound, "size": 11},
+                "minecraft/font/unifont.zip": {"hash": font, "size": 12},
+                "realms/sounds/unread.ogg": {"hash": extra, "size": 13}
+            }
+        });
+        let files = objects(&index, Path::new("cache")).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].sha1, sound);
+        assert_eq!(files[0].size, Some(11));
+        assert_eq!(files[1].sha1, font);
     }
 }

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
+        atomic::{AtomicBool, Ordering::Relaxed},
     },
 };
 
@@ -19,6 +19,7 @@ mod profiles;
 const LOCK: &str = include_str!("../../../research-lock.json");
 const EXPORTER_SOURCES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/exporters.rs"));
 const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
+const DOWNLOAD_JOBS: usize = 16;
 
 enum Session {
     Microsoft(account::Account, account::Secrets),
@@ -559,22 +560,21 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
         Stage::Download,
         Some("Downloading Minecraft files".into()),
     );
-    let started = Instant::now();
-    let bytes = AtomicU64::new(0);
     let agent = ureq::AgentBuilder::new()
+        .max_idle_connections_per_host(DOWNLOAD_JOBS)
         .timeout_read(Duration::from_secs(20))
         .timeout_connect(Duration::from_secs(10))
         .build();
-    let report = |n| {
-        let mut state = state.lock().unwrap();
-        let done = bytes.fetch_add(n, Relaxed) + n;
-        if let Setup::Running(progress) = &mut *state {
-            progress.done = done;
-            progress.bytes_per_second =
-                (done as f64 / started.elapsed().as_secs_f64().max(0.1)) as u64;
+    let meter = || {
+        let started = Instant::now();
+        move |bytes| {
+            if let Setup::Running(progress) = &mut *state.lock().unwrap() {
+                progress.done += bytes;
+                progress.bytes_per_second =
+                    (progress.done as f64 / started.elapsed().as_secs_f64().max(0.1)) as u64;
+            }
         }
     };
-    let download = |url: &str| fetch(&agent, url, MAX_DOWNLOAD, cancel, report);
     #[cfg(all(target_os = "android", target_arch = "aarch64"))]
     let jdk = {
         stage(
@@ -582,7 +582,7 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
             Stage::Download,
             Some("Downloading Android Java 25".into()),
         );
-        let jdk = android::install(root, &agent, cancel, report)?;
+        let jdk = android::install(root, &agent, cancel, meter())?;
         stage(
             state,
             Stage::Download,
@@ -598,12 +598,14 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
     } else {
         "linux"
     };
+    let report = meter();
+    let download = |url: &str| fetch(&agent, url, MAX_DOWNLOAD, cancel, report);
     mojang::download(
         &pins,
         &game,
         os,
         server_sha1,
-        8,
+        DOWNLOAD_JOBS,
         &download,
         cancel,
         &|note| {

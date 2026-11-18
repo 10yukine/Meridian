@@ -219,6 +219,11 @@ const KINDS: [Kind; 5] = [
     ("languages", is_language, "Language", &LANGUAGES),
 ];
 
+/// Whether the full preparation pipeline reads this asset index entry.
+pub fn includes_index_asset(name: &str) -> bool {
+    KINDS.iter().any(|(_, wanted, _, _)| wanted(name))
+}
+
 /// `horizon-prepare <kind>`: copies what `kind` names (`sounds`, `panorama`, `fonts`, `packs` or
 /// `languages`) into the resources at `output` (default: `root`'s `.local/horizon-client/<version>`),
 /// from the asset store of `minecraft` or the one `inputs` names.

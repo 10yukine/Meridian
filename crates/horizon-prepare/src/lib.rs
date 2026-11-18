@@ -25,7 +25,9 @@ mod worker;
 
 pub use check::{check, missing_extras, STAMP};
 pub use files::clone_or_copy;
-pub use sounds::{add_assets, fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
+pub use sounds::{
+    add_assets, fonts, includes_index_asset, languages, packs, panorama, sounds, BUILT_IN_PACKS,
+};
 
 use pyjson::Value;
 use sha2::Digest;
