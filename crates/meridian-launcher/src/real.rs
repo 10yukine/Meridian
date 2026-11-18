@@ -80,7 +80,11 @@ pub struct Real {
 
 impl Real {
     pub fn new(root: PathBuf) -> Self {
-        let account_file = cfg!(target_os = "android").then(|| root.join("launcher-account.json"));
+        let account_file = if cfg!(target_os = "android") {
+            remembered::private_account_file(&root)
+        } else {
+            None
+        };
         Self::with_store(root, account_file)
     }
 

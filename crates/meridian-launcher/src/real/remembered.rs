@@ -2,10 +2,20 @@ use crate::ely;
 use std::{
     fs,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub(super) const SAVE_ERROR: &str = "Could not save your account. Try signing in again.";
+
+pub(super) fn private_account_file(root: &Path) -> Option<PathBuf> {
+    // Only accept Android's internal data directories, including the path resolved through
+    // /data/data on the primary user. A game folder on shared storage never receives credentials.
+    let root = root.canonicalize().ok()?;
+    ["/data/user", "/data/user_de", "/data/data"]
+        .iter()
+        .any(|private| root.starts_with(private))
+        .then(|| root.join("launcher-account.json"))
+}
 
 // Keep only the material needed to restore the selected account. This type deliberately has no Debug.
 #[derive(serde::Serialize, serde::Deserialize)]
