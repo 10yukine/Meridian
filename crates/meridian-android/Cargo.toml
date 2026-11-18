@@ -16,6 +16,7 @@ crate-type = ["cdylib"]
 [target.'cfg(target_os = "android")'.dependencies]
 horizon-game = { path = "../horizon-game", default-features = false, features = ["audio", "horizon-extras"] }
 horizon-client = { path = "../horizon-client", default-features = false }
+horizon-client-render = { path = "../horizon-client-render" }
 horizon-guest-stack = { path = "../horizon-guest-stack" }
 winit = { version = "0.30.13", features = ["android-native-activity"] }
 

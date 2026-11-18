@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["crates/horizon-telemetry-server", "launcher", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "tools/fixtures/paper-trace-mod"]
+exclude = ["crates/horizon-telemetry-server", "launcher", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "third_party/winit", "tools/fixtures/paper-trace-mod"]
 members = [
     "crates/horizon-guest-stack",
     "crates/horizon-mod-vocab",
@@ -112,6 +112,12 @@ large_enum_variant = "allow"
 # Drop this and the folder once a wgpu release has these fixes.
 [patch.crates-io]
 wgpu-hal = { path = "third_party/wgpu-hal" }
+# winit 0.30.13 with Starling's Android input hook (`winit::platform::android::set_input_hook`): its
+# Android backend makes touches of a controller's sticks and a mouse's buttons and drops the rest
+# (hover, the wheel), and the app never sees the raw events. Meridian takes those in
+# crates/meridian-android. 26 lines in the Android backend, marked "Horizon's patch"; nothing
+# changes on the other platforms (THIRD_PARTY_NOTICES.md).
+winit = { path = "third_party/winit" }
 # naga 30.0.1, with the fixes to its GLSL frontend that shader packs need (THIRD_PARTY_NOTICES.md).
 naga = { path = "third_party/naga" }
 # libmimalloc-sys 0.1.49 whose mimalloc v3 counts bits without POPCNT when MSVC builds it: the

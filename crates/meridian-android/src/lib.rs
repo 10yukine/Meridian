@@ -6,6 +6,8 @@
 
 use winit::platform::android::activity::AndroidApp;
 
+mod input;
+
 /// The guest stack Horizon's main thread needs (`horizon_guest_stack`), as `RUST_MIN_STACK` reads it.
 const MAIN_STACK: &str = "142606336";
 const _: () = assert!(
@@ -49,6 +51,8 @@ fn android_main(app: AndroidApp) {
         eprintln!("Meridian: activity started again in a running process; exiting for a fresh one");
         std::process::exit(0);
     }
+    // Controllers and mice reach the game through this hook, not as winit's fake touches.
+    winit::platform::android::set_input_hook(input::hook);
     horizon_game::main();
     // Ending the process when the game ends keeps Android from reusing it for the next launch.
     std::process::exit(0);

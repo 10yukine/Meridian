@@ -534,6 +534,8 @@ impl ApplicationHandler for Game<'_> {
         // Every event-loop pass, drawn or not: a window that stops redrawing (a lost
         // device, an occluded window) must still end after a server crash.
         self.exit_after_server_crash();
+        #[cfg(target_os = "android")]
+        self.android_mouse(event_loop);
         self.idle(event_loop);
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
@@ -652,6 +654,53 @@ impl Game<'_> {
             );
             if std::mem::take(&mut self.touch_press_focused) && self.text_field_focused() {
                 self.show_keyboard();
+            }
+        }
+    }
+
+    /// A mouse on Android (Meridian): the events `meridian-android`'s input hook took from winit,
+    /// replayed as a computer's mouse (pointer, buttons, wheel, and the view's turn).
+    #[cfg(target_os = "android")]
+    fn android_mouse(&mut self, event_loop: &ActiveEventLoop) {
+        use horizon_client_render::android_runtime::{MouseEvent, take_mouse_events};
+        let Some(id) = self.window.as_ref().map(|w| w.id()) else {
+            return;
+        };
+        for (device_id, event) in take_mouse_events() {
+            match event {
+                MouseEvent::Moved(x, y) => self.window_event(
+                    event_loop,
+                    id,
+                    WindowEvent::CursorMoved {
+                        device_id,
+                        position: winit::dpi::PhysicalPosition::new(x, y),
+                    },
+                ),
+                MouseEvent::Button(button, down) => self.window_event(
+                    event_loop,
+                    id,
+                    WindowEvent::MouseInput {
+                        device_id,
+                        state: if down {
+                            ElementState::Pressed
+                        } else {
+                            ElementState::Released
+                        },
+                        button,
+                    },
+                ),
+                MouseEvent::Wheel(x, y) => self.window_event(
+                    event_loop,
+                    id,
+                    WindowEvent::MouseWheel {
+                        device_id,
+                        delta: MouseScrollDelta::LineDelta(x, y),
+                        phase: winit::event::TouchPhase::Moved,
+                    },
+                ),
+                MouseEvent::Motion(x, y) => {
+                    self.device_event(event_loop, device_id, DeviceEvent::MouseMotion { delta: (x, y) })
+                }
             }
         }
     }

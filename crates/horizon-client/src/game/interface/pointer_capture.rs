@@ -235,7 +235,9 @@ impl Game<'_> {
             } else {
                 None
             };
-            self.captured = self.capture_mode.is_some();
+            // Android has no pointer grab for winit; Meridian's input hook delivers a mouse's
+            // relative motion anyway, so the game holds the pointer as if grabbed.
+            self.captured = self.capture_mode.is_some() || cfg!(target_os = "android");
             // Windows already warped above, inside the clip's own position.
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             if self.captured && self.focused {

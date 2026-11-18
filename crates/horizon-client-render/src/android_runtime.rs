@@ -162,5 +162,44 @@ pub fn pad_state() -> PadState {
     keypad_state().merge(&gamepad_state())
 }
 
+/// Meridian: what a mouse did, taken from Android's raw input before winit makes touches of it
+/// (the platform's input hook), for the game to replay as a computer's mouse.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MouseEvent {
+    /// The pointer moved to this window position, in pixels.
+    Moved(f64, f64),
+    Button(winit::event::MouseButton, bool),
+    /// The wheel, in lines: right and up positive (winit's `LineDelta`).
+    Wheel(f32, f32),
+    /// How far the mouse went, in pixels, right and down positive: the view turns by it.
+    Motion(f64, f64),
+}
+
+/// The most mouse events kept for a game that isn't reading them (a save on quit).
+const MOUSE_QUEUE: usize = 512;
+static MOUSE: Mutex<Vec<(winit::event::DeviceId, MouseEvent)>> = Mutex::new(Vec::new());
+/// The game reads the mouse (from its first loop iteration). Until then the hook leaves the
+/// mouse to winit, so the loading screen gets it as a finger.
+static MOUSE_READ: AtomicBool = AtomicBool::new(false);
+
+/// Whether the game reads the mouse yet; until it does, the hook leaves the mouse to winit.
+pub fn mouse_read() -> bool {
+    MOUSE_READ.load(Ordering::Relaxed)
+}
+
+/// A mouse event from the platform's input hook, for the game's next loop iteration.
+pub fn mouse_event(device: winit::event::DeviceId, event: MouseEvent) {
+    let mut queue = lock(&MOUSE);
+    if queue.len() < MOUSE_QUEUE {
+        queue.push((device, event));
+    }
+}
+
+/// The mouse's events since the last call; the hook takes the mouse from the first call on.
+pub fn take_mouse_events() -> Vec<(winit::event::DeviceId, MouseEvent)> {
+    MOUSE_READ.store(true, Ordering::Relaxed);
+    std::mem::take(&mut *lock(&MOUSE))
+}
+
 #[cfg(test)]
 mod tests;

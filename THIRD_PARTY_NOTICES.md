@@ -96,6 +96,17 @@ program. It is licensed under MIT or
 Apache-2.0; both licenses are in that folder
 (`LICENSE.MIT`, `LICENSE.APACHE`).
 
+## winit
+
+`third_party/winit` is [winit](https://github.com/rust-windowing/winit) 0.30.13 by the winit
+contributors, licensed under Apache-2.0 (`LICENSE` in that folder). Its Android backend has an
+input hook (`platform::android::set_input_hook`, marked "Horizon's patch") that hands the app each
+raw input event first, so controllers and mice reach the game. The hook is from
+[Starling](https://github.com/starling-client/starling) at
+[5432370d5736](https://github.com/starling-client/starling/tree/5432370d573642041585c69b40fb045b27133488)
+(`third_party/winit`), under the MIT license, copyright (c) 2026 Ludovic Marie and the Horizon
+contributors. Starling credits Vasysik's Horizon Android for it.
+
 ## naga
 
 `third_party/naga` is [naga](https://github.com/gfx-rs/wgpu) 30.0.1 by the gfx-rs developers, with
