@@ -5211,6 +5211,11 @@ impl Game<'_> {
                 g.draw_tab_list(batch);
             });
         }
+        // Meridian: the on-screen touch controls, over the HUD while playing.
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        if show_hud && self.screen == Screen::Playing {
+            self.pad.touch.draw(&mut batch, &self.gui.atlas);
+        }
         // The mod layers above the last vanilla layer drawn.
         self.draw_mod_gui_layers(None, &mut batch);
         self.hud_layer_next = None;

@@ -56,6 +56,10 @@ pub(super) struct Pads {
     devices: hardware::Devices,
     /// The virtual pad of `horizon-ctl pad`.
     injected: PadState,
+    /// Meridian: the on-screen touch controls, a phone's built-in pad (fed by
+    /// `window_handler`'s touch routing, read with Android's gamepads in `read`).
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    pub(super) touch: horizon_client_render::touch::TouchControls,
     /// The virtual pad was in use at the last poll.
     virtual_input: bool,
     /// Buttons a `pad ... tap` releases at the next poll.
@@ -205,6 +209,13 @@ mod hardware {
 
     impl Pads {
         pub(super) fn read(&mut self) -> PadState {
+            // Meridian: on phones the touch controls and Android's gamepads are the pads.
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            return self
+                .touch
+                .poll_state()
+                .merge(&horizon_client_render::android_runtime::pad_state());
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             PadState::default()
         }
         pub(in crate::game) fn release_hardware(&mut self) {}
@@ -385,7 +396,8 @@ impl Game<'_> {
             self.pad_cancel_inputs(event_loop);
         }
         self.pad.context = Some(context);
-        if !self.settings.controller.enabled {
+        // On phones the touch controls are the built-in input: they don't switch off with pads.
+        if !self.settings.controller.enabled && !cfg!(any(target_os = "android", target_os = "ios")) {
             self.pad_output_off();
             self.pad_cancel_inputs(event_loop);
             // The radial menu closed with the pad: its overlay fades out, as for a cancel.

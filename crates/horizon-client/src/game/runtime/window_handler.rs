@@ -454,6 +454,12 @@ impl ApplicationHandler for Game<'_> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // Meridian: phones deliver fingers, not a mouse.
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        if let WindowEvent::Touch(touch) = event {
+            self.touch(event_loop, id, touch);
+            return;
+        }
         let key = if self.window.as_ref().is_some_and(|w| w.id() == id)
             && !self.scripted_run()
             && !self.unclaimed_window
@@ -535,6 +541,78 @@ impl ApplicationHandler for Game<'_> {
     /// window turns it into a window close, so Minecraft.stop saves the world.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.shut_down();
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+impl Game<'_> {
+    /// A finger (Meridian): the touch controls while playing; anywhere else (menus,
+    /// inventories) the pointer, so a tap clicks where it lands.
+    // ponytail: one finger at a time outside play; in play, attack and use act on the crosshair
+    // (the controls' tap-at-the-finger `aim` isn't wired) and their chat/F3 requests are ignored.
+    fn touch(&mut self, event_loop: &ActiveEventLoop, id: WindowId, touch: winit::event::Touch) {
+        use winit::event::TouchPhase;
+        let [w, h] = self
+            .renderer
+            .as_ref()
+            .map_or([1, 1], |r| [r.config.width.max(1), r.config.height.max(1)]);
+        let started = touch.phase == TouchPhase::Started;
+        let ended = matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled);
+        let device_id = touch.device_id;
+        let release = |game: &mut Self, event_loop: &ActiveEventLoop| {
+            game.window_event(
+                event_loop,
+                id,
+                WindowEvent::MouseInput {
+                    device_id,
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                },
+            );
+        };
+        if self.screen == Screen::Playing && self.player.is_some() {
+            let controls = &mut self.pad.touch;
+            controls.force_crosshair = true;
+            controls.viewport(w, h);
+            let point = [
+                touch.location.x as f32 / w as f32,
+                touch.location.y as f32 / h as f32,
+            ];
+            let drag = controls.update(touch.id, point, started, ended);
+            if drag != [0.0; 2] {
+                // Degrees, as the touch settings scale them; the game turns in 0.15° units.
+                let [yaw, pitch] =
+                    horizon_client_render::touch::camera_delta(drag, w, h, &controls.settings);
+                self.look_turn(f64::from(yaw / 0.15), f64::from(pitch / 0.15));
+                self.last_input = Instant::now();
+            }
+            // A finger that pressed a menu button which closed into play lifts here.
+            if ended {
+                release(self, event_loop);
+            }
+            return;
+        }
+        self.window_event(
+            event_loop,
+            id,
+            WindowEvent::CursorMoved {
+                device_id,
+                position: touch.location,
+            },
+        );
+        if started {
+            self.window_event(
+                event_loop,
+                id,
+                WindowEvent::MouseInput {
+                    device_id,
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                },
+            );
+        } else if ended {
+            release(self, event_loop);
+        }
     }
 }
 
