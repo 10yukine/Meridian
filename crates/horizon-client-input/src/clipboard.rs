@@ -112,6 +112,30 @@ pub fn helper_clipboard_contents(clipboard: &str) -> String {
     strip_formatting(&clipboard.replace('\r', ""))
 }
 
+/// No arboard on Android or iOS: a system clipboard that is never reachable, so copied text
+/// stays in the game (`SystemClipboard::text` falls back to it).
+// ponytail: no system clipboard on mobile; add the platform's (Android ClipboardManager over JNI,
+// UIPasteboard) when pasting from other apps matters.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod arboard {
+    pub struct Clipboard;
+    pub enum Error {
+        ContentNotAvailable,
+        ClipboardNotSupported,
+    }
+    impl Clipboard {
+        pub fn new() -> Result<Self, Error> {
+            Err(Error::ClipboardNotSupported)
+        }
+        pub fn get_text(&mut self) -> Result<String, Error> {
+            Err(Error::ContentNotAvailable)
+        }
+        pub fn set_text(&mut self, _text: String) -> Result<(), Error> {
+            Err(Error::ContentNotAvailable)
+        }
+    }
+}
+
 /// A clipboard: the system's, or an in-memory one in tests.
 pub trait Clipboard {
     /// `KeyboardHandler.getClipboard`: empty when there is no text.
