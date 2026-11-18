@@ -189,11 +189,45 @@ impl TouchControls {
         self.editor = Some(editor);
     }
 
+    fn overlapping_dpad_actions(&self) -> bool {
+        if self.settings.mode != Mode::Dpad {
+            return false;
+        }
+        let actions = [
+            Control::Jump,
+            Control::Sneak,
+            Control::Attack,
+            Control::Use,
+            Control::Shield,
+            Control::Inventory,
+            Control::Offhand,
+            Control::Sprint,
+        ];
+        actions.iter().enumerate().any(|(i, &a)| {
+            if !self.visible(a) {
+                return false;
+            }
+            let [x, y, w, h] = self.placement(a).rect(self.aspect());
+            actions[i + 1..]
+                .iter()
+                .copied()
+                .filter(|&b| self.visible(b))
+                .any(|b| {
+                    let [bx, by, bw, bh] = self.placement(b).rect(self.aspect());
+                    x < bx + bw && bx < x + w && y < by + bh && by < y + h
+                })
+        })
+    }
+
     fn editor_action(&mut self, editor: &mut Editor, action: Action, path: &Path) -> bool {
         editor.error = None;
         match action {
             Action::Save => {
                 self.settings.sanitize();
+                if self.overlapping_dpad_actions() {
+                    editor.error = Some("Move overlapping buttons apart.".into());
+                    return false;
+                }
                 match self.settings.save(path) {
                     Ok(()) => {
                         self.clear();
@@ -389,6 +423,56 @@ mod tests {
         assert!(!t.editing());
         assert_eq!(Settings::load(&path), t.settings);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn dpad_load_repairs_factory_actions_and_save_rejects_overlap() {
+        let path = std::env::temp_dir().join(format!(
+            "meridian-touch-dpad-spacing-{}.json",
+            std::process::id()
+        ));
+        let mut t = TouchControls::default();
+        t.viewport(2320, 1080);
+        t.settings.mode = Mode::Dpad;
+        t.settings.split_controls = true;
+        let row = &mut t.settings.layouts[Mode::Dpad.index()];
+        row[Control::Attack as usize] = layout::Placement::new(0.80, 0.64, 0.16);
+        row[Control::Use as usize] = layout::Placement::new(0.92, 0.52, 0.16);
+        let moved_jump = layout::Placement::new(0.8384, 0.7549, 0.155);
+        row[Control::Jump as usize] = moved_jump;
+        assert!(t.overlapping_dpad_actions());
+        t.settings.save(&path).unwrap();
+
+        t.settings = Settings::load(&path);
+        assert_eq!(t.settings.placement(Control::Jump), moved_jump);
+        assert!(!t.overlapping_dpad_actions());
+        t.open_editor();
+        tap(&mut t, &path, [0.5, 0.64]);
+        t.settings.layouts[Mode::Dpad.index()][Control::Jump as usize] =
+            t.settings.placement(Control::Attack);
+        let before = std::fs::read(&path).unwrap();
+        tap(&mut t, &path, [0.91, 0.08]);
+        assert!(t.editing());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+
+        tap(&mut t, &path, [0.24, 0.08]);
+        tap(&mut t, &path, [0.91, 0.08]);
+        assert!(!t.editing());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn classic_dpad_actions_are_separate_on_phones_and_square_screens() {
+        for (w, h) in [(2400, 1080), (1920, 1080), (1000, 1000), (1080, 2400)] {
+            let mut t = TouchControls::default();
+            t.viewport(w, h);
+            t.settings.mode = Mode::Dpad;
+            t.settings.split_controls = true;
+            for mirror in [false, true] {
+                t.settings.left_handed = mirror;
+                assert!(!t.overlapping_dpad_actions(), "{w}x{h}, mirrored {mirror}");
+            }
+        }
     }
 
     #[test]
