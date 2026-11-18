@@ -46,7 +46,10 @@ impl Game<'_> {
 
     /// Allow the input method only while a text box has focus.
     pub(super) fn sync_ime(&mut self) {
-        let want = self.text_field_focused();
+        // On phones focus alone doesn't open the keyboard (screens focus their search or name
+        // field as they open): a tap does (`window_handler`'s touch). Losing focus still closes it.
+        let want = self.text_field_focused()
+            && (self.ime_allowed || !cfg!(any(target_os = "android", target_os = "ios")));
         if want != self.ime_allowed
             && let Some(window) = &self.window
         {

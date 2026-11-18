@@ -547,9 +547,10 @@ impl ApplicationHandler for Game<'_> {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 impl Game<'_> {
     /// A finger (Meridian): the touch controls while playing; anywhere else (menus,
-    /// inventories) the pointer, so a tap clicks where it lands.
+    /// inventories) the pointer, so a tap clicks where it lands, and a tap on the screen it
+    /// started on opens the keyboard when a text field has focus.
     // ponytail: one finger at a time outside play; in play, attack and use act on the crosshair
-    // (the controls' tap-at-the-finger `aim` isn't wired) and their chat/F3 requests are ignored.
+    // (the controls' tap-at-the-finger `aim` isn't wired yet).
     fn touch(&mut self, event_loop: &ActiveEventLoop, id: WindowId, touch: winit::event::Touch) {
         use winit::event::TouchPhase;
         let [w, h] = self
@@ -579,12 +580,39 @@ impl Game<'_> {
                 touch.location.y as f32 / h as f32,
             ];
             let drag = controls.update(touch.id, point, started, ended);
-            if drag != [0.0; 2] {
-                // Degrees, as the touch settings scale them; the game turns in 0.15° units.
-                let [yaw, pitch] =
-                    horizon_client_render::touch::camera_delta(drag, w, h, &controls.settings);
+            // Degrees, as the touch settings scale them; the game turns in 0.15° units.
+            let turn = (drag != [0.0; 2])
+                .then(|| horizon_client_render::touch::camera_delta(drag, w, h, &controls.settings));
+            // The controls' key presses (the offhand swap) and the top bar's Chat, F3 and F5 act
+            // as those key bindings; its Touch button opens the options.
+            let chat = controls.chat_requested;
+            let mut actions = controls.key_events();
+            for (requested, action) in [
+                (&mut controls.chat_requested, "key.chat"),
+                (&mut controls.debug_requested, "key.debug.overlay"),
+                (&mut controls.perspective_requested, "key.togglePerspective"),
+            ] {
+                if std::mem::take(requested) {
+                    actions.extend([(action.to_owned(), true), (action.to_owned(), false)]);
+                }
+            }
+            let settings = std::mem::take(&mut controls.settings_requested);
+            if let Some([yaw, pitch]) = turn {
                 self.look_turn(f64::from(yaw / 0.15), f64::from(pitch / 0.15));
                 self.last_input = Instant::now();
+            }
+            for (action, down) in actions {
+                let action = action.strip_prefix("action:").unwrap_or(&action);
+                if let Err(error) = self.pad_action(action, down) {
+                    log::warn!("Horizon: touch control {action}: {error}");
+                }
+            }
+            if settings {
+                self.open_options(false);
+            }
+            // The Chat button asks to type: the keyboard comes with it.
+            if chat {
+                self.show_keyboard();
             }
             // A finger that pressed a menu button which closed into play lifts here.
             if ended {
@@ -601,6 +629,7 @@ impl Game<'_> {
             },
         );
         if started {
+            self.touch_press_focused = self.text_field_focused();
             self.window_event(
                 event_loop,
                 id,
@@ -612,6 +641,29 @@ impl Game<'_> {
             );
         } else if ended {
             release(self, event_loop);
+            // A finger leaves no pointer behind: nothing stays hovered (or shows its tooltip).
+            self.window_event(
+                event_loop,
+                id,
+                WindowEvent::CursorMoved {
+                    device_id,
+                    position: winit::dpi::PhysicalPosition::new(-1.0e6, -1.0e6),
+                },
+            );
+            if std::mem::take(&mut self.touch_press_focused) && self.text_field_focused() {
+                self.show_keyboard();
+            }
+        }
+    }
+
+    /// Opens the phone's keyboard for the focused text field (Back hides it again).
+    fn show_keyboard(&mut self) {
+        if self.text_field_focused()
+            && let Some(window) = &self.window
+        {
+            window.set_ime_allowed(true);
+            self.ime_allowed = true;
+            self.ime_area = None;
         }
     }
 }

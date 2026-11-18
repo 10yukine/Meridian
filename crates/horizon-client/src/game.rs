@@ -1115,6 +1115,10 @@ struct Game<'a> {
     ime_allowed: bool,
     /// The candidate window's area last given to the window, in pixels.
     ime_area: Option<[i32; 4]>,
+    /// Meridian: a text field had focus as the finger went down, so a tap on it opens the
+    /// keyboard (`window_handler`'s touch); a tap that opens a page with a focused field doesn't.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    touch_press_focused: bool,
     /// When the window lost focus, while it is still without
     /// (`Minecraft.lastActiveTime`: pausing waits 500 ms).
     focus_lost: Option<Instant>,
@@ -10716,6 +10720,8 @@ impl<'a> Game<'a> {
             focus_after_run: None,
             ime_allowed: false,
             ime_area: None,
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            touch_press_focused: false,
             focus_lost: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),

@@ -26,6 +26,13 @@ pub(in crate::game) struct Shown {
 /// A drawn quad covering this much of the view is the screen's dimming, not something to avoid.
 const GUIDE_BACKDROP_SHARE: f32 = 0.9;
 
+/// Meridian: a phone with no gamepad connected plays through its touch controls, which have no
+/// buttons to name: no controller guide then.
+fn touch_only() -> bool {
+    cfg!(any(target_os = "android", target_os = "ios"))
+        && horizon_client_render::android_runtime::active_gamepad_id().is_none()
+}
+
 /// `ItemStack.get(EQUIPPABLE)` for the guide: the stack's slot and
 /// `swappable`, else the item's own.
 fn guide_equippable(
@@ -59,6 +66,7 @@ impl Game<'_> {
         settings.enabled
             && settings.guide_detail != GuideDetail::Off
             && self.pad.in_use
+            && !touch_only()
             && !self.pad.keyboard_took_over
             // Hidden once the radial menu shows, not on the opener's press: a quick tap draws
             // nothing, so the guide doesn't blink.
@@ -143,6 +151,7 @@ impl Game<'_> {
         if !settings.enabled
             || settings.guide_detail == GuideDetail::Off
             || !self.pad.in_use
+            || touch_only()
             || self.pad.keyboard_took_over
             || self.prompt_open()
             || self.title.is_some()
