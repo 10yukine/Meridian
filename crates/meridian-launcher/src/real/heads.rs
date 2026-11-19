@@ -91,7 +91,22 @@ pub(super) fn url(entry: &Remembered) -> Option<String> {
     }
 }
 
+/// An offline player's face: the default skin the game gives that name, read from the prepared
+/// resources under `root`. Missing until Setup is Ready, so it retries like a failed download.
+pub(super) fn offline_skin(root: &Path, player: &Account) -> Option<String> {
+    let Account::Offline { name } = player else {
+        return None;
+    };
+    let skin = horizon_protocol::crypto::default_skin(horizon_protocol::crypto::offline_uuid(name));
+    let file =
+        crate::launch::resources_dir(root).join(format!("assets/minecraft/textures/{skin}.png"));
+    Some(format!("file:{}", file.display()))
+}
+
 fn load(url: &str) -> Option<Head> {
+    if let Some(path) = url.strip_prefix("file:") {
+        return face(&fs::read(path).ok()?);
+    }
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
         .build()
@@ -191,5 +206,49 @@ mod tests {
             writer.write_image_data(&data).unwrap();
         }
         assert_eq!(&face(&bytes).unwrap()[..4], &[50, 75, 200, 255]);
+    }
+
+    /// Values from Java 21: `UUID.nameUUIDFromBytes("OfflinePlayer:" + name)` and
+    /// `Math.floorMod(uuid.hashCode(), 18)` into vanilla's default skin list.
+    #[test]
+    fn an_offline_player_gets_vanillas_default_skin_face() {
+        use horizon_protocol::crypto::{default_skin, offline_uuid, uuid_string};
+        for (name, uuid, skin) in [
+            (
+                "Steve",
+                "5627dd98-e6be-3c21-b8a8-e92344183641",
+                "entity/player/wide/efe",
+            ),
+            (
+                "PlayerTester",
+                "da04adc8-08d2-35d0-afb4-ec18f48f11e9",
+                "entity/player/wide/zuri",
+            ),
+            (
+                "Alex",
+                "36532b5e-c442-3dbb-a24c-c7e55d0f979a",
+                "entity/player/slim/makena",
+            ),
+        ] {
+            assert_eq!(uuid_string(offline_uuid(name)), uuid, "{name}");
+            assert_eq!(default_skin(offline_uuid(name)), skin, "{name}");
+        }
+        let root = Path::new("root");
+        let steve = Account::Offline {
+            name: "Steve".into(),
+        };
+        let source = offline_skin(root, &steve).unwrap();
+        assert!(source.starts_with("file:"));
+        assert!(
+            source
+                .replace('\\', "/")
+                .ends_with("textures/entity/player/wide/efe.png")
+        );
+        let microsoft = Account::Microsoft {
+            name: "Steve".into(),
+        };
+        assert_eq!(offline_skin(root, &microsoft), None);
+        // Before Setup the file is missing: no face yet (retried later), never a panic.
+        assert_eq!(load(&source), None);
     }
 }

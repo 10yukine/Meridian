@@ -340,7 +340,8 @@ impl Backend for Real {
             .entries
             .iter()
             .find(|item| item.account() == *player)?;
-        self.heads.get(player, heads::url(entry)?)
+        let source = heads::url(entry).or_else(|| heads::offline_skin(&self.root, player))?;
+        self.heads.get(player, source)
     }
 
     fn sign_out(&mut self) {
