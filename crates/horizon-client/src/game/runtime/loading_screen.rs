@@ -95,10 +95,15 @@ impl Loading {
     pub(super) fn ready_for_handoff(&self) -> bool {
         // Not while Android has the app in the background: the window is there but has nothing
         // to draw into, and the game's renderer needs a surface (`resumed` brings one back).
-        let backgrounded = self.window.as_ref().is_some_and(|window| {
-            use winit::raw_window_handle::HasWindowHandle;
-            window.window_handle().is_err()
-        });
+        // Nor before Android gave it a window at all (started with the phone locked): `resumed`
+        // makes it once the app is on screen.
+        let backgrounded = match &self.window {
+            Some(window) => {
+                use winit::raw_window_handle::HasWindowHandle;
+                window.window_handle().is_err()
+            }
+            None => cfg!(target_os = "android"),
+        };
         !backgrounded
             && (self.title_drawn
                 || self.menu.pending.is_some()
