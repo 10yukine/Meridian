@@ -141,6 +141,16 @@ impl Game<'_> {
         if !ours {
             return;
         }
+        // Meridian: Android's Back is Escape (the pause menu, closing a screen, leaving the
+        // controls editor), as on Starling. The phone's keyboard takes it first while it's up.
+        #[cfg(target_os = "android")]
+        if let WindowEvent::KeyboardInput { event, .. } = &mut event
+            && event.logical_key
+                == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack)
+        {
+            event.physical_key = PhysicalKey::Code(KeyCode::Escape);
+            event.logical_key = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape);
+        }
         #[cfg(any(target_os = "android", target_os = "ios"))]
         if self.pad.touch.editing() && is_input(&event) {
             if let WindowEvent::KeyboardInput { event, .. } = &event
