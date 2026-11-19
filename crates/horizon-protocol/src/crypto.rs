@@ -165,6 +165,32 @@ pub fn offline_uuid(name: &str) -> u128 {
     h[8] = (h[8] & 0x3f) | 0x80;
     u128::from_be_bytes(h)
 }
+/// `DefaultPlayerSkin.get(UUID)`: the default skin by `UUID.hashCode`.
+pub fn default_skin(uuid: u128) -> &'static str {
+    const SKINS: [&str; 18] = [
+        "entity/player/slim/alex",
+        "entity/player/slim/ari",
+        "entity/player/slim/efe",
+        "entity/player/slim/kai",
+        "entity/player/slim/makena",
+        "entity/player/slim/noor",
+        "entity/player/slim/steve",
+        "entity/player/slim/sunny",
+        "entity/player/slim/zuri",
+        "entity/player/wide/alex",
+        "entity/player/wide/ari",
+        "entity/player/wide/efe",
+        "entity/player/wide/kai",
+        "entity/player/wide/makena",
+        "entity/player/wide/noor",
+        "entity/player/wide/steve",
+        "entity/player/wide/sunny",
+        "entity/player/wide/zuri",
+    ];
+    let hilo = ((uuid >> 64) as u64) ^ (uuid as u64);
+    let hash = ((hilo >> 32) as i32) ^ (hilo as i32);
+    SKINS[hash.rem_euclid(SKINS.len() as i32) as usize]
+}
 /// The canonical 8-4-4-4-12 form.
 pub fn uuid_string(u: u128) -> String {
     let h = format!("{u:032x}");
