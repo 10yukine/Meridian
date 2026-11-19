@@ -486,7 +486,14 @@ fn assert_hits_fit_without_overlap(launcher: &MobileLauncher, size: [u32; 2], la
 
 #[test]
 fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
-    for size in [[1040, 700], [800, 360], [2400, 560]] {
+    for size in [
+        [1040, 700],
+        [2400, 1080],
+        [914, 411],
+        [800, 360],
+        [2400, 560],
+        [1600, 450],
+    ] {
         let mut l = MobileLauncher::new(Box::new(StubBackend::default()));
         assert_hits_fit_without_overlap(&l, size, "welcome");
 
@@ -591,4 +598,382 @@ fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
         click_button(&mut installing, size, ButtonId::OpenSettings);
         assert_hits_fit_without_overlap(&installing, size, "settings-during-install");
     }
+}
+
+fn assert_text_entry_visible(
+    launcher: &mut MobileLauncher,
+    size: [u32; 2],
+    label: &str,
+    required: &[ButtonId],
+) {
+    assert!(
+        launcher.wants_text(),
+        "{label}: expected wants_text() == true"
+    );
+    assert_hits_fit_without_overlap(launcher, size, label);
+    with_ui(size, (0.0, 0.0), |ui| {
+        let hits = launcher.layout(&mut Canvas::Hit(ui));
+        for &id in required {
+            let hit = hits
+                .iter()
+                .find(|h| h.id == id)
+                .unwrap_or_else(|| panic!("{label} @ {size:?}: missing required control {id:?}"));
+            assert!(
+                hit.w >= 48.0 && hit.h >= 30.0,
+                "{label} @ {size:?}: control {id:?} too small ({}x{})",
+                hit.w,
+                hit.h
+            );
+        }
+    });
+}
+
+#[test]
+fn text_entry_screens_fit_above_phone_keyboard() {
+    // Desktop/legacy pixel keyboard sizes + Android native-density A32 keyboard-up sizes (~200-250dp).
+    for size in [
+        [2400, 560],
+        [1600, 450],
+        [1280, 320],
+        [914, 250],
+        [914, 213],
+        [914, 200],
+    ] {
+        // 1. Play Offline name (empty with validation hint + filled valid name)
+        let mut auth = MobileLauncher::new(Box::new(StubBackend::default()));
+        click_button(&mut auth, size, ButtonId::OpenOfflineEntry);
+        assert_text_entry_visible(
+            &mut auth,
+            size,
+            "kb-offline-empty",
+            &[
+                ButtonId::FocusOfflineName,
+                ButtonId::ConfirmOffline,
+                ButtonId::CancelOffline,
+            ],
+        );
+        auth.typed("Player_One");
+        assert_text_entry_visible(
+            &mut auth,
+            size,
+            "kb-offline-filled",
+            &[
+                ButtonId::FocusOfflineName,
+                ButtonId::ConfirmOffline,
+                ButtonId::CancelOffline,
+            ],
+        );
+
+        // 2. Ely.by sign-in (username, password, 2FA focus states + error message)
+        click_button(&mut auth, size, ButtonId::CancelOffline);
+        click_button(&mut auth, size, ButtonId::ToggleMoreAuth);
+        click_button(&mut auth, size, ButtonId::OpenElyEntry);
+        for (tag, focus) in [
+            ("kb-ely-user", ButtonId::FocusElyUsername),
+            ("kb-ely-pass", ButtonId::FocusElyPassword),
+            ("kb-ely-otp", ButtonId::FocusElyOtp),
+        ] {
+            click_button(&mut auth, size, focus);
+            assert_text_entry_visible(
+                &mut auth,
+                size,
+                tag,
+                &[
+                    ButtonId::FocusElyUsername,
+                    ButtonId::FocusElyPassword,
+                    ButtonId::FocusElyOtp,
+                    ButtonId::ConfirmEly,
+                    ButtonId::CancelEly,
+                ],
+            );
+        }
+        auth.ely_error = Some("Invalid username or password.".into());
+        assert_text_entry_visible(
+            &mut auth,
+            size,
+            "kb-ely-error",
+            &[
+                ButtonId::FocusElyUsername,
+                ButtonId::FocusElyPassword,
+                ButtonId::FocusElyOtp,
+                ButtonId::ConfirmEly,
+                ButtonId::CancelEly,
+            ],
+        );
+
+        // 3. New Profile (clean + validation error + extra mods list) & host note()
+        let mut signed_in = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            profiles: vec![
+                Profile {
+                    id: VANILLA.into(),
+                    name: "Vanilla".into(),
+                    description: "Base".into(),
+                    mods: 0,
+                    size: 672_000_000,
+                    worlds: 1,
+                    state: ProfileState::Installed,
+                },
+                Profile {
+                    id: "my-pack".into(),
+                    name: "My Pack".into(),
+                    description: "Custom".into(),
+                    mods: 1,
+                    size: 3_000_000,
+                    worlds: 1,
+                    state: ProfileState::Installed,
+                },
+            ],
+            selected_profile: "my-pack".into(),
+            ..StubBackend::default()
+        }));
+        signed_in.note("The game closed unexpectedly last time.");
+        assert_eq!(
+            signed_in.status_note.as_deref(),
+            Some("The game closed unexpectedly last time.")
+        );
+
+        click_button(&mut signed_in, size, ButtonId::OpenNewProfile);
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-new-profile",
+            &[
+                ButtonId::FocusNewProfileName,
+                ButtonId::CreateProfile,
+                ButtonId::CancelNewProfile,
+            ],
+        );
+        signed_in.new_profile_error = Some("Enter 1 to 32 characters.".into());
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-new-profile-error",
+            &[
+                ButtonId::FocusNewProfileName,
+                ButtonId::CreateProfile,
+                ButtonId::CancelNewProfile,
+            ],
+        );
+
+        // 4. Rename Profile modal (clean + error)
+        click_button(&mut signed_in, size, ButtonId::CancelNewProfile);
+        click_button(&mut signed_in, size, ButtonId::OpenRenameSelected);
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-rename",
+            &[
+                ButtonId::FocusRenameInput,
+                ButtonId::SaveRenameProfile,
+                ButtonId::CancelRenameProfile,
+            ],
+        );
+        if let Some((_, _, ref mut err)) = signed_in.rename_modal {
+            *err = Some("A profile with that name already exists.".into());
+        }
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-rename-error",
+            &[
+                ButtonId::FocusRenameInput,
+                ButtonId::SaveRenameProfile,
+                ButtonId::CancelRenameProfile,
+            ],
+        );
+
+        // 5. Mod Manager search input focused
+        click_button(&mut signed_in, size, ButtonId::CancelRenameProfile);
+        click_button(&mut signed_in, size, ButtonId::OpenMods);
+        click_button(&mut signed_in, size, ButtonId::FocusModSearch);
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-mod-search",
+            &[ButtonId::FocusModSearch, ButtonId::SubmitModSearch],
+        );
+    }
+}
+
+#[test]
+fn rail_places_settings_right_after_skins() {
+    let launcher = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+
+    for size in [[1040, 700], [914, 411]] {
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = launcher.layout(&mut Canvas::Hit(ui));
+            let mods = hits.iter().find(|h| h.id == ButtonId::OpenMods).unwrap();
+            let skins = hits.iter().find(|h| h.id == ButtonId::OpenSkins).unwrap();
+            let settings = hits
+                .iter()
+                .find(|h| h.id == ButtonId::OpenSettings)
+                .unwrap();
+            // Nav stack sits under logo; Settings follows Skins with the exact same step as Mods -> Skins.
+            let step_mods_skins = skins.y - mods.y;
+            let step_skins_settings = settings.y - skins.y;
+            assert!(
+                step_mods_skins > 0.0 && (step_skins_settings - step_mods_skins).abs() < 0.5,
+                "size {size:?}: expected Settings right after Skins (mods->skins={step_mods_skins}, skins->settings={step_skins_settings})"
+            );
+        });
+    }
+}
+
+#[test]
+fn profile_dropdown_matches_bar_width_opens_upward_and_scrolls_long_lists() {
+    let mut profiles = vec![Profile {
+        id: VANILLA.into(),
+        name: "Vanilla".into(),
+        description: "Base".into(),
+        mods: 0,
+        size: 672_000_000,
+        worlds: 1,
+        state: ProfileState::Installed,
+    }];
+    for i in 1..=11 {
+        profiles.push(Profile {
+            id: format!("pack-{i}"),
+            name: format!("Modpack {i}"),
+            description: "Custom pack".into(),
+            mods: i,
+            size: (i as u64) * 12_000_000,
+            worlds: i % 3,
+            state: ProfileState::Installed,
+        });
+    }
+
+    for size in [[1040, 700], [914, 411]] {
+        let mut launcher = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            profiles: profiles.clone(),
+            selected_profile: VANILLA.into(),
+            ..StubBackend::default()
+        }));
+
+        click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+        assert!(launcher.profile_popup_open);
+        assert_hits_fit_without_overlap(&launcher, size, "profile-dropdown-long");
+
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = launcher.layout(&mut Canvas::Hit(ui));
+            let bar = hits
+                .iter()
+                .find(|h| h.id == ButtonId::ToggleProfilePicker)
+                .unwrap();
+            let first_row = hits
+                .iter()
+                .find(|h| h.id == ButtonId::SelectProfile(0))
+                .unwrap();
+            let scroll_down = hits
+                .iter()
+                .find(|h| h.id == ButtonId::ProfileScrollDown)
+                .expect("expected scrollbar down region when 12 profiles overflow dropdown");
+
+            // Dropdown opens upward strictly above the bottom bar and fits inside the bar's width.
+            assert!(
+                first_row.y + first_row.h < bar.y,
+                "size {size:?}: dropdown should open upward above the profile bar"
+            );
+            assert!(
+                first_row.x >= bar.x && scroll_down.x + scroll_down.w <= bar.x + bar.w,
+                "size {size:?}: dropdown rows + scrollbar must match profile bar horizontal bounds"
+            );
+        });
+
+        // Scroll down via scrollbar tap + scroll wheel until the final profile is visible and selectable.
+        click_button(&mut launcher, size, ButtonId::ProfileScrollDown);
+        assert_eq!(launcher.profile_scroll, 1);
+        for _ in 0..12 {
+            launcher.scroll(-1.0);
+        }
+        assert_hits_fit_without_overlap(&launcher, size, "profile-dropdown-scrolled-bottom");
+        click_button(&mut launcher, size, ButtonId::SelectProfile(11));
+        assert!(!launcher.profile_popup_open);
+        assert_eq!(launcher.backend().selected_profile(), "pack-11");
+    }
+}
+
+#[test]
+fn launcher_font_choice_persists_in_horizon_txt_across_restarts() {
+    let unique = format!(
+        "meridian-font-pref-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let dir = std::env::temp_dir().join(unique);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("horizon.txt"),
+        "friendsRelay:wss://relay.example\n",
+    )
+    .unwrap();
+
+    let size = [914, 411];
+    crate::ui_theme::set_pixel_font(false);
+
+    let make_launcher = |dir: &std::path::Path| {
+        MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            ..StubBackend::default()
+        }))
+        .with_prefs_dir(dir.to_path_buf())
+    };
+
+    let mut first = make_launcher(&dir);
+    assert!(!crate::ui_theme::pixel_font());
+    click_button(&mut first, size, ButtonId::OpenSettings);
+    click_button(&mut first, size, ButtonId::ToggleLauncherFont);
+    assert!(crate::ui_theme::pixel_font());
+    assert_eq!(
+        crate::ui_theme::preference(&dir, "launcherFont").as_deref(),
+        Some("pixel")
+    );
+    assert_eq!(
+        crate::ui_theme::preference(&dir, "friendsRelay").as_deref(),
+        Some("wss://relay.example")
+    );
+
+    // Simulate a fresh launcher process after switching back from the game.
+    crate::ui_theme::set_pixel_font(false);
+    let mut restarted = make_launcher(&dir);
+    assert!(crate::ui_theme::pixel_font());
+
+    // Toggle back to modern and verify that persists across the next restart too.
+    click_button(&mut restarted, size, ButtonId::OpenSettings);
+    click_button(&mut restarted, size, ButtonId::ToggleLauncherFont);
+    assert!(!crate::ui_theme::pixel_font());
+    assert_eq!(
+        crate::ui_theme::preference(&dir, "launcherFont").as_deref(),
+        Some("modern")
+    );
+
+    crate::ui_theme::set_pixel_font(true);
+    let _third = make_launcher(&dir);
+    assert!(!crate::ui_theme::pixel_font());
+
+    crate::ui_theme::set_pixel_font(false);
+    let _ = std::fs::remove_dir_all(&dir);
 }

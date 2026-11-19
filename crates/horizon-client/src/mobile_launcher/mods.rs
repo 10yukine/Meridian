@@ -22,13 +22,26 @@ impl MobileLauncher {
         col_success: u32,
         col_danger: u32,
     ) {
+        let ultra_v = avail_h < 150.0;
         let compact_v = avail_h < 300.0;
         draw_plate(ui, x, y, w, avail_h, palette::border());
 
         let ix = x + 16.0;
         let iw = w - 32.0;
-        let mut cy = y + if compact_v { 8.0 } else { 14.0 };
-        let top_btn_h = if compact_v { 32.0 } else { 36.0 };
+        let mut cy = y + if ultra_v {
+            6.0
+        } else if compact_v {
+            8.0
+        } else {
+            14.0
+        };
+        let top_btn_h = if ultra_v {
+            26.0
+        } else if compact_v {
+            32.0
+        } else {
+            36.0
+        };
 
         let new_w = if compact_v { 116.0 } else { 128.0 };
         draw_button(
@@ -71,14 +84,27 @@ impl MobileLauncher {
             );
             chip_x += cw + 6.0;
         }
-        cy += top_btn_h + if compact_v { 6.0 } else { 12.0 };
+        cy += top_btn_h
+            + if ultra_v {
+                4.0
+            } else if compact_v {
+                6.0
+            } else {
+                12.0
+            };
         if let Some(p) = ui.paint() {
             p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
         }
-        cy += if compact_v { 8.0 } else { 14.0 };
+        cy += if ultra_v {
+            4.0
+        } else if compact_v {
+            8.0
+        } else {
+            14.0
+        };
 
         if pid == VANILLA {
-            let rem_h = (y + avail_h - cy).max(150.0);
+            let rem_h = (y + avail_h - cy).max(0.0);
             let center_x = x + w * 0.5;
             let badge_sz = if compact_v { 44.0 } else { 58.0 };
             let block_h = if compact_v { 144.0 } else { 194.0 };
@@ -196,7 +222,7 @@ impl MobileLauncher {
 
         let pane_gap = 12.0;
         let pane_w = ((iw - pane_gap) * 0.5).round();
-        let pane_h = (y + avail_h - 12.0 - cy).max(140.0);
+        let pane_h = (y + avail_h - 12.0 - cy).max(0.0);
         let right_x = ix + pane_w + pane_gap;
 
         self.draw_profile_mods_pane(ui, hits, ix, cy, pane_w, pane_h, &pid, compact_v);
@@ -297,18 +323,32 @@ impl MobileLauncher {
             return;
         }
 
-        let row_h = if compact_v { 48.0 } else { 60.0 };
-        let row_gap = 6.0;
-        let avail = (y + h - 38.0 - py).max(row_h);
+        let row_h: f32 = if compact_v { 48.0 } else { 60.0 };
+        let row_gap: f32 = 6.0;
+        let bottom_limit = y + h - 8.0;
+        let total_space = (bottom_limit - py).max(0.0);
+        if total_space < row_h {
+            return;
+        }
+        let fit_all = ((total_space + row_gap) / (row_h + row_gap))
+            .floor()
+            .max(1.0) as usize;
+        let needs_pager = mods.len() > fit_all && total_space >= row_h + 34.0;
+        let pager_h: f32 = if needs_pager { 34.0 } else { 0.0 };
+        let avail = (total_space - pager_h).max(row_h);
         let per_page = ((avail + row_gap) / (row_h + row_gap)).floor().max(1.0) as usize;
         let total_pages = mods.len().max(1).div_ceil(per_page);
         let page = self.mods_list_page.min(total_pages - 1);
         let start = page * per_page;
         let end = (start + per_page).min(mods.len());
+        let rows_limit = bottom_limit - pager_h;
 
         let rem_w = 78.0;
         let tog_w = 50.0;
         for (i, pm) in mods.iter().enumerate().skip(start).take(end - start) {
+            if py + row_h > rows_limit + 0.5 {
+                break;
+            }
             if let Some(p) = ui.paint() {
                 p.rounded(px, py, pw, row_h, 8.0, palette::card());
                 p.border(px, py, pw, row_h, 8.0, palette::border());
@@ -366,7 +406,7 @@ impl MobileLauncher {
             py += row_h + row_gap;
         }
 
-        if total_pages > 1 {
+        if needs_pager && total_pages > 1 {
             let fy = y + h - 34.0;
             if page > 0 {
                 draw_button(
@@ -417,23 +457,32 @@ impl MobileLauncher {
         }
         let px = x + 10.0;
         let pw = w - 20.0;
-        let mut py = y + 8.0;
+        let ultra_pane = h < 84.0;
+        let mut py = y + if ultra_pane { 6.0 } else { 8.0 };
 
-        if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::SemiBold,
-                15.0,
-                22.0,
-                px,
-                py,
-                palette::text(),
-                "Horizon Registry",
-            );
+        if !ultra_pane {
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::SemiBold,
+                    15.0,
+                    22.0,
+                    px,
+                    py,
+                    palette::text(),
+                    "Horizon Registry",
+                );
+            }
+            py += 22.0;
         }
-        py += 22.0;
 
         let search_btn_w = 72.0;
-        let search_h = if compact_v { 30.0 } else { 36.0 };
+        let search_h = if ultra_pane {
+            32.0_f32.min((h - 12.0).max(30.0))
+        } else if compact_v {
+            30.0
+        } else {
+            36.0
+        };
         draw_input_box(
             ui,
             hits,
@@ -514,16 +563,30 @@ impl MobileLauncher {
                     }
                     return;
                 }
-                let row_h = if compact_v { 42.0 } else { 56.0 };
-                let row_gap = 6.0;
-                let avail = (y + h - 36.0 - py).max(row_h);
+                let row_h: f32 = if compact_v { 42.0 } else { 56.0 };
+                let row_gap: f32 = 6.0;
+                let bottom_limit = y + h - 8.0;
+                let total_space = (bottom_limit - py).max(0.0);
+                if total_space < row_h {
+                    return;
+                }
+                let fit_all = ((total_space + row_gap) / (row_h + row_gap))
+                    .floor()
+                    .max(1.0) as usize;
+                let needs_pager = results.len() > fit_all && total_space >= row_h + 34.0;
+                let pager_h: f32 = if needs_pager { 34.0 } else { 0.0 };
+                let avail = (total_space - pager_h).max(row_h);
                 let per_page = ((avail + row_gap) / (row_h + row_gap)).floor().max(1.0) as usize;
                 let total_pages = results.len().max(1).div_ceil(per_page);
                 let page = self.mod_registry_page.min(total_pages - 1);
                 let start = page * per_page;
                 let end = (start + per_page).min(results.len());
+                let rows_limit = bottom_limit - pager_h;
 
                 for (i, m) in results.iter().enumerate().skip(start).take(end - start) {
+                    if py + row_h > rows_limit + 0.5 {
+                        break;
+                    }
                     let already = installed_ids.contains(&m.id);
                     if let Some(p) = ui.paint() {
                         p.rounded(px, py, pw, row_h, 8.0, palette::card());
@@ -579,7 +642,7 @@ impl MobileLauncher {
                     py += row_h + row_gap;
                 }
 
-                if total_pages > 1 {
+                if needs_pager && total_pages > 1 {
                     let fy = y + h - 34.0;
                     if page > 0 {
                         draw_button(

@@ -39,9 +39,9 @@ impl MobileLauncher {
 
         let card_gap = if compact_v { 10.0 } else { 14.0 };
         let hero_h = if compact_v {
-            (avail_h * 0.48).round().clamp(108.0, 134.0)
+            (avail_h * 0.47).round().clamp(108.0, 134.0).min(avail_h)
         } else {
-            (avail_h * 0.43).round().clamp(186.0, 236.0)
+            (avail_h * 0.43).round().clamp(186.0, 236.0).min(avail_h)
         };
 
         // 1. Top Hero Card: [profile] — Last Selected Profile
@@ -271,7 +271,10 @@ impl MobileLauncher {
 
         // 2. Bottom Split Row: [news] (left) + [upd] (right)
         let row_y = y + hero_h + card_gap;
-        let row_h = (y + avail_h - row_y).max(96.0);
+        let row_h = (y + avail_h - row_y).max(0.0);
+        if row_h < 64.0 {
+            return;
+        }
         let left_w = ((w - card_gap) * 0.5).floor();
         let right_x = x + left_w + card_gap;
         let right_w = w - left_w - card_gap;
@@ -352,11 +355,9 @@ impl MobileLauncher {
             &fit_title,
         );
 
-        let mut cy = y + py + if compact_v { 26.0 } else { 32.0 };
-        if !compact_v {
-            p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
-            cy += 14.0;
-        }
+        let mut cy = y + py + if compact_v { 24.0 } else { 32.0 };
+        p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
+        cy += if compact_v { 8.0 } else { 14.0 };
 
         let headline = truncate_to_fit(
             p,
@@ -374,11 +375,21 @@ impl MobileLauncher {
             palette::body(),
             &headline,
         );
-        cy += if compact_v { 20.0 } else { 24.0 };
+        cy += if compact_v { 19.0 } else { 24.0 };
 
-        let blurb = "Release notes, mobile launcher changelog, and GitHub highlights will appear here automatically once the feed is enabled.";
-        let max_lines = if compact_v { 2 } else { 4 };
+        let foot_h = if compact_v { 24.0 } else { 30.0 };
+        let foot_pad = if compact_v { 10.0 } else { 14.0 };
+        let foot_y = y + h - foot_h - foot_pad;
+        let show_footer = foot_y >= cy + 20.0;
+        let text_bottom = if show_footer {
+            foot_y - 6.0
+        } else {
+            y + h - foot_pad
+        };
+
+        let blurb = "Release notes, launcher updates, and GitHub highlights will show here once the feed is enabled.";
         let line_h = if compact_v { 16.0 } else { 19.0 };
+        let max_lines = (((text_bottom - cy) / line_h).floor().max(0.0) as usize).min(4);
         for (i, line) in wrap_lines(p, Face::Regular, ui_theme::small(), blurb, iw)
             .into_iter()
             .take(max_lines)
@@ -395,28 +406,24 @@ impl MobileLauncher {
             );
         }
 
-        if !compact_v {
-            let foot_h = 30.0;
-            let foot_y = y + h - foot_h - 14.0;
-            if foot_y > cy + 48.0 {
-                p.rounded(ix, foot_y, iw, foot_h, 8.0, palette::surface());
-                let repo = truncate_to_fit(
-                    p,
-                    Face::Mono,
-                    11.0,
-                    "github.com/10yukine/Meridian",
-                    iw - 20.0,
-                );
-                p.text_line(
-                    Face::Mono,
-                    11.0,
-                    foot_h,
-                    ix + 10.0,
-                    foot_y,
-                    palette::muted(),
-                    &repo,
-                );
-            }
+        if show_footer {
+            p.rounded(ix, foot_y, iw, foot_h, 7.0, palette::surface());
+            let repo = truncate_to_fit(
+                p,
+                Face::Mono,
+                11.0,
+                "github.com/10yukine/Meridian",
+                iw - 20.0,
+            );
+            p.text_line(
+                Face::Mono,
+                11.0,
+                foot_h,
+                ix + 10.0,
+                foot_y,
+                palette::muted(),
+                &repo,
+            );
         }
     }
 
@@ -491,11 +498,9 @@ impl MobileLauncher {
             &fit_title,
         );
 
-        let mut cy = y + py + if compact_v { 26.0 } else { 32.0 };
-        if !compact_v {
-            p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
-            cy += 14.0;
-        }
+        let mut cy = y + py + if compact_v { 24.0 } else { 32.0 };
+        p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
+        cy += if compact_v { 8.0 } else { 14.0 };
 
         let (runtime_text, runtime_col) = match setup {
             Setup::Needed => ("Not installed".to_owned(), palette::muted()),
@@ -517,21 +522,14 @@ impl MobileLauncher {
             format_size(total_bytes)
         );
 
-        let rows: Vec<(&str, String, u32)> = if compact_v {
-            vec![
-                ("Runtime 26.3", runtime_text, runtime_col),
-                ("Storage", storage_text, palette::body()),
-            ]
-        } else {
-            vec![
-                ("Target", "Java Edition 26.3".to_owned(), palette::body()),
-                ("Runtime", runtime_text, runtime_col),
-                ("Storage", storage_text, palette::body()),
-            ]
-        };
+        let rows: Vec<(&str, String, u32)> = vec![
+            ("Target", "Java Edition 26.3".to_owned(), palette::body()),
+            ("Runtime", runtime_text, runtime_col),
+            ("Storage", storage_text, palette::body()),
+        ];
 
-        let row_h = if compact_v { 28.0 } else { 36.0 };
-        let row_step = if compact_v { 32.0 } else { 44.0 };
+        let row_h: f32 = if compact_v { 26.0 } else { 36.0 };
+        let row_step: f32 = if compact_v { 31.0 } else { 44.0 };
         for (label, value, vcol) in rows {
             if cy + row_h > y + h - 8.0 {
                 break;
@@ -580,59 +578,51 @@ impl MobileLauncher {
         }
     }
 
-    /// Floating profile switcher popup anchored directly above the bottom Profile Bar.
+    /// Upward profile dropdown anchored directly above the bottom Profile Bar, matching its width,
+    /// highlighting the selected profile row, and showing a slim right-edge scrollbar when long.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_profile_popup(
         &self,
         ui: &mut Canvas<'_, '_>,
         hits: &mut Vec<HitRect>,
         ui_w: f32,
-        rail_w: f32,
         top_h: f32,
         dock_y: f32,
-        pad: f32,
-        prof_center_x: f32,
+        bar_x: f32,
+        bar_w: f32,
         setup: &Setup,
         profiles: &[Profile],
         col_success: u32,
         col_danger: u32,
     ) {
-        let compact_v = dock_y < 360.0;
+        let compact_v = dock_y < 380.0;
         let selected_id = self.backend.selected_profile();
 
-        let popup_w = (ui_w - rail_w - pad * 2.0).min(640.0).max(360.0);
-        let min_x = (rail_w + pad).min(ui_w - popup_w - pad).max(pad);
-        let max_x = (ui_w - pad - popup_w).max(min_x);
-        let popup_x = (prof_center_x - popup_w * 0.5).round().clamp(min_x, max_x);
+        let popup_x = bar_x;
+        let popup_w = bar_w;
+        let pad_x: f32 = 4.0;
+        let pad_y: f32 = 4.0;
+        let row_h: f32 = if compact_v { 32.0 } else { 36.0 };
+        let row_gap: f32 = 2.0;
 
-        let pad_x = if compact_v { 14.0 } else { 18.0 };
-        let pad_y = if compact_v { 10.0 } else { 14.0 };
-        let hdr_h = if compact_v { 32.0 } else { 36.0 };
-        let row_h = if compact_v { 36.0 } else { 42.0 };
-        let row_gap = if compact_v { 5.0 } else { 7.0 };
-
-        let list_top_offset = pad_y + hdr_h + 10.0;
-        let max_popup_h = (dock_y - top_h - 16.0).max(list_top_offset + row_h + pad_y);
-        let avail_for_rows = (max_popup_h - list_top_offset - pad_y).max(row_h);
-        let fit_all = ((avail_for_rows + row_gap) / (row_h + row_gap))
+        let max_h_cap: f32 = if compact_v { 256.0 } else { 316.0 };
+        let max_popup_h = (dock_y - top_h - 12.0)
+            .clamp(row_h + pad_y * 2.0, max_h_cap)
+            .min((dock_y - 6.0).max(row_h + pad_y * 2.0));
+        let avail_for_rows = (max_popup_h - pad_y * 2.0).max(row_h);
+        let visible_cap = ((avail_for_rows + row_gap) / (row_h + row_gap))
             .floor()
             .max(1.0) as usize;
-        let needs_pager = profiles.len() > fit_all;
-        let pager_h = if needs_pager { 36.0 } else { 0.0 };
-        let per_page = ((avail_for_rows - pager_h + row_gap) / (row_h + row_gap))
-            .floor()
-            .max(1.0) as usize;
-        let total_pages = profiles.len().max(1).div_ceil(per_page);
-        let page = self.profile_page.min(total_pages - 1);
-        let start = page * per_page;
-        let end = (start + per_page).min(profiles.len());
-        let visible = (end - start).max(1);
+        let overflows = profiles.len() > visible_cap;
+        let visible = profiles.len().min(visible_cap).max(1);
+        let max_scroll = profiles.len().saturating_sub(visible);
+        let scroll = self.profile_scroll.min(max_scroll);
 
         let rows_h = visible as f32 * row_h + visible.saturating_sub(1) as f32 * row_gap;
-        let popup_h = (list_top_offset + rows_h + pager_h + pad_y).min(max_popup_h);
-        let popup_y = (dock_y - 10.0 - popup_h).max(top_h + 6.0);
+        let popup_h = (pad_y * 2.0 + rows_h).min(max_popup_h);
+        let popup_y = (dock_y - 4.0 - popup_h).max(top_h + 4.0);
 
-        // Dim scrim over the viewport above the bottom dock + 4 non-overlapping dismiss bands
+        // Dim scrim over the viewport above the bottom dock + 4 non-overlapping dismiss bands.
         if let Some(p) = ui.paint() {
             p.rounded(
                 0.0,
@@ -640,15 +630,15 @@ impl MobileLauncher {
                 ui_w,
                 dock_y,
                 0.0,
-                color::with_alpha(palette::bg_outer(), 0.64),
+                color::with_alpha(palette::bg_outer(), 0.58),
             );
-            // Soft lavender glow shadow behind the floating popup
+            // Soft ambient drop glow behind the upward dropdown.
             p.rounded(
-                popup_x - 3.0,
-                popup_y - 3.0,
-                popup_w + 6.0,
-                popup_h + 6.0,
-                17.0,
+                popup_x - 2.0,
+                popup_y - 2.0,
+                popup_w + 4.0,
+                popup_h + 4.0,
+                12.0,
                 color::with_alpha(palette::accent(), 0.14),
             );
         }
@@ -691,14 +681,14 @@ impl MobileLauncher {
             });
         }
 
-        // Solid opaque popup plate so dimmed cards underneath never bleed through.
+        // Solid opaque dropdown container so dimmed cards underneath never bleed through.
         if let Some(p) = ui.paint() {
             p.rounded(
                 popup_x,
                 popup_y,
                 popup_w,
                 popup_h,
-                14.0,
+                10.0,
                 color::hex(0x0f081c, 255),
             );
             p.border(
@@ -706,64 +696,17 @@ impl MobileLauncher {
                 popup_y,
                 popup_w,
                 popup_h,
-                14.0,
-                color::with_alpha(palette::accent_star(), 0.72),
+                10.0,
+                color::with_alpha(palette::accent_star(), 0.62),
             );
         }
 
+        let sb_gutter: f32 = if overflows { 16.0 } else { 0.0 };
         let ix = popup_x + pad_x;
-        let iw = popup_w - pad_x * 2.0;
-        let hy = popup_y + pad_y;
+        let iw = (popup_w - pad_x * 2.0 - sb_gutter).max(80.0);
 
-        let close_w = 68.0;
-        let new_w = if compact_v { 118.0 } else { 130.0 };
-        draw_button(
-            ui,
-            hits,
-            ButtonId::CloseProfilePopup,
-            ix + iw - close_w,
-            hy,
-            close_w,
-            hdr_h,
-            Tone::Ghost,
-            "Close",
-        );
-        draw_button(
-            ui,
-            hits,
-            ButtonId::OpenNewProfile,
-            ix + iw - close_w - 8.0 - new_w,
-            hy,
-            new_w,
-            hdr_h,
-            Tone::Secondary,
-            "+ New profile",
-        );
-
-        if let Some(p) = ui.paint() {
-            let title_max = (iw - close_w - new_w - 18.0).max(80.0);
-            let fit_title = truncate_to_fit(p, Face::SemiBold, 16.0, "Switch Profile", title_max);
-            p.text_line(
-                Face::SemiBold,
-                16.0,
-                hdr_h,
-                ix,
-                hy,
-                palette::text(),
-                &fit_title,
-            );
-            p.rounded(
-                popup_x + 1.0,
-                hy + hdr_h + 5.0,
-                popup_w - 2.0,
-                1.0,
-                0.0,
-                palette::border_subtle(),
-            );
-        }
-
-        let mut ly = popup_y + list_top_offset;
-        for (idx, profile) in profiles.iter().enumerate().skip(start).take(end - start) {
+        let mut ly = popup_y + pad_y;
+        for (idx, profile) in profiles.iter().enumerate().skip(scroll).take(visible) {
             let is_selected = profile.id == selected_id;
             let state = effective_profile_state(profile, setup);
             let row_hit = HitRect {
@@ -774,86 +717,104 @@ impl MobileLauncher {
                 h: row_h,
             };
             if let Some(p) = ui.paint() {
-                let fill = if is_selected {
-                    color::with_alpha(palette::accent(), 0.16)
-                } else if row_hit.contains(p.cursor) {
-                    palette::surface_hover()
-                } else {
-                    palette::surface()
-                };
-                let bdr = if is_selected {
-                    color::with_alpha(palette::accent_star(), 0.78)
-                } else {
-                    palette::border()
-                };
-                p.rounded(ix, ly, iw, row_h, 9.0, fill);
-                p.border(ix, ly, iw, row_h, 9.0, bdr);
+                let hovered = row_hit.contains(p.cursor);
                 if is_selected {
-                    p.rounded(
-                        ix + 4.0,
-                        ly + 8.0,
-                        3.0,
-                        row_h - 16.0,
-                        1.5,
-                        palette::accent_star(),
-                    );
+                    p.rounded(ix, ly, iw, row_h, 6.0, palette::accent_fill());
+                } else if hovered {
+                    p.rounded(ix, ly, iw, row_h, 6.0, palette::surface_hover());
                 }
 
-                // Right-aligned status badge
-                let (badge, bcol) =
-                    profile_badge_parts(&state, is_selected, col_success, col_danger);
-                let bw = p.measure(Face::Mono, 11.0, &badge) + 14.0;
-                let bh = 20.0;
-                let bx = ix + iw - 10.0 - bw;
-                let by = ly + ((row_h - bh) * 0.5).round();
-                p.rounded(bx, by, bw, bh, 5.0, color::with_alpha(bcol, 0.16));
-                p.border(bx, by, bw, bh, 5.0, color::with_alpha(bcol, 0.72));
-                p.text_line(Face::Mono, 11.0, bh, bx + 7.0, by, bcol, &badge);
-
-                // Single-line profile summary: <profile name>  |  0 mods  |  1 world  |  754.3 MB
-                let tx = ix + if is_selected { 16.0 } else { 12.0 };
-                let avail_text_w = (bx - tx - 10.0).max(60.0);
-                let name_fit =
-                    truncate_to_fit(p, Face::SemiBold, 14.0, &profile.name, avail_text_w * 0.45);
-                let nw = p.measure(Face::SemiBold, 14.0, &name_fit);
-                p.text_line(
-                    Face::SemiBold,
-                    14.0,
-                    row_h,
-                    tx,
-                    ly,
-                    palette::text(),
-                    &name_fit,
+                let dot_col = if is_selected {
+                    palette::text()
+                } else {
+                    match &state {
+                        ProfileState::Installed => col_success,
+                        ProfileState::Installing(_) | ProfileState::Available => {
+                            palette::accent_star()
+                        }
+                        ProfileState::Failed(_) => col_danger,
+                    }
+                };
+                p.rounded(
+                    ix + 10.0,
+                    ly + ((row_h - 6.0) * 0.5).round(),
+                    6.0,
+                    6.0,
+                    3.0,
+                    dot_col,
                 );
 
-                let rem_w = avail_text_w - nw;
-                if rem_w > 40.0 {
-                    let stats = format!("  |  {}", profile_stats_line(profile));
-                    let fit_stats =
-                        truncate_to_fit(p, Face::Mono, ui_theme::small(), &stats, rem_w);
-                    p.text_line(
-                        Face::Mono,
-                        ui_theme::small(),
-                        row_h,
-                        tx + nw,
-                        ly,
-                        palette::muted(),
-                        &fit_stats,
-                    );
-                }
+                let right_meta = match &state {
+                    ProfileState::Installing(prog) => format!(
+                        "Installing {}%",
+                        (stage_fraction(prog) * 100.0).round() as u32
+                    ),
+                    ProfileState::Failed(_) => "Failed".to_owned(),
+                    ProfileState::Available => "Needs install".to_owned(),
+                    ProfileState::Installed => profile_stats_line(profile),
+                };
+                let meta_col = if is_selected {
+                    color::hex(0xebe4ff, 255)
+                } else {
+                    match &state {
+                        ProfileState::Failed(_) => col_danger,
+                        ProfileState::Installing(_) | ProfileState::Available => {
+                            palette::accent_star()
+                        }
+                        ProfileState::Installed => palette::muted(),
+                    }
+                };
+
+                let tx = ix + 24.0;
+                let max_row_w = (iw - 34.0).max(60.0);
+                let name_face = if is_selected {
+                    Face::SemiBold
+                } else {
+                    Face::Medium
+                };
+                let name_col = if is_selected || hovered {
+                    palette::text()
+                } else {
+                    palette::body()
+                };
+                let fit_meta = truncate_to_fit(
+                    p,
+                    Face::Mono,
+                    ui_theme::small(),
+                    &right_meta,
+                    max_row_w * 0.56,
+                );
+                let mw = p.measure(Face::Mono, ui_theme::small(), &fit_meta);
+                let name_room = (max_row_w - mw - 12.0).max(52.0);
+                let fit_name = truncate_to_fit(p, name_face, 13.5, &profile.name, name_room);
+
+                p.text_line(name_face, 13.5, row_h, tx, ly, name_col, &fit_name);
+                p.text_line(
+                    Face::Mono,
+                    ui_theme::small(),
+                    row_h,
+                    ix + iw - 10.0 - mw,
+                    ly,
+                    meta_col,
+                    &fit_meta,
+                );
 
                 if let ProfileState::Installing(prog) = &state {
                     let frac = stage_fraction(prog);
-                    let bar_y = ly + row_h - 4.0;
-                    p.rounded(tx, bar_y, iw - 24.0, 3.0, 1.5, palette::bg_outer());
+                    let bar_y = ly + row_h - 3.0;
+                    p.rounded(tx, bar_y, iw - 34.0, 2.5, 1.2, palette::bg_outer());
                     if frac > 0.0 {
                         p.rounded(
                             tx,
                             bar_y,
-                            ((iw - 24.0) * frac).max(8.0),
-                            3.0,
-                            1.5,
-                            palette::accent(),
+                            ((iw - 34.0) * frac).max(8.0),
+                            2.5,
+                            1.2,
+                            if is_selected {
+                                palette::text()
+                            } else {
+                                palette::accent()
+                            },
                         );
                     }
                 }
@@ -862,46 +823,65 @@ impl MobileLauncher {
             ly += row_h + row_gap;
         }
 
-        if needs_pager {
-            let py = popup_y + popup_h - pad_y - 28.0;
-            if page > 0 {
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::ProfilesPrevPage,
-                    ix,
-                    py,
-                    74.0,
-                    28.0,
-                    Tone::Secondary,
-                    "Prev",
-                );
-            }
+        // Right-edge slim scrollbar track + rounded thumb + tappable up/down regions when long.
+        if overflows {
+            let gutter_x = popup_x + popup_w - sb_gutter;
+            let track_y = popup_y + pad_y;
+            let track_h = rows_h.max(24.0);
+            let half_h = (track_h * 0.5).floor();
+            let up_hit = HitRect {
+                id: ButtonId::ProfileScrollUp,
+                x: gutter_x,
+                y: track_y,
+                w: sb_gutter - 2.0,
+                h: half_h,
+            };
+            let down_hit = HitRect {
+                id: ButtonId::ProfileScrollDown,
+                x: gutter_x,
+                y: track_y + half_h,
+                w: sb_gutter - 2.0,
+                h: track_h - half_h,
+            };
             if let Some(p) = ui.paint() {
-                let txt = format!("{} / {total_pages}", page + 1);
-                let tw = p.measure(Face::Mono, ui_theme::small(), &txt);
-                p.text_line(
-                    Face::Mono,
-                    ui_theme::small(),
-                    28.0,
-                    ix + ((iw - tw) * 0.5).round(),
-                    py,
-                    palette::muted(),
-                    &txt,
+                let bar_w: f32 = 4.0;
+                let bar_x = gutter_x + ((sb_gutter - 2.0 - bar_w) * 0.5).round();
+                p.rounded(
+                    bar_x,
+                    track_y + 2.0,
+                    bar_w,
+                    (track_h - 4.0).max(16.0),
+                    2.0,
+                    color::with_alpha(palette::border(), 0.48),
+                );
+                let usable_h = (track_h - 4.0).max(16.0);
+                let thumb_h =
+                    (visible as f32 / profiles.len() as f32 * usable_h).clamp(20.0, usable_h);
+                let frac = if max_scroll == 0 {
+                    0.0
+                } else {
+                    scroll as f32 / max_scroll as f32
+                };
+                let thumb_y = track_y + 2.0 + (frac * (usable_h - thumb_h)).round();
+                let hovered = up_hit.contains(p.cursor) || down_hit.contains(p.cursor);
+                p.rounded(
+                    bar_x,
+                    thumb_y,
+                    bar_w,
+                    thumb_h,
+                    2.0,
+                    if hovered {
+                        palette::accent_star()
+                    } else {
+                        color::with_alpha(palette::muted(), 0.88)
+                    },
                 );
             }
-            if page + 1 < total_pages {
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::ProfilesNextPage,
-                    ix + iw - 74.0,
-                    py,
-                    74.0,
-                    28.0,
-                    Tone::Secondary,
-                    "Next",
-                );
+            if scroll > 0 {
+                hits.push(up_hit);
+            }
+            if scroll < max_scroll {
+                hits.push(down_hit);
             }
         }
     }
@@ -918,13 +898,28 @@ impl MobileLauncher {
         profiles: &[Profile],
         col_danger: u32,
     ) {
-        let compact_v = avail_h < 300.0;
+        let ultra_v = avail_h < 150.0;
+        let compact_v = avail_h < 350.0;
+        let create_in_header = avail_h < 245.0;
         draw_plate(ui, x, y, w, avail_h, palette::border());
 
         let ix = x + 18.0;
         let iw = w - 36.0;
-        let mut cy = y + if compact_v { 8.0 } else { 16.0 };
-        let hdr_h = if compact_v { 32.0 } else { 38.0 };
+        let pad_y: f32 = if ultra_v {
+            6.0
+        } else if compact_v {
+            8.0
+        } else {
+            16.0
+        };
+        let mut cy = y + pad_y;
+        let hdr_h: f32 = if ultra_v {
+            30.0
+        } else if compact_v {
+            32.0
+        } else {
+            38.0
+        };
 
         draw_button(
             ui,
@@ -937,6 +932,20 @@ impl MobileLauncher {
             Tone::Secondary,
             "<- Cancel",
         );
+        if create_in_header {
+            let create_w = 148.0_f32.min(iw * 0.40);
+            draw_button(
+                ui,
+                hits,
+                ButtonId::CreateProfile,
+                ix + iw - create_w,
+                cy,
+                create_w,
+                hdr_h,
+                Tone::Primary,
+                "Create Profile",
+            );
+        }
         if let Some(p) = ui.paint() {
             p.text_line(
                 Face::SemiBold,
@@ -961,6 +970,13 @@ impl MobileLauncher {
         let right_w = if two_col { iw - left_w - col_gap } else { iw };
 
         let mut ly = cy;
+        let input_h: f32 = if ultra_v {
+            32.0
+        } else if compact_v {
+            36.0
+        } else {
+            44.0
+        };
         draw_input_box(
             ui,
             hits,
@@ -968,13 +984,13 @@ impl MobileLauncher {
             ix,
             ly,
             left_w,
-            if compact_v { 36.0 } else { 44.0 },
+            input_h,
             "Profile Name",
             &self.new_profile_name,
             false,
             true,
         );
-        ly += if compact_v { 40.0 } else { 50.0 };
+        ly += input_h + if compact_v { 4.0 } else { 6.0 };
 
         let taken: Vec<String> = profiles.iter().map(|p| p.id.clone()).collect();
         let preview_slug = if self.new_profile_name.trim().is_empty() {
@@ -982,72 +998,89 @@ impl MobileLauncher {
         } else {
             profile_id(&self.new_profile_name, &taken)
         };
+        // On tight keyboard-lifted layouts, swap the folder preview line for the validation error
+        // when one is active so the preset chips and confirm button never lose space.
+        let inline_err_on_slug = create_in_header && self.new_profile_error.is_some();
         if let Some(p) = ui.paint() {
+            let (meta_text, meta_col) = if let Some(err) = &self.new_profile_error
+                && inline_err_on_slug
+            {
+                (err.clone(), col_danger)
+            } else {
+                (format!("Folder: profiles/{preview_slug}"), palette::muted())
+            };
+            let fit_meta = truncate_to_fit(p, Face::Mono, ui_theme::small(), &meta_text, left_w);
             p.text_line(
                 Face::Mono,
                 ui_theme::small(),
                 16.0,
                 ix,
                 ly,
-                palette::muted(),
-                &format!("Folder: profiles/{preview_slug}"),
+                meta_col,
+                &fit_meta,
             );
         }
         ly += if compact_v { 18.0 } else { 22.0 };
 
-        if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::Medium,
-                ui_theme::small(),
-                16.0,
-                ix,
-                ly,
-                palette::body(),
-                "Start from preset (optional)",
-            );
+        let bottom_limit = y + avail_h - pad_y;
+        let show_preset_label = !create_in_header || (bottom_limit - ly) >= 56.0;
+        if show_preset_label {
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::Medium,
+                    ui_theme::small(),
+                    16.0,
+                    ix,
+                    ly,
+                    palette::body(),
+                    "Start from preset (optional)",
+                );
+            }
+            ly += if compact_v { 18.0 } else { 20.0 };
         }
-        ly += if compact_v { 18.0 } else { 20.0 };
 
         let presets = self.backend.presets();
-        let chip_h = if compact_v { 34.0 } else { 40.0 };
+        let chip_h: f32 = if compact_v { 34.0 } else { 40.0 };
         let chip_cols = (presets.len() + 1).max(1);
         let chip_w = (left_w - (chip_cols as f32 - 1.0) * 6.0) / chip_cols as f32;
-        draw_button(
-            ui,
-            hits,
-            ButtonId::SelectPresetNone,
-            ix,
-            ly,
-            chip_w,
-            chip_h,
-            if self.new_profile_preset.is_none() {
-                Tone::Banner
-            } else {
-                Tone::Secondary
-            },
-            "Empty",
-        );
-        for (i, preset) in presets.iter().enumerate() {
-            let cx = ix + (i + 1) as f32 * (chip_w + 6.0);
+        if ly + chip_h <= bottom_limit {
             draw_button(
                 ui,
                 hits,
-                ButtonId::SelectPreset(i),
-                cx,
+                ButtonId::SelectPresetNone,
+                ix,
                 ly,
                 chip_w,
                 chip_h,
-                if self.new_profile_preset.as_deref() == Some(&preset.id) {
+                if self.new_profile_preset.is_none() {
                     Tone::Banner
                 } else {
                     Tone::Secondary
                 },
-                &preset.name,
+                "Empty",
             );
+            for (i, preset) in presets.iter().enumerate() {
+                let cx = ix + (i + 1) as f32 * (chip_w + 6.0);
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::SelectPreset(i),
+                    cx,
+                    ly,
+                    chip_w,
+                    chip_h,
+                    if self.new_profile_preset.as_deref() == Some(&preset.id) {
+                        Tone::Banner
+                    } else {
+                        Tone::Secondary
+                    },
+                    &preset.name,
+                );
+            }
+            ly += chip_h + 8.0;
         }
-        ly += chip_h + 8.0;
 
-        if let Some(err) = &self.new_profile_error {
+        if !inline_err_on_slug && let Some(err) = &self.new_profile_error {
             if let Some(p) = ui.paint() {
                 let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, left_w);
                 p.text_line(
@@ -1063,19 +1096,22 @@ impl MobileLauncher {
             ly += 18.0;
         }
 
-        let create_h = if compact_v { 42.0 } else { 48.0 };
-        let create_y = (y + avail_h - create_h - 10.0).min(ly.max(cy + 122.0));
-        draw_button(
-            ui,
-            hits,
-            ButtonId::CreateProfile,
-            ix,
-            create_y,
-            left_w,
-            create_h,
-            Tone::Primary,
-            "Create Profile",
-        );
+        if !create_in_header {
+            let max_create_h = (bottom_limit - ly).max(34.0);
+            let create_h = (if compact_v { 40.0_f32 } else { 48.0 }).min(max_create_h);
+            let create_y = ly.min((bottom_limit - create_h).max(ly));
+            draw_button(
+                ui,
+                hits,
+                ButtonId::CreateProfile,
+                ix,
+                create_y,
+                left_w,
+                create_h,
+                Tone::Primary,
+                "Create Profile",
+            );
+        }
 
         if !two_col {
             return;
@@ -1123,16 +1159,37 @@ impl MobileLauncher {
                 }
             }
             ModSearch::Done(list) => {
-                let row_h = if compact_v { 36.0 } else { 44.0 };
-                let row_gap = 6.0;
-                let avail = (y + avail_h - 46.0 - ry).max(row_h);
-                let per_page = ((avail + row_gap) / (row_h + row_gap)).floor().max(1.0) as usize;
+                let row_h: f32 = if ultra_v {
+                    30.0
+                } else if compact_v {
+                    34.0
+                } else {
+                    44.0
+                };
+                let row_gap: f32 = 6.0;
+                let total_space = (bottom_limit - ry).max(0.0);
+                if total_space < row_h {
+                    return;
+                }
+                let fit_all = ((total_space + row_gap) / (row_h + row_gap))
+                    .floor()
+                    .max(1.0) as usize;
+                let needs_pager = list.len() > fit_all && total_space >= row_h + 34.0;
+                let pager_h: f32 = if needs_pager { 34.0 } else { 0.0 };
+                let list_space = (total_space - pager_h).max(row_h);
+                let per_page = ((list_space + row_gap) / (row_h + row_gap))
+                    .floor()
+                    .max(1.0) as usize;
                 let total_pages = list.len().max(1).div_ceil(per_page);
                 let page = self.new_profile_mods_page.min(total_pages - 1);
                 let start = page * per_page;
                 let end = (start + per_page).min(list.len());
+                let rows_limit = bottom_limit - pager_h;
 
                 for (i, m) in list.iter().enumerate().skip(start).take(end - start) {
+                    if ry + row_h > rows_limit + 0.5 {
+                        break;
+                    }
                     let chosen = self.new_profile_mods.contains(&m.id);
                     draw_button(
                         ui,
@@ -1156,8 +1213,8 @@ impl MobileLauncher {
                     );
                     ry += row_h + row_gap;
                 }
-                if list.len() > per_page {
-                    let py = y + avail_h - 40.0;
+                if needs_pager && bottom_limit - 28.0 >= rows_limit {
+                    let py = bottom_limit - 28.0;
                     if page > 0 {
                         draw_button(
                             ui,
@@ -1166,7 +1223,7 @@ impl MobileLauncher {
                             right_x,
                             py,
                             74.0,
-                            30.0,
+                            28.0,
                             Tone::Secondary,
                             "Prev",
                         );
@@ -1179,7 +1236,7 @@ impl MobileLauncher {
                             right_x + right_w - 74.0,
                             py,
                             74.0,
-                            30.0,
+                            28.0,
                             Tone::Secondary,
                             "Next",
                         );
@@ -1303,39 +1360,203 @@ impl MobileLauncher {
         err: Option<&str>,
         col_danger: u32,
     ) {
-        let compact_v = avail_h < 280.0;
-        let card_h = 248.0_f32.min(avail_h);
+        let ultra_v = avail_h < 145.0;
+        let inner_x_ultra = x + 16.0;
+        let inner_w_ultra = (w - 32.0).max(200.0);
+        // Ultra-tight keyboard-up layout (e.g. 914x200): title + Cancel on top, input + Save side-by-side.
+        if ultra_v && inner_w_ultra >= 360.0 {
+            let pad_y: f32 = 6.0;
+            let hdr_h: f32 = 30.0;
+            let row_h: f32 = 34.0;
+            let err_h: f32 = if err.is_some() { 18.0 } else { 0.0 };
+            let needed_h = pad_y * 2.0 + hdr_h + 6.0 + row_h + err_h;
+            let card_h = needed_h.min(avail_h);
+            let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
+            draw_plate(ui, x, cy_top, w, card_h, palette::accent_star());
+
+            let mut cy = cy_top + pad_y;
+            let cancel_w = 86.0;
+            draw_button(
+                ui,
+                hits,
+                ButtonId::CancelRenameProfile,
+                inner_x_ultra + inner_w_ultra - cancel_w,
+                cy,
+                cancel_w,
+                hdr_h,
+                Tone::Secondary,
+                "Cancel",
+            );
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::SemiBold,
+                    17.0,
+                    hdr_h,
+                    inner_x_ultra,
+                    cy,
+                    palette::text(),
+                    "Rename Profile",
+                );
+                let tw = p.measure(Face::SemiBold, 17.0, "Rename Profile");
+                let folder = format!("profiles/{id}");
+                let froom = (inner_w_ultra - cancel_w - tw - 22.0).max(40.0);
+                let fit_f = truncate_to_fit(p, Face::Mono, ui_theme::small(), &folder, froom);
+                p.text_line(
+                    Face::Mono,
+                    ui_theme::small(),
+                    hdr_h,
+                    inner_x_ultra + tw + 12.0,
+                    cy,
+                    palette::muted(),
+                    &fit_f,
+                );
+            }
+            cy += hdr_h + 6.0;
+
+            let save_w = 126.0_f32.min(inner_w_ultra * 0.34);
+            let eff_row_h = row_h.min((cy_top + card_h - cy - err_h - pad_y).max(30.0));
+            draw_input_box(
+                ui,
+                hits,
+                ButtonId::FocusRenameInput,
+                inner_x_ultra,
+                cy,
+                inner_w_ultra - save_w - 8.0,
+                eff_row_h,
+                "Display Name",
+                draft,
+                false,
+                true,
+            );
+            draw_button(
+                ui,
+                hits,
+                ButtonId::SaveRenameProfile,
+                inner_x_ultra + inner_w_ultra - save_w,
+                cy,
+                save_w,
+                eff_row_h,
+                Tone::Primary,
+                "Save Name",
+            );
+            cy += eff_row_h + 2.0;
+            if let Some(e) = err
+                && let Some(p) = ui.paint()
+            {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), e, inner_w_ultra);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    16.0,
+                    inner_x_ultra,
+                    cy,
+                    col_danger,
+                    &fit,
+                );
+            }
+            return;
+        }
+
+        let tight_v = avail_h < 200.0;
+        let compact_v = avail_h < 290.0;
+        let pad_y: f32 = if tight_v {
+            8.0
+        } else if compact_v {
+            12.0
+        } else {
+            20.0
+        };
+        let hdr_step: f32 = if tight_v {
+            28.0
+        } else if compact_v {
+            48.0
+        } else {
+            56.0
+        };
+        let input_h: f32 = if tight_v {
+            36.0
+        } else if compact_v {
+            40.0
+        } else {
+            44.0
+        };
+        let input_gap: f32 = if tight_v { 6.0 } else { 8.0 };
+        let err_step: f32 = if err.is_some() {
+            if tight_v { 18.0 } else { 22.0 }
+        } else {
+            0.0
+        };
+        let btn_h: f32 = if tight_v {
+            36.0
+        } else if compact_v {
+            42.0
+        } else {
+            46.0
+        };
+        let needed_h = pad_y * 2.0 + hdr_step + input_h + input_gap + err_step + btn_h;
+        let card_h = needed_h
+            .max(if compact_v { 180.0 } else { 232.0 })
+            .min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, palette::accent_star());
 
-        let inner_x = x + 24.0;
-        let inner_w = w - 48.0;
-        let mut cy = cy_top + if compact_v { 12.0 } else { 20.0 };
+        let inner_x = x + if tight_v { 18.0 } else { 24.0 };
+        let inner_w = (w - if tight_v { 36.0 } else { 48.0 }).max(200.0);
+        let mut cy = cy_top + pad_y;
         if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::SemiBold,
-                if compact_v {
-                    19.0
-                } else {
-                    ui_theme::sizes().title
-                },
-                26.0,
-                inner_x,
-                cy,
-                palette::text(),
-                "Rename Profile",
-            );
-            p.text_line(
-                Face::Mono,
-                ui_theme::small(),
-                18.0,
-                inner_x,
-                cy + 28.0,
-                palette::muted(),
-                &format!("Folder stays profiles/{id}"),
-            );
+            let folder = format!("Folder stays profiles/{id}");
+            if tight_v {
+                p.text_line(
+                    Face::SemiBold,
+                    18.0,
+                    24.0,
+                    inner_x,
+                    cy,
+                    palette::text(),
+                    "Rename Profile",
+                );
+                let title_w = p.measure(Face::SemiBold, 18.0, "Rename Profile");
+                let folder_room = (inner_w - title_w - 14.0).max(60.0);
+                let fit_folder =
+                    truncate_to_fit(p, Face::Mono, ui_theme::small(), &folder, folder_room);
+                let fw = p.measure(Face::Mono, ui_theme::small(), &fit_folder);
+                p.text_line(
+                    Face::Mono,
+                    ui_theme::small(),
+                    24.0,
+                    inner_x + inner_w - fw,
+                    cy,
+                    palette::muted(),
+                    &fit_folder,
+                );
+            } else {
+                p.text_line(
+                    Face::SemiBold,
+                    if compact_v {
+                        19.0
+                    } else {
+                        ui_theme::sizes().title
+                    },
+                    26.0,
+                    inner_x,
+                    cy,
+                    palette::text(),
+                    "Rename Profile",
+                );
+                let fit_folder =
+                    truncate_to_fit(p, Face::Mono, ui_theme::small(), &folder, inner_w);
+                p.text_line(
+                    Face::Mono,
+                    ui_theme::small(),
+                    18.0,
+                    inner_x,
+                    cy + 28.0,
+                    palette::muted(),
+                    &fit_folder,
+                );
+            }
         }
-        cy += if compact_v { 48.0 } else { 56.0 };
+        cy += hdr_step;
 
         draw_input_box(
             ui,
@@ -1344,30 +1565,32 @@ impl MobileLauncher {
             inner_x,
             cy,
             inner_w,
-            if compact_v { 40.0 } else { 44.0 },
+            input_h,
             "Display Name",
             draft,
             false,
             true,
         );
-        cy += if compact_v { 46.0 } else { 52.0 };
+        cy += input_h + input_gap;
 
-        if let Some(e) = err
-            && let Some(p) = ui.paint()
-        {
-            p.text_line(
-                Face::Regular,
-                ui_theme::small(),
-                18.0,
-                inner_x,
-                cy,
-                col_danger,
-                e,
-            );
+        if let Some(e) = err {
+            if let Some(p) = ui.paint() {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), e, inner_w);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    18.0,
+                    inner_x,
+                    cy,
+                    col_danger,
+                    &fit,
+                );
+            }
+            cy += err_step;
         }
 
-        let btn_h = if compact_v { 42.0 } else { 46.0 };
-        let btn_y = cy_top + card_h - btn_h - if compact_v { 10.0 } else { 16.0 };
+        let eff_btn_h = btn_h.min((cy_top + card_h - cy - pad_y).max(32.0));
+        let btn_y = (cy_top + card_h - eff_btn_h - pad_y).max(cy);
         let half_w = (inner_w - 12.0) * 0.5;
         draw_button(
             ui,
@@ -1376,7 +1599,7 @@ impl MobileLauncher {
             inner_x,
             btn_y,
             half_w,
-            btn_h,
+            eff_btn_h,
             Tone::Primary,
             "Save Name",
         );
@@ -1387,7 +1610,7 @@ impl MobileLauncher {
             inner_x + half_w + 12.0,
             btn_y,
             half_w,
-            btn_h,
+            eff_btn_h,
             Tone::Secondary,
             "Cancel",
         );

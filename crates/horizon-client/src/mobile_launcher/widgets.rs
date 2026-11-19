@@ -461,19 +461,24 @@ pub(super) fn draw_icon_box(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
 }
 
 pub(super) fn draw_icon_chevron(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32, up: bool) {
-    let half = sz * 0.5;
-    let steps = 4;
-    for i in 0..steps {
-        let t = i as f32 / (steps - 1) as f32;
-        let dx = (1.0 - t) * half;
-        let dy = if up {
-            (0.5 - t) * half * 0.9
-        } else {
-            (t - 0.5) * half * 0.9
-        };
-        p.rounded(cx - dx - 0.8, cy + dy - 0.8, 2.0, 2.0, 0.8, col);
-        p.rounded(cx + dx - 1.2, cy + dy - 0.8, 2.0, 2.0, 0.8, col);
-    }
+    let half_w = sz * 0.55;
+    let half_h = sz * 0.30;
+    let pts = if up {
+        [
+            [cx - half_w, cy + half_h],
+            [cx, cy - half_h],
+            [cx + half_w, cy + half_h],
+        ]
+    } else {
+        [
+            [cx - half_w, cy - half_h],
+            [cx, cy + half_h],
+            [cx + half_w, cy - half_h],
+        ]
+    };
+    let t = (sz * 0.20).clamp(1.3, 1.8);
+    stroke(p, pts[0], pts[1], t, col);
+    stroke(p, pts[1], pts[2], t, col);
 }
 
 pub(super) fn draw_player_head(
@@ -776,18 +781,30 @@ pub(super) fn draw_rail_item(
             p.border(x, y, w, h, 12.0, b);
         }
         if active {
+            let bar_inset = (h * 0.22).clamp(4.0, 12.0);
             p.rounded(
                 x - 5.0,
-                y + 12.0,
+                y + bar_inset,
                 3.0,
-                h - 24.0,
+                (h - bar_inset * 2.0).max(8.0),
                 1.5,
                 palette::accent_star(),
             );
         }
+        let icon_only = h < 36.0;
         let compact = h < 48.0;
-        let icon_sz = if compact { 16.0 } else { 18.0 };
-        let icon_cy = y + if compact { 16.0 } else { 19.0 };
+        let icon_sz = if icon_only {
+            (h - 10.0).clamp(14.0, 18.0)
+        } else if compact {
+            17.0
+        } else {
+            19.0
+        };
+        let icon_cy = if icon_only {
+            y + h * 0.5
+        } else {
+            y + if compact { 15.5 } else { 19.0 }
+        };
         let icon_cx = x + w * 0.5;
         let icon_col = if active { palette::accent_star() } else { ink };
         match icon {
@@ -796,18 +813,20 @@ pub(super) fn draw_rail_item(
             RailIcon::Skins => draw_icon_skins(p, icon_cx, icon_cy, icon_sz, icon_col),
             RailIcon::Settings => draw_icon_settings(p, icon_cx, icon_cy, icon_sz, icon_col),
         }
-        let lbl_sz = if compact { 9.0 } else { 9.5 };
-        let lw = p.measure(Face::Medium, lbl_sz, label);
-        let ly = y + h - if compact { 14.0 } else { 16.0 };
-        p.text_line(
-            Face::Medium,
-            lbl_sz,
-            13.0,
-            x + ((w - lw) * 0.5).round(),
-            ly,
-            ink,
-            label,
-        );
+        if !icon_only {
+            let lbl_sz = if compact { 9.0 } else { 9.5 };
+            let lw = p.measure(Face::Medium, lbl_sz, label);
+            let ly = y + h - if compact { 14.0 } else { 16.0 };
+            p.text_line(
+                Face::Medium,
+                lbl_sz,
+                13.0,
+                x + ((w - lw) * 0.5).round(),
+                ly,
+                ink,
+                label,
+            );
+        }
     }
     hits.push(hit);
 }
