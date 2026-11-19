@@ -43,14 +43,7 @@ impl TouchControls {
                     .fingers
                     .values()
                     .any(|(_, point)| layout::contains(rect, *point));
-            if let Some(name) = self.mcpe_sprite(control).filter(|_| mcpe(a)) {
-                mcpe_sprite(b, a, name, pressed, bounds, color);
-                continue;
-            }
-            if mcpe(a) && mcpe_icon(b, a, control, bounds, pressed, color) {
-                continue;
-            }
-            button(b, a, bounds, &self.label(control), pressed, color);
+            self.draw_control(b, a, control, bounds, pressed, color);
         }
         if let Some(point) = self.pointer() {
             let center = [point[0] * b.width, point[1] * b.height];
@@ -64,6 +57,27 @@ impl TouchControls {
                 ring(b, a, center, inner, rgba(255, 255, 255, 220));
             }
         }
+    }
+
+    /// Draw the action button in both gameplay and the layout editor.
+    pub(super) fn draw_control(
+        &self,
+        b: &mut HudBatch,
+        a: &HudAtlas,
+        control: Control,
+        bounds: [f32; 4],
+        pressed: bool,
+        color: u32,
+    ) {
+        if mcpe(a) {
+            let drew_sprite = self
+                .mcpe_sprite(control)
+                .is_some_and(|name| mcpe_sprite(b, a, name, pressed, bounds, color));
+            if drew_sprite || mcpe_icon(b, a, control, bounds, pressed, color) {
+                return;
+            }
+        }
+        button(b, a, bounds, &self.label(control), pressed, color);
     }
 
     /// Whether a control shows as held: its button is down, or it latched.
@@ -157,7 +171,7 @@ impl TouchControls {
     }
 }
 
-/// Draws Meridian's movement tiles for both gameplay and the layout preview.
+/// Draws movement for gameplay and the layout preview, with Meridian tiles as the fallback.
 pub(super) fn draw_movement(
     b: &mut HudBatch,
     a: &HudAtlas,
@@ -167,7 +181,21 @@ pub(super) fn draw_movement(
     held: bool,
     color: u32,
 ) {
-    if mcpe(a) {
+    let movement_sprites: &[&str] = if mode == Mode::Dpad {
+        &[
+            "gui/bedrock/controls/up",
+            "gui/bedrock/controls/left",
+            "gui/bedrock/controls/right",
+            "gui/bedrock/controls/down",
+        ]
+    } else {
+        &["gui/bedrock/ui/joystick_frame", "gui/bedrock/ui/joystick_knob"]
+    };
+    if mcpe(a)
+        && movement_sprites
+            .iter()
+            .all(|name| a.sprites.contains_key(*name))
+    {
         mcpe_movement(b, a, [x, y, size], mode, axis, color);
         return;
     }
@@ -308,7 +336,7 @@ fn mcpe_sprite(
     pressed: bool,
     [x, y, w, h]: [f32; 4],
     color: u32,
-) {
+) -> bool {
     let held = format!("gui/bedrock/{name}_pressed");
     let sprite = if pressed && a.sprites.contains_key(&held) {
         held
@@ -316,11 +344,12 @@ fn mcpe_sprite(
         format!("gui/bedrock/{name}")
     };
     let Some(r) = a.sprites.get(&sprite).copied() else {
-        return;
+        return false;
     };
     let scale = (w / r.w as f32).min(h / r.h as f32);
     let (sw, sh) = (r.w as f32 * scale, r.h as f32 * scale);
     b.sprite_scaled(a, &sprite, x + (w - sw) / 2.0, y + (h - sh) / 2.0, sw, sh, color);
+    true
 }
 
 /// A frosted square with stepped corners and a short highlight on its top edge.
