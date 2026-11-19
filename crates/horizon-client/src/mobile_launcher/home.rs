@@ -2,7 +2,7 @@
 //! New Profile form, and Rename/Remove profile modals.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, count_label, draw_button, draw_input_box, draw_plate,
+    Canvas, HitRect, Tone, count_label, draw_button, draw_check_row, draw_input_box, draw_plate,
     effective_profile_state, format_size, palette, profile_badge_parts, profile_stats_line,
     stage_fraction, stage_name, truncate_to_fit, wrap_lines,
 };
@@ -134,10 +134,7 @@ impl MobileLauncher {
             );
 
             // Single-line stats right under profile name (on compact phones, status note takes priority).
-            let stats = selected.map_or_else(
-                || "0 mods  |  0 worlds  |  Base game".to_owned(),
-                profile_stats_line,
-            );
+            let stats = selected.map_or_else(|| "...".to_owned(), profile_stats_line);
             let (sub, sub_col) = if compact_v && let Some(note) = &self.status_note {
                 (note.clone(), palette::accent_star())
             } else {
@@ -969,14 +966,33 @@ impl MobileLauncher {
         let right_x = if two_col { ix + left_w + col_gap } else { ix };
         let right_w = if two_col { iw - left_w - col_gap } else { iw };
 
-        let mut ly = cy;
-        let input_h: f32 = if ultra_v {
-            32.0
+        // Both columns share one grid: a section label, then rows of one height.
+        let row_h: f32 = if ultra_v {
+            30.0
         } else if compact_v {
-            36.0
+            34.0
         } else {
-            44.0
+            40.0
         };
+        let row_gap: f32 = 6.0;
+        let label_h: f32 = 20.0;
+        let section = |ui: &mut Canvas<'_, '_>, x: f32, y: f32, text: &str| {
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::Medium,
+                    ui_theme::small(),
+                    18.0,
+                    x,
+                    y,
+                    palette::body(),
+                    text,
+                );
+            }
+        };
+
+        let mut ly = cy;
+        section(ui, ix, ly, "Profile name");
+        ly += label_h;
         draw_input_box(
             ui,
             hits,
@@ -984,13 +1000,13 @@ impl MobileLauncher {
             ix,
             ly,
             left_w,
-            input_h,
-            "Profile Name",
+            row_h,
+            "",
             &self.new_profile_name,
             false,
-            true,
+            self.new_profile_name_focused,
         );
-        ly += input_h + if compact_v { 4.0 } else { 6.0 };
+        ly += row_h + if compact_v { 4.0 } else { 6.0 };
 
         let taken: Vec<String> = profiles.iter().map(|p| p.id.clone()).collect();
         let preview_slug = if self.new_profile_name.trim().is_empty() {
@@ -1023,24 +1039,14 @@ impl MobileLauncher {
         ly += if compact_v { 18.0 } else { 22.0 };
 
         let bottom_limit = y + avail_h - pad_y;
-        let show_preset_label = !create_in_header || (bottom_limit - ly) >= 56.0;
+        let show_preset_label = !create_in_header || (bottom_limit - ly) >= label_h + row_h;
         if show_preset_label {
-            if let Some(p) = ui.paint() {
-                p.text_line(
-                    Face::Medium,
-                    ui_theme::small(),
-                    16.0,
-                    ix,
-                    ly,
-                    palette::body(),
-                    "Start from preset (optional)",
-                );
-            }
-            ly += if compact_v { 18.0 } else { 20.0 };
+            section(ui, ix, ly, "Start from a preset (optional)");
+            ly += label_h;
         }
 
         let presets = self.backend.presets();
-        let chip_h: f32 = if compact_v { 34.0 } else { 40.0 };
+        let chip_h = row_h;
         let chip_cols = (presets.len() + 1).max(1);
         let chip_w = (left_w - (chip_cols as f32 - 1.0) * 6.0) / chip_cols as f32;
         if ly + chip_h <= bottom_limit {
@@ -1117,18 +1123,12 @@ impl MobileLauncher {
             return;
         }
         let mut ry = cy;
-        if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::Medium,
-                ui_theme::small(),
-                18.0,
-                right_x,
-                ry,
-                palette::body(),
-                &format!("Extra Mods ({} selected)", self.new_profile_mods.len()),
-            );
-        }
-        ry += 20.0;
+        let picked = match self.new_profile_mods.len() {
+            0 => "Extra mods (optional)".to_owned(),
+            n => format!("Extra mods ({n} selected)"),
+        };
+        section(ui, right_x, ry, &picked);
+        ry += label_h;
 
         match self.backend.mod_search() {
             ModSearch::Idle | ModSearch::Searching => {
@@ -1159,14 +1159,6 @@ impl MobileLauncher {
                 }
             }
             ModSearch::Done(list) => {
-                let row_h: f32 = if ultra_v {
-                    30.0
-                } else if compact_v {
-                    34.0
-                } else {
-                    44.0
-                };
-                let row_gap: f32 = 6.0;
                 let total_space = (bottom_limit - ry).max(0.0);
                 if total_space < row_h {
                     return;
@@ -1190,8 +1182,7 @@ impl MobileLauncher {
                     if ry + row_h > rows_limit + 0.5 {
                         break;
                     }
-                    let chosen = self.new_profile_mods.contains(&m.id);
-                    draw_button(
+                    draw_check_row(
                         ui,
                         hits,
                         ButtonId::ToggleNewProfileMod(i),
@@ -1199,17 +1190,9 @@ impl MobileLauncher {
                         ry,
                         right_w,
                         row_h,
-                        if chosen {
-                            Tone::Banner
-                        } else {
-                            Tone::Secondary
-                        },
-                        &format!(
-                            "{} {}  ({})",
-                            if chosen { "[x]" } else { "[ ]" },
-                            m.name,
-                            format_size(m.size)
-                        ),
+                        self.new_profile_mods.contains(&m.id),
+                        &m.name,
+                        &format_size(m.size),
                     );
                     ry += row_h + row_gap;
                 }

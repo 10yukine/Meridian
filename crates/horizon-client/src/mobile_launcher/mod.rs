@@ -183,6 +183,10 @@ pub struct MobileLauncher {
     new_profile_mods: Vec<String>,
     new_profile_mods_page: usize,
     new_profile_error: Option<String>,
+    /// The name field has the focus: only then does the keyboard show for it.
+    new_profile_name_focused: bool,
+    /// Where New Profile was opened from: Cancel and Create go back there.
+    new_profile_from: Route,
     // Mod manager state
     mods_profile_id: Option<String>,
     mods_list_page: usize,
@@ -239,6 +243,8 @@ impl MobileLauncher {
             new_profile_mods: Vec::new(),
             new_profile_mods_page: 0,
             new_profile_error: None,
+            new_profile_name_focused: false,
+            new_profile_from: Route::Home,
             mods_profile_id: None,
             mods_list_page: 0,
             mod_search_query: String::new(),
@@ -318,7 +324,7 @@ impl MobileLauncher {
             };
         }
         match self.route {
-            Route::NewProfile => Some(&mut self.new_profile_name),
+            Route::NewProfile if self.new_profile_name_focused => Some(&mut self.new_profile_name),
             Route::Mods if self.mod_search_focused => Some(&mut self.mod_search_query),
             _ => None,
         }
@@ -506,6 +512,10 @@ impl MobileLauncher {
             self.adding_account = false;
             self.auth_form = None;
         }
+        // Opening New Profile focuses its name; tapping anything else (a mod, a preset) doesn't
+        // keep the keyboard up.
+        self.new_profile_name_focused =
+            matches!(id, ButtonId::FocusNewProfileName | ButtonId::OpenNewProfile);
 
         match id {
             ButtonId::GoHome | ButtonId::SettingsBack => {
@@ -799,10 +809,17 @@ impl MobileLauncher {
                 if matches!(self.backend.mod_search(), ModSearch::Idle) {
                     self.backend.search_mods("");
                 }
+                if self.route != Route::NewProfile {
+                    self.new_profile_from = if self.route == Route::Mods {
+                        Route::Mods
+                    } else {
+                        Route::Home
+                    };
+                }
                 self.route = Route::NewProfile;
             }
             ButtonId::CancelNewProfile => {
-                self.route = Route::Home;
+                self.route = self.new_profile_from;
             }
             ButtonId::FocusNewProfileName => {}
             ButtonId::SelectPresetNone => {
@@ -838,6 +855,8 @@ impl MobileLauncher {
                 let name = self.new_profile_name.trim().to_owned();
                 if !valid_profile_name(&name) {
                     self.new_profile_error = Some("Enter 1 to 32 characters.".to_owned());
+                    // The keyboard comes back for the correction.
+                    self.new_profile_name_focused = true;
                     return None;
                 }
                 match self.backend.create_profile(
@@ -848,7 +867,12 @@ impl MobileLauncher {
                     Ok(id) => {
                         let _ = self.backend.select_profile(&id);
                         self.new_profile_error = None;
-                        self.route = Route::Home;
+                        self.route = self.new_profile_from;
+                        if self.route == Route::Mods {
+                            // The Mods tab shows the new profile, ready for its mods.
+                            self.mods_profile_id = Some(id);
+                            self.mods_list_page = 0;
+                        }
                         self.status_note = Some(format!("Created profile \"{name}\"."));
                     }
                     Err(err) => {
@@ -1094,7 +1118,18 @@ impl MobileLauncher {
         }
 
         // ---- Signed-in Shell: Left Sidebar (above top bar, under bottom bar) + Top Bar + Full-Width Bottom Dock ----
-        let bottom_h = if kb_h {
+        // While the keyboard is up for a field, the form gets the room above it: no rail, and no
+        // dock rising behind it with the account switcher.
+        // ponytail: "keyboard up" is the keyboard-lifted height (kb_h); a tablet's keyboard leaves
+        // more room and keeps the dock. Pass the keyboard's height from the host if that matters.
+        let typing = kb_h
+            && !self.profile_popup_open
+            && (self.rename_modal.is_some()
+                || self.route == Route::NewProfile && self.new_profile_name_focused
+                || self.route == Route::Mods && self.mod_search_focused);
+        let bottom_h = if typing {
+            0.0
+        } else if kb_h {
             46.0
         } else if ui_h < 380.0 {
             54.0
@@ -1103,7 +1138,9 @@ impl MobileLauncher {
         } else {
             68.0
         };
-        let rail_w = if kb_h {
+        let rail_w = if typing {
+            0.0
+        } else if kb_h {
             58.0
         } else if compact_w {
             64.0
@@ -1133,23 +1170,29 @@ impl MobileLauncher {
                 &setup,
                 &profiles,
             );
-            self.draw_rail(ui, chrome_hits, rail_w, rail_h, top_h, short_h);
+            if !typing {
+                self.draw_rail(ui, chrome_hits, rail_w, rail_h, top_h, short_h);
+            }
         }
-        let (prof_x, prof_w) = self.draw_bottom_bar(
-            ui,
-            &mut hits,
-            ui_w,
-            ui_h - bottom_h,
-            bottom_h,
-            pad,
-            compact_w,
-            &account,
-            &setup,
-            &profiles,
-            col_success,
-            col_warn,
-            col_danger,
-        );
+        let (prof_x, prof_w) = if typing {
+            (0.0, 0.0)
+        } else {
+            self.draw_bottom_bar(
+                ui,
+                &mut hits,
+                ui_w,
+                ui_h - bottom_h,
+                bottom_h,
+                pad,
+                compact_w,
+                &account,
+                &setup,
+                &profiles,
+                col_success,
+                col_warn,
+                col_danger,
+            )
+        };
 
         let v_margin = if kb_h {
             4.0
@@ -1550,19 +1593,25 @@ impl MobileLauncher {
         let max_item_h = ((avail_rail - gap * 3.0) * 0.25).floor().max(22.0);
         let item_h = (if short_h { 46.0_f32 } else { 52.0 }).min(max_item_h);
 
-        // Single clean nav stack: Home, Mods, Skins, Settings (right after Skins).
+        // Single clean nav stack: Home, Mods, Skins, Settings (right after Skins). New Profile
+        // belongs to the page it was opened from.
+        let page = if self.route == Route::NewProfile {
+            self.new_profile_from
+        } else {
+            self.route
+        };
         let nav_items = [
             (
                 ButtonId::GoHome,
                 RailIcon::Home,
                 "Home",
-                matches!(self.route, Route::Home | Route::Install | Route::NewProfile),
+                matches!(page, Route::Home | Route::Install),
             ),
             (
                 ButtonId::OpenMods,
                 RailIcon::Mods,
                 "Mods",
-                self.route == Route::Mods,
+                page == Route::Mods,
             ),
             (
                 ButtonId::OpenSkins,
@@ -1805,7 +1854,7 @@ impl MobileLauncher {
                     )
                 }
                 (_, Some(prof)) => profile_stats_line(prof),
-                _ => "0 mods  |  0 worlds  |  Base game".to_owned(),
+                _ => "...".to_owned(),
             };
 
             let tx = prof_x + 30.0;

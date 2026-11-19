@@ -107,8 +107,22 @@ impl MobileLauncher {
             let rem_h = (y + avail_h - cy).max(0.0);
             let center_x = x + w * 0.5;
             let badge_sz = if compact_v { 44.0 } else { 58.0 };
-            let block_h = if compact_v { 144.0 } else { 194.0 };
+            let sub = "Mods go in their own profiles, so Vanilla worlds stay untouched.";
+            let sub_max = (iw - 40.0).min(460.0);
+            let sub_lines: Vec<String> =
+                wrap_lines(ui.ro(), Face::Regular, ui_theme::small(), sub, sub_max)
+                    .into_iter()
+                    .take(2)
+                    .collect();
+            let cta_w = 216.0;
+            let cta_h = if compact_v { 38.0 } else { 44.0 };
+            let badge_gap = if compact_v { 10.0 } else { 18.0 };
+            let heading_h = if compact_v { 24.0 } else { 30.0 };
+            let text_h = badge_sz + badge_gap + heading_h + sub_lines.len() as f32 * 18.0;
+            let block_h = text_h + 14.0 + cta_h;
             let mut ey = cy + ((rem_h - block_h) * 0.5).max(4.0).round();
+            // The button follows the text (it ends inside the plate on every phone layout).
+            let cta_y = (ey + text_h + 14.0).min(y + avail_h - cta_h - 10.0);
 
             if let Some(p) = ui.paint() {
                 let bx = (center_x - badge_sz * 0.5).round();
@@ -151,7 +165,7 @@ impl MobileLauncher {
                     4.0,
                     palette::accent(),
                 );
-                ey += badge_sz + if compact_v { 10.0 } else { 18.0 };
+                ey += badge_sz + badge_gap;
 
                 let heading = "Vanilla plays without mods";
                 let h_sz = if compact_v { 17.0 } else { 19.0 };
@@ -165,16 +179,10 @@ impl MobileLauncher {
                     palette::text(),
                     heading,
                 );
-                ey += if compact_v { 24.0 } else { 30.0 };
+                ey += heading_h;
 
-                let sub = "Your main game folder keeps vanilla worlds untouched. Create a modded profile to add Horizon mods.";
-                let sub_max = (iw - 40.0).min(460.0);
-                for (li, line) in wrap_lines(p, Face::Regular, ui_theme::small(), sub, sub_max)
-                    .into_iter()
-                    .take(2)
-                    .enumerate()
-                {
-                    let lw = p.measure(Face::Regular, ui_theme::small(), &line);
+                for (li, line) in sub_lines.iter().enumerate() {
+                    let lw = p.measure(Face::Regular, ui_theme::small(), line);
                     p.text_line(
                         Face::Regular,
                         ui_theme::small(),
@@ -182,14 +190,10 @@ impl MobileLauncher {
                         (center_x - lw * 0.5).round(),
                         ey + li as f32 * 18.0,
                         palette::muted(),
-                        &line,
+                        line,
                     );
                 }
             }
-            let cta_w = 216.0;
-            let cta_h = if compact_v { 38.0 } else { 44.0 };
-            let cta_y = (cy + ((rem_h - block_h) * 0.5).max(4.0).round() + block_h - cta_h)
-                .min(y + avail_h - cta_h - 10.0);
             draw_button(
                 ui,
                 hits,

@@ -801,6 +801,53 @@ fn text_entry_screens_fit_above_phone_keyboard() {
 }
 
 #[test]
+fn new_profile_keeps_the_keyboard_for_its_name_and_returns_where_it_was_opened() {
+    let shows = |l: &MobileLauncher, size: [u32; 2], id: ButtonId| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui)).iter().any(|h| h.id == id)
+        })
+    };
+    // 914x213: the A32 with its keyboard up.
+    let (phone, keyboard) = ([914, 411], [914, 213]);
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    click_button(&mut l, phone, ButtonId::OpenMods);
+    click_button(&mut l, phone, ButtonId::OpenNewProfile);
+    assert!(l.wants_text(), "opening New Profile focuses its name");
+    // Typing the name: the form has the room above the keyboard, no dock rising behind it.
+    assert!(!shows(&l, keyboard, ButtonId::OpenAccountSwitcher));
+    assert!(shows(&l, keyboard, ButtonId::CreateProfile));
+
+    // Picking a mod puts the keyboard away (it used to bring it back on every tap).
+    click_button(&mut l, phone, ButtonId::ToggleNewProfileMod(0));
+    assert!(!l.wants_text());
+    assert_eq!(l.new_profile_mods, ["faster-chunks"]);
+    assert!(shows(&l, phone, ButtonId::OpenAccountSwitcher));
+    click_button(&mut l, phone, ButtonId::FocusNewProfileName);
+    assert!(l.wants_text());
+
+    // Opened from Mods: Cancel goes back to Mods, and Create shows the new profile there.
+    click_button(&mut l, phone, ButtonId::CancelNewProfile);
+    assert_eq!(l.route, Route::Mods);
+    click_button(&mut l, phone, ButtonId::OpenNewProfile);
+    l.typed("Pack");
+    click_button(&mut l, phone, ButtonId::CreateProfile);
+    assert_eq!(l.route, Route::Mods);
+    assert_eq!(l.mods_profile_id.as_deref(), Some("pack"));
+    // From Home, back to Home.
+    click_button(&mut l, phone, ButtonId::GoHome);
+    click_button(&mut l, phone, ButtonId::OpenNewProfile);
+    click_button(&mut l, phone, ButtonId::CancelNewProfile);
+    assert_eq!(l.route, Route::Home);
+}
+
+#[test]
 fn rail_places_settings_right_after_skins() {
     let launcher = MobileLauncher::new(Box::new(StubBackend {
         accounts: vec![Account::Offline {

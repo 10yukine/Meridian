@@ -611,6 +611,67 @@ pub(super) fn draw_input_box(
     hits.push(hit);
 }
 
+/// A row that toggles: a checkbox, the name left-aligned beside it, and `detail` (a size)
+/// right-aligned and muted.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_check_row(
+    ui: &mut Canvas<'_, '_>,
+    hits: &mut Vec<HitRect>,
+    id: ButtonId,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    checked: bool,
+    name: &str,
+    detail: &str,
+) {
+    hits.push(HitRect { id, x, y, w, h });
+    let Some(p) = ui.paint() else { return };
+    let (plate, edge) = if checked {
+        (
+            color::with_alpha(palette::accent(), 0.16),
+            color::with_alpha(palette::accent_star(), 0.6),
+        )
+    } else {
+        (palette::surface(), palette::border())
+    };
+    p.rounded(x, y, w, h, 8.0, plate);
+    p.border(x, y, w, h, 8.0, edge);
+    let bs = (h * 0.5).clamp(14.0, 20.0);
+    let (bx, by) = (x + 12.0, (y + (h - bs) * 0.5).round());
+    if checked {
+        p.rounded(bx, by, bs, bs, 4.0, palette::accent_fill());
+        let t = (bs * 0.13).max(1.8);
+        let mid = [bx + bs * 0.42, by + bs * 0.70];
+        stroke(p, [bx + bs * 0.22, by + bs * 0.50], mid, t, palette::text());
+        stroke(p, mid, [bx + bs * 0.78, by + bs * 0.30], t, palette::text());
+    } else {
+        p.border(bx, by, bs, bs, 4.0, palette::muted());
+    }
+    let size = ui_theme::small();
+    let dw = p.measure(Face::Mono, size, detail);
+    let dx = x + w - 12.0 - dw;
+    p.text_line(Face::Mono, size, h, dx, y, palette::muted(), detail);
+    let nx = bx + bs + 10.0;
+    let fit = truncate_to_fit(
+        p,
+        Face::Medium,
+        ui_theme::body(),
+        name,
+        (dx - 12.0 - nx).max(0.0),
+    );
+    p.text_line(
+        Face::Medium,
+        ui_theme::body(),
+        h,
+        nx,
+        y,
+        palette::text(),
+        &fit,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_button(
     ui: &mut Canvas<'_, '_>,
