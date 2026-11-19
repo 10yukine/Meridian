@@ -69,6 +69,9 @@ fn android_main(app: AndroidApp) {
     unsafe {
         std::env::set_var("HORIZON_HOME", &home);
         std::env::set_var("TMPDIR", &tmp);
+        // The driver's compiled pipelines, kept for the next process (the vendored wgpu-hal's
+        // disk cache): each switch between launcher and game skips compiling them again.
+        std::env::set_var("HORIZON_VK_PIPELINE_CACHE", home.join("vk-pipeline-cache.bin"));
     }
     if horizon_client::ANDROID_APP.set(app).is_err() {
         // winit makes one event loop per process; a fresh process gets a fresh one.

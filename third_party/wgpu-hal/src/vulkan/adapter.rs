@@ -2902,6 +2902,10 @@ impl super::Adapter {
                 .map_err(super::map_host_device_oom_err)?
         };
 
+        // Meridian's patch: the pipeline cache kept on disk, when asked for.
+        let disk_cache =
+            super::disk_cache::open(&raw_device, &self.phd_capabilities.properties);
+
         let shared = Arc::new(super::DeviceShared {
             raw: raw_device,
             family_index,
@@ -2935,6 +2939,7 @@ impl super::Adapter {
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
             empty_descriptor_set_layout,
+            disk_cache,
         });
 
         let relay_semaphores = super::RelaySemaphores::new(&shared)?;

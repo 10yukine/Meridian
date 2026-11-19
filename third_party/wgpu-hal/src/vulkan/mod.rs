@@ -29,6 +29,7 @@ mod command;
 pub mod conv;
 mod descriptor;
 mod device;
+mod disk_cache;
 mod drm;
 mod instance;
 mod sampler;
@@ -531,13 +532,36 @@ struct DeviceShared {
 
     empty_descriptor_set_layout: vk::DescriptorSetLayout,
 
+    /// Meridian's patch: the pipeline cache kept on disk (`disk_cache`), when asked for.
+    disk_cache: Option<disk_cache::DiskCache>,
+
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
     drop_guard: Option<crate::DropGuard>,
 }
 
+impl DeviceShared {
+    /// Meridian's patch: the cache for a pipeline that brings none of its own.
+    fn fallback_pipeline_cache(&self) -> vk::PipelineCache {
+        self.disk_cache
+            .as_ref()
+            .map_or(vk::PipelineCache::null(), disk_cache::DiskCache::raw)
+    }
+
+    /// Meridian's patch: a pipeline was made with the fallback cache.
+    fn fallback_pipeline_made(&self) {
+        if let Some(cache) = &self.disk_cache {
+            cache.made();
+        }
+    }
+}
+
 impl Drop for DeviceShared {
     fn drop(&mut self) {
+        if let Some(cache) = &self.disk_cache {
+            // SAFETY: the device is still valid, and no pipeline is being made as it ends.
+            unsafe { cache.close() };
+        }
         for &raw in self.render_passes.lock().values() {
             unsafe { self.raw.destroy_render_pass(raw, None) };
         }

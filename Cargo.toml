@@ -110,6 +110,9 @@ large_enum_variant = "allow"
 # one on the GPU while the compositor held it (screen capture running, KDE Wayland)
 # hung the GPU until the kernel's Xid 109 timeout lost the device.
 # Drop this and the folder once a wgpu release has these fixes.
+# Meridian's own change, which stays: the Vulkan device keeps a pipeline cache on disk when
+# HORIZON_VK_PIPELINE_CACHE names a file (src/vulkan/disk_cache.rs), so each process on a phone
+# skips the driver's pipeline compiles (meridian-android sets it).
 [patch.crates-io]
 wgpu-hal = { path = "third_party/wgpu-hal" }
 # winit 0.30.13 with Starling's Android input hook (`winit::platform::android::set_input_hook`): its

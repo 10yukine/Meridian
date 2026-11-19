@@ -2161,10 +2161,11 @@ impl crate::Device for super::Device {
                 .render_pass(raw_pass)
         }];
 
+        // Meridian's patch: none given, the device's disk cache.
         let pipeline_cache = desc
             .cache
             .map(|it| it.raw)
-            .unwrap_or(vk::PipelineCache::null());
+            .unwrap_or_else(|| self.shared.fallback_pipeline_cache());
 
         let mut raw_vec = {
             profiling::scope!("vkCreateGraphicsPipelines");
@@ -2175,6 +2176,9 @@ impl crate::Device for super::Device {
                     .map_err(|(_, e)| super::map_pipeline_err(e))
             }?
         };
+        if desc.cache.is_none() {
+            self.shared.fallback_pipeline_made();
+        }
 
         let raw = raw_vec.pop().unwrap();
         if let Some(label) = desc.label {
@@ -2244,10 +2248,11 @@ impl crate::Device for super::Device {
                 .stage(compiled.create_info)
         }];
 
+        // Meridian's patch: none given, the device's disk cache.
         let pipeline_cache = desc
             .cache
             .map(|it| it.raw)
-            .unwrap_or(vk::PipelineCache::null());
+            .unwrap_or_else(|| self.shared.fallback_pipeline_cache());
 
         let mut raw_vec = {
             profiling::scope!("vkCreateComputePipelines");
@@ -2258,6 +2263,9 @@ impl crate::Device for super::Device {
                     .map_err(|(_, e)| super::map_pipeline_err(e))
             }?
         };
+        if desc.cache.is_none() {
+            self.shared.fallback_pipeline_made();
+        }
 
         let raw = raw_vec.pop().unwrap();
         if let Some(label) = desc.label {

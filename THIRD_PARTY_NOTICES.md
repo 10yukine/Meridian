@@ -92,7 +92,8 @@ where WebGL2's minimum 16 was reported before), so a pipeline layout the driver 
 not refused. Its GL backend copies depth and stencil textures with a framebuffer blit, where
 `glCopyTexSubImage` read only colour and left the copy empty. Its DirectX 12 backend leaves out
 an adapter that offers neither `IDXGIAdapter4` nor `IDXGIAdapter3`, where an `unwrap` ended the
-program. It is licensed under MIT or
+program. Meridian changed its Vulkan backend too: with `HORIZON_VK_PIPELINE_CACHE` set, the
+device keeps a pipeline cache in that file (`src/vulkan/disk_cache.rs`). It is licensed under MIT or
 Apache-2.0; both licenses are in that folder
 (`LICENSE.MIT`, `LICENSE.APACHE`).
 
