@@ -1,4 +1,4 @@
-use crate::{Account, account, ely};
+use crate::{Account, account, ely, valid_offline_name};
 use std::{
     fs,
     io::{self, Write},
@@ -84,19 +84,33 @@ impl Shelf {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(error) => return Err(error),
         };
-        match serde_json::from_reader(file).map_err(io::Error::other)? {
-            Stored::Shelf(shelf) if shelf.active.is_none_or(|i| i < shelf.entries.len()) => {
-                Ok(shelf)
-            }
-            Stored::Legacy(entry) => Ok(Self {
+        let mut shelf = match serde_json::from_reader(file).map_err(io::Error::other)? {
+            Stored::Shelf(shelf) if shelf.active.is_none_or(|i| i < shelf.entries.len()) => shelf,
+            Stored::Legacy(entry) => Self {
                 entries: vec![entry],
                 active: Some(0),
-            }),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid active account",
-            )),
-        }
+            },
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid active account",
+                ));
+            }
+        };
+        let old_active = shelf.active.take();
+        let (mut index, mut kept) = (0, 0);
+        shelf.entries.retain(|entry| {
+            let valid = !matches!(entry, Remembered::Offline { name } if !valid_offline_name(name));
+            if valid {
+                if old_active == Some(index) {
+                    shelf.active = Some(kept);
+                }
+                kept += 1;
+            }
+            index += 1;
+            valid
+        });
+        Ok(shelf)
     }
 
     pub(super) fn save(&self, path: &Path) -> io::Result<()> {
@@ -161,6 +175,39 @@ mod tests {
                 name: "OldPlayer".into()
             }
         );
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn discards_invalid_offline_names_and_preserves_the_selection() {
+        let mut nonce = [0; 8];
+        getrandom::fill(&mut nonce).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "meridian-invalid-account-{:016x}.json",
+            u64::from_ne_bytes(nonce)
+        ));
+        fs::write(&path, br#"{"provider":"offline","name":"bad name"}"#).unwrap();
+        let shelf = Shelf::load(&path).unwrap();
+        assert!(shelf.entries.is_empty());
+        assert_eq!(shelf.active, None);
+
+        for (old_active, new_active) in [(0, None), (1, Some(0))] {
+            let shelf = Shelf {
+                entries: vec![
+                    Remembered::Offline {
+                        name: "bad name".into(),
+                    },
+                    Remembered::Offline {
+                        name: "GoodName".into(),
+                    },
+                ],
+                active: Some(old_active),
+            };
+            shelf.save(&path).unwrap();
+            let shelf = Shelf::load(&path).unwrap();
+            assert_eq!(shelf.entries.len(), 1);
+            assert_eq!(shelf.active, new_active);
+        }
         remove(&path).unwrap();
     }
 }

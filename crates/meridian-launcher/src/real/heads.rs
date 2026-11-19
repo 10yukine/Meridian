@@ -1,37 +1,72 @@
 use super::*;
 use std::io::Cursor;
 
+const RETRY_DELAY: Duration = Duration::from_secs(30);
+
+enum Status {
+    Loading,
+    Ready(Head),
+    RetryAt(Instant),
+}
+
+struct Entry {
+    player: Account,
+    url: String,
+    status: Arc<Mutex<Status>>,
+}
+
 #[derive(Default)]
-pub(super) struct Cache(Arc<Mutex<Vec<(Account, String, Option<Head>)>>>);
+pub(super) struct Cache(Mutex<Vec<Entry>>);
 
 impl Cache {
     pub(super) fn get(&self, player: &Account, url: String) -> Option<Head> {
         let mut entries = self.0.lock().unwrap();
-        if let Some((_, _, face)) = entries.iter().find(|(p, u, _)| p == player && u == &url) {
-            return *face;
+        let entry = match entries.iter_mut().find(|entry| &entry.player == player) {
+            Some(entry) => entry,
+            None => {
+                entries.push(Entry {
+                    player: player.clone(),
+                    url: url.clone(),
+                    status: Arc::new(Mutex::new(Status::RetryAt(Instant::now()))),
+                });
+                entries.last_mut().unwrap()
+            }
+        };
+        if entry.url != url {
+            entry.url = url.clone();
+            entry.status = Arc::new(Mutex::new(Status::RetryAt(Instant::now())));
         }
-        entries.retain(|(p, _, _)| p != player);
-        entries.push((player.clone(), url.clone(), None));
-        let player = player.clone();
-        let cache = self.0.clone();
-        let _ = std::thread::Builder::new()
+        let mut status = entry.status.lock().unwrap();
+        match *status {
+            Status::Ready(face) => return Some(face),
+            Status::Loading => return None,
+            Status::RetryAt(at) if Instant::now() < at => return None,
+            Status::RetryAt(_) => {}
+        }
+
+        *status = Status::Loading;
+        let worker_status = entry.status.clone();
+        if std::thread::Builder::new()
             .name("launcher-head".into())
             .spawn(move || {
-                let face = load(&url);
-                if let Some(entry) = cache
-                    .lock()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|(p, u, _)| p == &player && u == &url)
-                {
-                    entry.2 = face;
-                }
-            });
+                let result = load(&url);
+                *worker_status.lock().unwrap() = result.map_or_else(
+                    || Status::RetryAt(Instant::now() + RETRY_DELAY),
+                    Status::Ready,
+                );
+            })
+            .is_err()
+        {
+            *status = Status::RetryAt(Instant::now() + RETRY_DELAY);
+        }
         None
     }
 
     pub(super) fn remove(&self, player: &Account) {
-        self.0.lock().unwrap().retain(|(p, _, _)| p != player);
+        self.0
+            .lock()
+            .unwrap()
+            .retain(|entry| &entry.player != player);
     }
 }
 
@@ -114,6 +149,33 @@ fn face(png: &[u8]) -> Option<Head> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waits_before_retrying_a_failed_head() {
+        let player = Account::Offline {
+            name: "Test".into(),
+        };
+        let cache = Cache::default();
+        let url = "invalid-url".to_owned();
+        let future = Instant::now() + RETRY_DELAY;
+        let status = Arc::new(Mutex::new(Status::RetryAt(future)));
+        cache.0.lock().unwrap().push(Entry {
+            player: player.clone(),
+            url: url.clone(),
+            status: status.clone(),
+        });
+
+        assert!(cache.get(&player, url.clone()).is_none());
+        let next = || match *status.lock().unwrap() {
+            Status::RetryAt(at) => Some(at),
+            _ => None,
+        };
+        assert_eq!(next(), Some(future));
+        let due = Instant::now();
+        *status.lock().unwrap() = Status::RetryAt(due);
+        assert!(cache.get(&player, url).is_none());
+        assert_ne!(next(), Some(due));
+    }
 
     #[test]
     fn composites_alpha_from_the_hat_layer() {
