@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering::Relaxed},
+        atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
     },
 };
 
@@ -20,6 +20,8 @@ const LOCK: &str = include_str!("../../../research-lock.json");
 const EXPORTER_SOURCES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/exporters.rs"));
 const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
 const DOWNLOAD_JOBS: usize = 16;
+/// [`Real::reclaimable`] while the install cache is being measured.
+const MEASURING: u64 = u64::MAX;
 
 enum Session {
     Microsoft(account::Account, account::Secrets),
@@ -97,6 +99,8 @@ pub struct Real {
     setup: Arc<Mutex<Setup>>,
     setup_cancel: Arc<AtomicBool>,
     base_ready: Arc<AtomicBool>,
+    /// The install cache's bytes ([`launch::install_cache_size`]), or [`MEASURING`].
+    reclaimable: Arc<AtomicU64>,
     heads: heads::Cache,
     profiles: profiles::Store,
 }
@@ -124,9 +128,13 @@ impl Real {
             setup: Arc::new(Mutex::new(if ready { Setup::Ready } else { Setup::Needed })),
             setup_cancel: Arc::default(),
             base_ready: Arc::new(AtomicBool::new(ready)),
+            reclaimable: Arc::new(AtomicU64::new(if ready { MEASURING } else { 0 })),
             heads: heads::Cache::default(),
             profiles,
         };
+        if ready {
+            measure_install_cache(&backend.root, &backend.reclaimable);
+        }
         let Some(path) = backend.account_file.as_deref() else {
             return backend;
         };
@@ -444,6 +452,7 @@ impl Backend for Real {
         let id = id.to_owned();
         let task_id = id.clone();
         let base_ready = self.base_ready.clone();
+        let reclaimable = self.reclaimable.clone();
         stage(&setup, Stage::Check, None);
         let worker = std::thread::Builder::new()
             .name("launcher-setup".into())
@@ -452,6 +461,8 @@ impl Backend for Real {
                     if !base_ready.load(Relaxed) {
                         prepare(&root, &setup, &cancel)?;
                         base_ready.store(true, Relaxed);
+                        // Installing filled the cache again.
+                        reclaimable.store(launch::install_cache_size(&root), Relaxed);
                     }
                     if let Some(entry) = entry {
                         profiles.install(entry, &setup, &cancel, profiles::read_index)?;
@@ -490,6 +501,35 @@ impl Backend for Real {
 
     fn cancel_setup(&mut self) {
         self.setup_cancel.store(true, Relaxed);
+    }
+
+    fn reclaimable(&self) -> Option<u64> {
+        Some(self.reclaimable.load(Relaxed)).filter(|&bytes| bytes != MEASURING)
+    }
+
+    fn free_space(&mut self) -> Result<u64, String> {
+        // Setup and profile installs share this state: nothing is installing while it's Ready.
+        if !matches!(self.setup(), Setup::Ready) {
+            return Err("Wait until installing is done.".into());
+        }
+        let bytes = self
+            .reclaimable()
+            .ok_or("Still measuring. Try again in a moment.")?;
+        launch::free_install_cache(&self.root).map_err(|e| format!("Not freed: {e}"))?;
+        self.reclaimable.store(0, Relaxed);
+        Ok(bytes)
+    }
+}
+
+/// Measures the install cache on a worker: it walks thousands of files.
+fn measure_install_cache(root: &Path, into: &Arc<AtomicU64>) {
+    let (root, measured) = (root.to_owned(), into.clone());
+    let worker = std::thread::Builder::new()
+        .name("launcher-measure".into())
+        .spawn(move || measured.store(launch::install_cache_size(&root), Relaxed));
+    if worker.is_err() {
+        // Nothing offered rather than "measuring" forever.
+        into.store(0, Relaxed);
     }
 }
 

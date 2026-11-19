@@ -291,6 +291,67 @@ impl MobileLauncher {
         );
         cy += row_step;
 
+        // Free up space: what only installing uses, offered once the game is installed and the
+        // cache measured; after freeing, the row says what happened.
+        let reclaim = self.backend.reclaimable().filter(|&bytes| bytes > 0);
+        let offer = matches!(setup, Setup::Ready).then_some(reclaim).flatten();
+        if !onboarding
+            && (offer.is_some() || self.freed.is_some())
+            && cy + row_h <= cy_top + card_h - 6.0
+        {
+            let (hint, hint_col) = match (&self.freed, offer) {
+                (Some(Err(err)), _) => (err.clone(), col_danger),
+                (Some(Ok(bytes)), None) => (format!("Freed {}", format_size(*bytes)), col_success),
+                _ => (
+                    "Download cache & Java, only used to install".to_owned(),
+                    palette::muted(),
+                ),
+            };
+            let btn_w = font_btn_w;
+            if let Some(p) = ui.paint() {
+                p.rounded(inner_x, cy, inner_w, row_h, 8.0, palette::surface());
+                p.text_line(
+                    Face::Medium,
+                    ui_theme::sizes().ui,
+                    row_h,
+                    inner_x + 14.0,
+                    cy,
+                    palette::text(),
+                    "Free Up Space",
+                );
+                let label_w = p.measure(Face::Medium, ui_theme::sizes().ui, "Free Up Space");
+                let right =
+                    inner_x + inner_w - 8.0 - if offer.is_some() { btn_w + 14.0 } else { 6.0 };
+                let room = right - (inner_x + 14.0 + label_w + 16.0);
+                let fit =
+                    truncate_to_fit(p, Face::Regular, ui_theme::small(), &hint, room.max(0.0));
+                let hw = p.measure(Face::Regular, ui_theme::small(), &fit);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    row_h,
+                    right - hw,
+                    cy,
+                    hint_col,
+                    &fit,
+                );
+            }
+            if let Some(bytes) = offer {
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::FreeSpace,
+                    inner_x + inner_w - 8.0 - btn_w,
+                    cy + ((row_h - font_btn_h) * 0.5).round(),
+                    btn_w,
+                    font_btn_h,
+                    Tone::Secondary,
+                    &format!("Free {}", format_size(bytes)),
+                );
+            }
+            cy += row_step;
+        }
+
         let total_profile_bytes: u64 = profiles.iter().map(|p| p.size).sum();
         let rows = [
             (
@@ -367,5 +428,80 @@ impl MobileLauncher {
             }
             cy += row_step;
         }
+    }
+    /// "Free up space?": what goes, what stays, and what it costs later.
+    pub(super) fn draw_free_space_confirm(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        x: f32,
+        y: f32,
+        w: f32,
+        avail_h: f32,
+    ) {
+        let size = format_size(self.backend.reclaimable().unwrap_or(0));
+        let compact_v = avail_h < 280.0;
+        let card_h = 264.0_f32.min(avail_h);
+        let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
+        draw_plate(ui, x, cy_top, w, card_h, palette::border());
+        let inner_x = x + 24.0;
+        let inner_w = w - 48.0;
+        let btn_h = if compact_v { 40.0 } else { 46.0 };
+        let btn_y = cy_top + card_h - btn_h - if compact_v { 10.0 } else { 16.0 };
+        if let Some(p) = ui.paint() {
+            let mut cy = cy_top + if compact_v { 12.0 } else { 20.0 };
+            p.text_line(
+                Face::SemiBold,
+                if compact_v { 19.0 } else { 22.0 },
+                if compact_v { 26.0 } else { 32.0 },
+                inner_x,
+                cy,
+                palette::text(),
+                &format!("Free up {size}?"),
+            );
+            cy += if compact_v { 30.0 } else { 40.0 };
+            let body = format!(
+                "Removes Minecraft's download cache and Java, which only installing uses. Your worlds, profiles, settings and the game stay, and you can keep playing. A game update or repair downloads them again (up to {size})."
+            );
+            let lines = ((btn_y - 8.0 - cy) / 20.0).floor().max(0.0) as usize;
+            for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, &body, inner_w)
+                .into_iter()
+                .take(lines)
+                .enumerate()
+            {
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::sizes().ui,
+                    20.0,
+                    inner_x,
+                    cy + i as f32 * 20.0,
+                    palette::body(),
+                    &line,
+                );
+            }
+        }
+        let half_w = (inner_w - 12.0) * 0.5;
+        draw_button(
+            ui,
+            hits,
+            ButtonId::CancelFreeSpace,
+            inner_x,
+            btn_y,
+            half_w,
+            btn_h,
+            Tone::Secondary,
+            "Keep Files",
+        );
+        draw_button(
+            ui,
+            hits,
+            ButtonId::ConfirmFreeSpace,
+            inner_x + half_w + 12.0,
+            btn_y,
+            half_w,
+            btn_h,
+            Tone::Primary,
+            &format!("Free Up {size}"),
+        );
     }
 }

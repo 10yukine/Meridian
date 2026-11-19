@@ -201,6 +201,17 @@ pub trait Backend: Send {
     /// Starts setup, or retries it after a failure.
     fn start_setup(&mut self);
     fn cancel_setup(&mut self);
+    /// The bytes [`Self::free_space`] would free: what only installing the game uses (Mojang's
+    /// downloads and the Java that prepares them), which playing never reads. `None` while it
+    /// is being measured.
+    fn reclaimable(&self) -> Option<u64> {
+        Some(0)
+    }
+    /// Removes those files, the game installed; the bytes freed. Worlds, profiles, settings and
+    /// the game stay; repairing or updating the game downloads them again.
+    fn free_space(&mut self) -> Result<u64, String> {
+        Err("There is nothing to free up.".into())
+    }
     /// Every profile, installed or offered: [`VANILLA`] first, then the modpacks.
     fn profiles(&self) -> Vec<Profile> {
         vec![Profile {

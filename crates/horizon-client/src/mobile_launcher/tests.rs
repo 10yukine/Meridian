@@ -16,6 +16,8 @@ struct StubBackend {
     selected_profile: String,
     mods: Vec<ProfileMod>,
     search: ModSearch,
+    /// The install cache [`Backend::free_space`] frees.
+    reclaim: u64,
 }
 
 impl Default for StubBackend {
@@ -61,6 +63,7 @@ impl Default for StubBackend {
                     size: 300_000,
                 },
             ]),
+            reclaim: 0,
         }
     }
 }
@@ -151,6 +154,12 @@ impl Backend for StubBackend {
     }
     fn cancel_setup(&mut self) {
         self.setup = Setup::Needed;
+    }
+    fn reclaimable(&self) -> Option<u64> {
+        Some(self.reclaim)
+    }
+    fn free_space(&mut self) -> Result<u64, String> {
+        Ok(std::mem::take(&mut self.reclaim))
     }
     fn profiles(&self) -> Vec<Profile> {
         self.profiles.clone()
@@ -845,6 +854,52 @@ fn new_profile_keeps_the_keyboard_for_its_name_and_returns_where_it_was_opened()
     click_button(&mut l, phone, ButtonId::OpenNewProfile);
     click_button(&mut l, phone, ButtonId::CancelNewProfile);
     assert_eq!(l.route, Route::Home);
+}
+
+#[test]
+fn settings_frees_the_install_cache_only_when_asked_and_installed() {
+    let shows = |l: &MobileLauncher, size: [u32; 2], id: ButtonId| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui)).iter().any(|h| h.id == id)
+        })
+    };
+    let signed_in = |setup: Setup, reclaim: u64| {
+        MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup,
+            reclaim,
+            ..StubBackend::default()
+        }))
+    };
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        // Nothing to free, or still installing: no offer.
+        let mut none = signed_in(Setup::Ready, 0);
+        click_button(&mut none, size, ButtonId::OpenSettings);
+        assert!(!shows(&none, size, ButtonId::FreeSpace), "{size:?}");
+        let mut busy = signed_in(Setup::Needed, 800_000_000);
+        click_button(&mut busy, size, ButtonId::OpenSettings);
+        assert!(!shows(&busy, size, ButtonId::FreeSpace), "{size:?}");
+
+        let mut l = signed_in(Setup::Ready, 800_000_000);
+        click_button(&mut l, size, ButtonId::OpenSettings);
+        assert_hits_fit_without_overlap(&l, size, "settings-free-space");
+        // It asks first; any other tap is a no.
+        click_button(&mut l, size, ButtonId::FreeSpace);
+        assert!(shows(&l, size, ButtonId::ConfirmFreeSpace), "{size:?}");
+        assert_hits_fit_without_overlap(&l, size, "free-space-confirm");
+        click_button(&mut l, size, ButtonId::CancelFreeSpace);
+        assert!(!shows(&l, size, ButtonId::ConfirmFreeSpace));
+        assert_eq!(l.backend().reclaimable(), Some(800_000_000));
+        click_button(&mut l, size, ButtonId::FreeSpace);
+        click_button(&mut l, size, ButtonId::ConfirmFreeSpace);
+        assert_eq!(l.backend().reclaimable(), Some(0));
+        assert_eq!(l.freed, Some(Ok(800_000_000)));
+        assert!(!shows(&l, size, ButtonId::FreeSpace), "{size:?}");
+        assert_eq!(l.route, Route::Settings);
+    }
 }
 
 #[test]

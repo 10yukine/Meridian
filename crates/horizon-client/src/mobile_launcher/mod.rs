@@ -151,6 +151,10 @@ enum ButtonId {
     // Settings
     SettingsBack,
     ToggleLauncherFont,
+    /// Settings: free the install cache (asks first).
+    FreeSpace,
+    ConfirmFreeSpace,
+    CancelFreeSpace,
 }
 
 /// Interactive Meridian launcher backed by [`Backend`].
@@ -196,6 +200,9 @@ pub struct MobileLauncher {
     mods_error: Option<String>,
     // Modals
     confirm_remove_profile: Option<(String, String, usize)>,
+    confirm_free_space: bool,
+    /// What Settings' "Free up space" did: the bytes freed, or why not.
+    freed: Option<Result<u64, String>>,
     rename_modal: Option<(String, String, Option<String>)>,
 }
 
@@ -252,6 +259,8 @@ impl MobileLauncher {
             mod_registry_page: 0,
             mods_error: None,
             confirm_remove_profile: None,
+            confirm_free_space: false,
+            freed: None,
             rename_modal: None,
         }
     }
@@ -516,6 +525,8 @@ impl MobileLauncher {
         // keep the keyboard up.
         self.new_profile_name_focused =
             matches!(id, ButtonId::FocusNewProfileName | ButtonId::OpenNewProfile);
+        // Any other tap answers "Free up space?" with no.
+        self.confirm_free_space = matches!(id, ButtonId::FreeSpace | ButtonId::ConfirmFreeSpace);
 
         match id {
             ButtonId::GoHome | ButtonId::SettingsBack => {
@@ -537,6 +548,11 @@ impl MobileLauncher {
             }
             ButtonId::CloseProfilePopup => {
                 self.profile_popup_open = false;
+            }
+            ButtonId::FreeSpace | ButtonId::CancelFreeSpace => {}
+            ButtonId::ConfirmFreeSpace => {
+                self.confirm_free_space = false;
+                self.freed = Some(self.backend.free_space());
             }
             ButtonId::ToggleLauncherFont => {
                 let next = !ui_theme::pixel_font();
@@ -1214,6 +1230,10 @@ impl MobileLauncher {
             &mut hits
         };
 
+        if self.confirm_free_space {
+            self.draw_free_space_confirm(ui, top_hits, modal_x, main_y, modal_w, main_h);
+            return hits;
+        }
         if let Some((ref id, ref name, worlds)) = self.confirm_remove_profile {
             self.draw_remove_confirm(
                 ui, top_hits, modal_x, main_y, modal_w, main_h, id, name, worlds, col_danger,

@@ -826,7 +826,7 @@ pub(crate) fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
-fn folder_bytes(dir: &Path) -> u64 {
+pub(crate) fn folder_bytes(dir: &Path) -> u64 {
     fs::read_dir(dir)
         .into_iter()
         .flatten()

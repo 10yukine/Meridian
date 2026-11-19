@@ -38,6 +38,8 @@ pub fn resources_dir(root: &Path) -> PathBuf {
 pub fn drop_prepare_scratch(root: &Path) {
     let local = root.join(".local");
     let mut scratch = vec![local.join("datagen")];
+    // What a [`free_install_cache`] cut short (the app closed) left to delete.
+    scratch.extend(install_cache(root).map(|dir| dir.with_extension(FREEING)));
     if let Ok(versions) = fs::read_dir(local.join("minecraft")) {
         for version in versions.flatten() {
             scratch.extend(["jars", "libraries"].map(|dir| version.path().join(dir)));
@@ -50,6 +52,52 @@ pub fn drop_prepare_scratch(root: &Path) {
             eprintln!("Meridian: {} not removed: {e}", dir.display());
         }
     }
+}
+
+const FREEING: &str = "freeing";
+
+/// What only installing the game uses and playing never reads: Mojang's downloads (every
+/// version's) and the Java that prepares them. Installing or repairing the game downloads them
+/// again; the prepared resources, worlds, profiles and settings are elsewhere.
+fn install_cache(root: &Path) -> [PathBuf; 2] {
+    let local = root.join(".local");
+    [local.join("launcher-downloads"), local.join("java25")]
+}
+
+/// The bytes [`free_install_cache`] would free. Walks thousands of files: call off the UI thread.
+pub fn install_cache_size(root: &Path) -> u64 {
+    install_cache(root)
+        .iter()
+        .map(|dir| crate::real::profiles::folder_bytes(dir))
+        .sum()
+}
+
+/// Frees the install cache: moves it aside at once and deletes it on a worker, so the screen
+/// doesn't wait. Call only while nothing installs. A deletion cut short finishes at the next
+/// [`drop_prepare_scratch`].
+pub fn free_install_cache(root: &Path) -> io::Result<()> {
+    let mut aside = Vec::new();
+    for dir in install_cache(root) {
+        let to = dir.with_extension(FREEING);
+        if let Err(e) = fs::remove_dir_all(&to)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            return Err(e);
+        }
+        match fs::rename(&dir, &to) {
+            Ok(()) => aside.push(to),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    std::thread::spawn(move || {
+        for dir in aside {
+            if let Err(e) = fs::remove_dir_all(&dir) {
+                eprintln!("Meridian: {} not removed: {e}", dir.display());
+            }
+        }
+    });
+    Ok(())
 }
 
 /// Writes the hand-off for the next process: the session first, then the file that names it.
@@ -217,6 +265,61 @@ mod tests {
         for path in kept {
             assert!(root.join(path).is_file(), "{path}");
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn freeing_space_takes_the_install_cache_and_nothing_the_game_plays_with() {
+        let root = scratch();
+        let file = |path: &str, bytes: usize| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, vec![0; bytes]).unwrap();
+        };
+        let cache = [
+            ".local/launcher-downloads/assets/objects/ab/abcd",
+            ".local/launcher-downloads/versions/26.3/26.3.jar",
+            ".local/java25/lib/modules",
+        ];
+        let kept = [
+            ".local/horizon-client/26.3/horizon-resources.json",
+            ".local/horizon-client/26.3/horizon-data.bin",
+            ".local/minecraft/26.3/prepared.json",
+            "saves/New World/level.dat",
+            "profiles/modded/mods/a.horizon",
+            "launcher-account.json",
+            "options.txt",
+        ];
+        cache.iter().for_each(|path| file(path, 1000));
+        kept.iter().for_each(|path| file(path, 7));
+        assert_eq!(install_cache_size(&root), 3000);
+
+        free_install_cache(&root).unwrap();
+        assert_eq!(install_cache_size(&root), 0);
+        for path in cache {
+            assert!(!root.join(path).exists(), "{path}");
+        }
+        for path in kept {
+            assert!(root.join(path).is_file(), "{path}");
+        }
+        // The worker deletes what was moved aside.
+        let aside_gone = || {
+            install_cache(&root)
+                .iter()
+                .all(|dir| !dir.with_extension(FREEING).exists())
+        };
+        for _ in 0..500 {
+            if aside_gone() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(aside_gone());
+        // Freeing again finds nothing; a deletion cut short goes at the next scratch sweep.
+        free_install_cache(&root).unwrap();
+        file(".local/java25.freeing/lib/modules", 1);
+        drop_prepare_scratch(&root);
+        assert!(!root.join(".local/java25.freeing").exists());
         let _ = fs::remove_dir_all(root);
     }
 
