@@ -52,6 +52,9 @@ pub(super) mod palette {
     pub fn muted() -> u32 {
         color::hex(0x8c859e, 255)
     }
+    pub fn logo_gray() -> u32 {
+        color::hex(0x706c79, 255)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,47 +137,203 @@ pub(super) fn draw_plate(ui: &mut Canvas<'_, '_>, x: f32, y: f32, w: f32, h: f32
     }
 }
 
-/// Glowing North Star tile badge anchored at the top-left of the launcher shell.
+fn cubic_pt(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], t: f32) -> [f32; 2] {
+    let u = 1.0 - t;
+    let uu = u * u;
+    let tt = t * t;
+    let uuu = uu * u;
+    let ttt = tt * t;
+    [
+        uuu * p0[0] + 3.0 * uu * t * p1[0] + 3.0 * u * tt * p2[0] + ttt * p3[0],
+        uuu * p0[1] + 3.0 * uu * t * p1[1] + 3.0 * u * tt * p2[1] + ttt * p3[1],
+    ]
+}
+
+/// Exact vector construction of `Meridian Logo/03 North Star.svg` rendered via GPU quads:
+/// white slanted pillar -> sweeping violet cubic-Bezier orbit -> gray slanted pillar -> 4-point star.
+pub(super) fn draw_meridian_north_star(p: &mut Ui, x: f32, y: f32, size: f32) {
+    let k = p.density / p.batch.scale;
+    // Tightened crop around the SVG artwork inside viewBox (308.1, 313.05, 640, 640).
+    let (vx, vy, vw) = (358.1_f32, 353.05_f32, 540.0_f32);
+    let to_gui = |sx: f32, sy: f32| -> [f32; 2] {
+        [
+            (x + (sx - vx) / vw * size) * k,
+            (y + (sy - vy) / vw * size) * k,
+        ]
+    };
+    let bar_pt = |px: f32, py: f32| -> [f32; 2] {
+        let sx = 628.1 + (px - 628.1) * 0.86;
+        let sy = 633.05 + (py - 633.05) * 0.86;
+        to_gui(sx, sy)
+    };
+
+    // 1. Back white slanted bar (#ffffff)
+    p.batch.fill_quad(
+        p.atlas,
+        [
+            bar_pt(708.56, 511.685),
+            bar_pt(789.38, 454.625),
+            bar_pt(789.38, 754.415),
+            bar_pt(708.56, 811.475),
+        ],
+        palette::text(),
+    );
+
+    // 2. Sweeping violet orbital crescent (#a575f6) — exact SVG cubic Beziers
+    let rad = 52.5_f32.to_radians();
+    let (sin_a, cos_a) = rad.sin_cos();
+    let sweep_pt = |pt: [f32; 2]| -> [f32; 2] {
+        let dx = pt[0] - 628.1;
+        let dy = pt[1] - 609.0;
+        let rx = 628.1 + dx * cos_a - dy * sin_a;
+        let ry = 609.0 + dx * sin_a + dy * cos_a;
+        to_gui(1256.2 - rx, ry + 18.0)
+    };
+    let outer_segs: [([f32; 2], [f32; 2], [f32; 2], [f32; 2]); 4] = [
+        (
+            [567.62, 526.37],
+            [476.06, 510.41],
+            [382.82, 506.21],
+            [368.54, 537.29],
+        ),
+        (
+            [368.54, 537.29],
+            [350.90, 575.09],
+            [474.38, 633.05],
+            [612.98, 667.49],
+        ),
+        (
+            [612.98, 667.49],
+            [745.70, 700.25],
+            [885.14, 689.33],
+            [888.50, 660.77],
+        ),
+        (
+            [888.50, 660.77],
+            [891.86, 630.53],
+            [785.18, 586.85],
+            [684.38, 561.65],
+        ),
+    ];
+    // Return path reversed so outer[seg](t) pairs cleanly with inner[seg](t).
+    let inner_segs: [([f32; 2], [f32; 2], [f32; 2], [f32; 2]); 4] = [
+        (
+            [567.62, 526.37],
+            [480.26, 512.93],
+            [416.42, 520.49],
+            [405.50, 544.85],
+        ),
+        (
+            [405.50, 544.85],
+            [393.74, 570.89],
+            [481.94, 617.09],
+            [609.62, 645.65],
+        ),
+        (
+            [609.62, 645.65],
+            [733.10, 672.53],
+            [860.78, 678.41],
+            [861.62, 648.17],
+        ),
+        (
+            [861.62, 648.17],
+            [862.46, 629.69],
+            [771.74, 595.25],
+            [684.38, 561.65],
+        ),
+    ];
+    let steps = 8usize;
+    for seg in 0..4 {
+        let (o0, o1, o2, o3) = outer_segs[seg];
+        let (i0, i1, i2, i3) = inner_segs[seg];
+        for s in 0..steps {
+            let t0 = s as f32 / steps as f32;
+            let t1 = (s + 1) as f32 / steps as f32;
+            let a = sweep_pt(cubic_pt(o0, o1, o2, o3, t0));
+            let b = sweep_pt(cubic_pt(o0, o1, o2, o3, t1));
+            let c = sweep_pt(cubic_pt(i0, i1, i2, i3, t1));
+            let d = sweep_pt(cubic_pt(i0, i1, i2, i3, t0));
+            p.batch.fill_quad(p.atlas, [a, b, c, d], palette::accent());
+        }
+    }
+
+    // 3. Front gray slanted bar (#706c79)
+    p.batch.fill_quad(
+        p.atlas,
+        [
+            bar_pt(467.18, 454.625),
+            bar_pt(547.64, 511.685),
+            bar_pt(547.64, 811.475),
+            bar_pt(467.18, 754.415),
+        ],
+        palette::logo_gray(),
+    );
+
+    // 4. Concave 4-point North Star sparkle (#a990ff)
+    let star_pt =
+        |pt: [f32; 2]| -> [f32; 2] { to_gui(308.1 + pt[0] * 1.25, 313.05 + pt[1] * 1.25) };
+    let center = star_pt([253.0, 214.0]);
+    let star_arcs: [([f32; 2], [f32; 2], [f32; 2], [f32; 2]); 4] = [
+        (
+            [253.0, 178.0],
+            [256.0, 204.0],
+            [263.0, 210.0],
+            [289.0, 214.0],
+        ),
+        (
+            [289.0, 214.0],
+            [263.0, 218.0],
+            [256.0, 225.0],
+            [253.0, 250.0],
+        ),
+        (
+            [253.0, 250.0],
+            [250.0, 225.0],
+            [242.0, 218.0],
+            [217.0, 214.0],
+        ),
+        (
+            [217.0, 214.0],
+            [242.0, 210.0],
+            [250.0, 204.0],
+            [253.0, 178.0],
+        ),
+    ];
+    let star_steps = 6usize;
+    for (p0, p1, p2, p3) in star_arcs {
+        for s in 0..star_steps {
+            let t0 = s as f32 / star_steps as f32;
+            let t1 = (s + 1) as f32 / star_steps as f32;
+            let a = star_pt(cubic_pt(p0, p1, p2, p3, t0));
+            let b = star_pt(cubic_pt(p0, p1, p2, p3, t1));
+            p.batch
+                .fill_quad(p.atlas, [center, a, b, center], palette::accent_star());
+        }
+    }
+}
+
+/// Framed Meridian North Star logo tile anchored at the top-left of the launcher rail.
 pub(super) fn draw_north_star_badge(p: &mut Ui, x: f32, y: f32, size: f32) {
     // Soft ambient violet halo
     p.rounded(
-        x - 3.0,
-        y - 3.0,
-        size + 6.0,
-        size + 6.0,
-        14.0,
-        color::with_alpha(palette::accent(), 0.16),
+        x - 2.0,
+        y - 2.0,
+        size + 4.0,
+        size + 4.0,
+        13.0,
+        color::with_alpha(palette::accent(), 0.14),
     );
-    p.rounded(x, y, size, size, 11.0, palette::accent_fill());
+    p.rounded(x, y, size, size, 11.0, palette::card());
     p.border(
         x,
         y,
         size,
         size,
         11.0,
-        color::with_alpha(palette::accent_star(), 0.85),
+        color::with_alpha(palette::accent_star(), 0.48),
     );
-    // Crisp bold white Meridian "M" monogram centered inside the tile
-    let fs = (size * 0.54).round();
-    let mw = p.measure(Face::SemiBold, fs, "M");
-    p.text_line(
-        Face::SemiBold,
-        fs,
-        size,
-        x + ((size - mw) * 0.5).round(),
-        y,
-        palette::text(),
-        "M",
-    );
-    // Tiny North Star glint at upper-right corner of the tile
-    p.rounded(
-        x + size - 7.0,
-        y + 1.0,
-        6.0,
-        6.0,
-        3.0,
-        palette::accent_star(),
-    );
+    let pad = (size * 0.08).round();
+    draw_meridian_north_star(p, x + pad, y + pad, size - pad * 2.0);
 }
 
 pub(super) fn draw_icon_home(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
@@ -239,21 +398,20 @@ pub(super) fn draw_icon_settings(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32
 }
 
 pub(super) fn draw_icon_play(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let slices = 6;
-    let left = cx - sz * 0.42;
-    let step_w = (sz * 0.88) / slices as f32;
-    for i in 0..slices {
-        let t = i as f32 / (slices - 1) as f32;
-        let h = (sz * (1.0 - t * 0.82)).max(2.0);
-        p.rounded(
-            left + i as f32 * step_w,
-            cy - h * 0.5,
-            step_w + 0.8,
-            h,
-            0.6,
-            col,
-        );
-    }
+    let k = p.density / p.batch.scale;
+    let left = cx - sz * 0.40;
+    let right = cx + sz * 0.52;
+    let half_h = sz * 0.52;
+    p.batch.fill_quad(
+        p.atlas,
+        [
+            [left * k, (cy - half_h) * k],
+            [right * k, cy * k],
+            [left * k, (cy + half_h) * k],
+            [left * k, (cy - half_h) * k],
+        ],
+        col,
+    );
 }
 
 pub(super) fn draw_icon_box(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {

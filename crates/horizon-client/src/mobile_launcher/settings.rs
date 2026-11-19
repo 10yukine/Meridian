@@ -188,6 +188,18 @@ impl MobileLauncher {
                 Tone::Secondary,
                 "<- Back",
             );
+        } else {
+            draw_button(
+                ui,
+                hits,
+                ButtonId::Quit,
+                inner_x + inner_w - 136.0,
+                cy,
+                136.0,
+                hdr_h,
+                Tone::Ghost,
+                "Quit Launcher",
+            );
         }
         if let Some(p) = ui.paint() {
             let title_x = if onboarding { inner_x + 112.0 } else { inner_x };
@@ -210,6 +222,74 @@ impl MobileLauncher {
             );
         }
         cy += hdr_h + if compact_v { 10.0 } else { 18.0 };
+
+        let row_h: f32 = if compact_v { 32.0 } else { 46.0 };
+        let row_step: f32 = if compact_v { 36.0 } else { 54.0 };
+
+        // Interactive Launcher Font setting (Modern Geist by default; switchable to Minecraft pixel font).
+        // ponytail: lives in process memory via ui_theme::set_pixel_font until the backend persists launcher UI prefs.
+        let pixel_font = ui_theme::pixel_font();
+        let pack_font_ready = ui.ro().pack_font_available();
+        let font_btn_w = if compact_v { 156.0 } else { 184.0 };
+        let font_btn_h = (row_h - 6.0).max(26.0);
+        let font_btn_y = cy + ((row_h - font_btn_h) * 0.5).round();
+        let font_btn_x = inner_x + inner_w - 8.0 - font_btn_w;
+        if let Some(p) = ui.paint() {
+            p.rounded(inner_x, cy, inner_w, row_h, 8.0, palette::surface());
+            p.text_line(
+                Face::Medium,
+                ui_theme::sizes().ui,
+                row_h,
+                inner_x + 14.0,
+                cy,
+                palette::text(),
+                "Launcher Font",
+            );
+            if inner_w >= 500.0 {
+                let hint = if pixel_font && pack_font_ready {
+                    "Minecraft bitmap font"
+                } else if pixel_font {
+                    "Uses Geist until Minecraft 26.3 is installed"
+                } else if pack_font_ready {
+                    "Clean modern UI font"
+                } else {
+                    "Modern UI font (Pixel unlocks after 26.3 install)"
+                };
+                let hw = p.measure(Face::Regular, ui_theme::small(), hint);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    row_h,
+                    font_btn_x - 14.0 - hw,
+                    cy,
+                    palette::muted(),
+                    hint,
+                );
+            }
+        }
+        let font_btn_label = if pixel_font && pack_font_ready {
+            "Pixel (Minecraft)"
+        } else if pixel_font {
+            "Pixel (after 26.3)"
+        } else {
+            "Modern (Geist)"
+        };
+        draw_button(
+            ui,
+            hits,
+            ButtonId::ToggleLauncherFont,
+            font_btn_x,
+            font_btn_y,
+            font_btn_w,
+            font_btn_h,
+            if pixel_font {
+                Tone::Banner
+            } else {
+                Tone::Secondary
+            },
+            font_btn_label,
+        );
+        cy += row_step;
 
         let total_profile_bytes: u64 = profiles.iter().map(|p| p.size).sum();
         let rows = [
@@ -257,8 +337,6 @@ impl MobileLauncher {
             ),
         ];
 
-        let row_h = if compact_v { 30.0 } else { 42.0 };
-        let row_step = if compact_v { 34.0 } else { 50.0 };
         for (label, value, val_col) in rows {
             if let Some(p) = ui.paint() {
                 p.rounded(inner_x, cy, inner_w, row_h, 8.0, palette::surface());
@@ -285,22 +363,6 @@ impl MobileLauncher {
                 );
             }
             cy += row_step;
-        }
-
-        if !onboarding {
-            let quit_h = if compact_v { 34.0 } else { 42.0 };
-            let quit_y = (cy + 6.0).min(cy_top + card_h - quit_h - 10.0);
-            draw_button(
-                ui,
-                hits,
-                ButtonId::Quit,
-                inner_x + inner_w - 136.0,
-                quit_y,
-                136.0,
-                quit_h,
-                Tone::Ghost,
-                "Quit Launcher",
-            );
         }
     }
 }

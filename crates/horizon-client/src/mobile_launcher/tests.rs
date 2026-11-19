@@ -371,9 +371,30 @@ fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
         })
     );
 
-    // Profile picker via bottom profile bar + sidebar Skins navigation
+    // Host hooks: crash note and wants_text() suppressed while profile popup is open.
+    launcher.note("The game closed unexpectedly last time.");
+    assert_eq!(
+        launcher.status_note.as_deref(),
+        Some("The game closed unexpectedly last time.")
+    );
+    assert!(!launcher.wants_text());
+
+    // Floating profile popup via bottom profile bar + scrim/close dismiss + Settings font toggle + Skins
+    assert!(!launcher.profile_popup_open);
     click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
-    assert_eq!(launcher.route, Route::Profiles);
+    assert!(launcher.profile_popup_open);
+    assert!(!launcher.wants_text());
+    click_button(&mut launcher, size, ButtonId::CloseProfilePopup);
+    assert!(!launcher.profile_popup_open);
+
+    click_button(&mut launcher, size, ButtonId::OpenSettings);
+    assert_eq!(launcher.route, Route::Settings);
+    assert!(!crate::ui_theme::pixel_font());
+    click_button(&mut launcher, size, ButtonId::ToggleLauncherFont);
+    assert!(crate::ui_theme::pixel_font());
+    click_button(&mut launcher, size, ButtonId::ToggleLauncherFont);
+    assert!(!crate::ui_theme::pixel_font());
+
     click_button(&mut launcher, size, ButtonId::OpenSkins);
     assert_eq!(launcher.route, Route::Skins);
     click_button(&mut launcher, size, ButtonId::GoHome);
@@ -390,6 +411,17 @@ fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
     click_button(&mut launcher, size, ButtonId::CreateProfile);
     assert_eq!(launcher.backend().selected_profile(), "my-pack");
     assert_eq!(launcher.backend().profiles()[1].name, "My Pack");
+
+    // Switch back to Vanilla and back to My Pack via the floating Profile Switcher popup.
+    click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+    assert!(launcher.profile_popup_open);
+    click_button(&mut launcher, size, ButtonId::SelectProfile(0));
+    assert!(!launcher.profile_popup_open);
+    assert_eq!(launcher.backend().selected_profile(), VANILLA);
+    click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+    click_button(&mut launcher, size, ButtonId::SelectProfile(1));
+    assert!(!launcher.profile_popup_open);
+    assert_eq!(launcher.backend().selected_profile(), "my-pack");
 
     click_button(&mut launcher, size, ButtonId::OpenMods);
     assert_eq!(launcher.route, Route::Mods);
@@ -454,7 +486,7 @@ fn assert_hits_fit_without_overlap(launcher: &MobileLauncher, size: [u32; 2], la
 
 #[test]
 fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
-    for size in [[1040, 700], [800, 360]] {
+    for size in [[1040, 700], [800, 360], [2400, 560]] {
         let mut l = MobileLauncher::new(Box::new(StubBackend::default()));
         assert_hits_fit_without_overlap(&l, size, "welcome");
 
@@ -510,9 +542,10 @@ fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
         assert_hits_fit_without_overlap(&ready, size, "home-ready");
 
         click_button(&mut ready, size, ButtonId::ToggleProfilePicker);
-        assert_hits_fit_without_overlap(&ready, size, "profiles-picker");
+        assert_hits_fit_without_overlap(&ready, size, "profile-popup");
 
         click_button(&mut ready, size, ButtonId::OpenAccountSwitcher);
+        assert!(!ready.profile_popup_open);
         assert_hits_fit_without_overlap(&ready, size, "account-switcher");
 
         click_button(&mut ready, size, ButtonId::GoHome);

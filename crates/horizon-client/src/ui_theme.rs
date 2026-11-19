@@ -11,7 +11,11 @@
 //! function draws and hit-tests, so they never disagree.
 use crate::hud::{HudAtlas, HudBatch, Rect};
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
-use std::{cell::RefCell, collections::HashMap, path::Path};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::Path,
+};
 
 /// A Horizon-only preference from `horizon.txt` beside `options.txt`
 /// (`key:value` lines), so vanilla's options file stays exactly as vanilla
@@ -198,6 +202,20 @@ struct Cache {
 }
 thread_local! {
     static CACHE: RefCell<Option<Cache>> = const { RefCell::new(None) };
+    static PIXEL_FONT: Cell<bool> = const { Cell::new(false) };
+}
+/// Whether `Ui` draws text with the resource pack's pixel bitmap font instead of the modern
+/// TrueType faces (default: `false`, modern font).
+pub(crate) fn pixel_font() -> bool {
+    PIXEL_FONT.with(Cell::get)
+}
+/// Toggle between the modern TrueType faces (`false`) and Minecraft's pixel bitmap font (`true`).
+pub(crate) fn set_pixel_font(pixel: bool) {
+    PIXEL_FONT.with(|flag| flag.set(pixel));
+}
+/// Whether this atlas has loaded the resource pack's pixel bitmap font (prepared 26.3 files exist).
+pub(crate) fn pack_font_ready(atlas: &HudAtlas) -> bool {
+    atlas.font.glyph('A').rect.is_some()
 }
 /// Reloaded atlases can occupy the same address with empty run-time slots.
 pub fn reset_atlas() {
@@ -433,6 +451,10 @@ impl<'a> Ui<'a> {
             batch,
         }
     }
+    /// Whether the resource pack's Minecraft pixel bitmap font is loaded in this atlas.
+    pub(crate) fn pack_font_available(&self) -> bool {
+        pack_font_ready(self.atlas)
+    }
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
     pub fn finish(self) {
         let pending = with_cache(self.atlas, |c| std::mem::take(&mut c.pending));
@@ -563,6 +585,9 @@ impl<'a> Ui<'a> {
     ) -> f32 {
         with_cache(atlas, |c| {
             let (ascent, descent, scale, all_pack) = {
+                if pixel_font() && pack_font_ready(atlas) {
+                    return pack_layout(atlas, density, line, px, text, &mut emit);
+                }
                 let Some(fonts) = &c.fonts else {
                     return pack_layout(atlas, density, line, px, text, &mut emit);
                 };
@@ -651,7 +676,9 @@ impl<'a> Ui<'a> {
         if wide <= room || wide <= 0.0 {
             return size;
         }
-        if with_cache(self.atlas, |c| c.fonts.is_none()) {
+        if (pixel_font() && pack_font_ready(self.atlas))
+            || with_cache(self.atlas, |c| c.fonts.is_none())
+        {
             let px = (size * self.density * 4.0).round() / 4.0;
             let scale = pack_scale(px);
             let fits = (room / (wide / scale)).floor().clamp(1.0, scale);
