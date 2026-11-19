@@ -818,7 +818,7 @@ fn write_enabled(
     sources::write_file(&home.join(mod_list::FILE), enabled.serialize().as_bytes())
 }
 
-fn safe_id(id: &str) -> bool {
+pub(crate) fn safe_id(id: &str) -> bool {
     id != VANILLA
         && (1..=64).contains(&id.len())
         && id

@@ -14,7 +14,7 @@ mod android;
 mod remembered;
 use remembered::{Remembered, Shelf};
 mod heads;
-mod profiles;
+pub(crate) mod profiles;
 
 const LOCK: &str = include_str!("../../../research-lock.json");
 const EXPORTER_SOURCES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/exporters.rs"));

@@ -4,6 +4,11 @@
 //! them on a PC. android-activity sends stdout and stderr to logcat (tag `RustStdoutStderr`).
 #![cfg(target_os = "android")]
 
+use horizon_client::launcher_backend::{
+    launch::{self, Launch},
+    profile_dir,
+};
+use std::path::Path;
 use winit::platform::android::activity::AndroidApp;
 
 mod activity;
@@ -55,7 +60,45 @@ fn android_main(app: AndroidApp) {
     // Controllers and mice reach the game through this hook, not as winit's fake touches.
     winit::platform::android::set_input_hook(input::hook);
     horizon_client_render::android_runtime::set_pointer_capture(activity::capture_pointer);
-    horizon_game::main();
+    horizon_client_render::android_runtime::set_open_link(activity::open_link);
+    // The launcher and the game each run in a process of their own (winit makes one event loop
+    // per process); `launch.json` says which this one is (docs/launcher-spec.md, "Hand-off").
+    match launch::take(&home) {
+        None => match horizon_client::game::mobile_launcher_host::run(&home) {
+            Ok(true) => activity::restart(),
+            Ok(false) => {}
+            Err(error) => eprintln!("Meridian: the launcher stopped: {error}"),
+        },
+        Some(launch) => {
+            if enter(&home, &launch) {
+                horizon_game::main();
+            }
+            // Back to the launcher once the game ends.
+            activity::restart();
+        }
+    }
     // Ending the process when the game ends keeps Android from reusing it for the next launch.
     std::process::exit(0);
+}
+
+/// The game folder and account the launcher chose, as `--game-dir` and `--session-file` give
+/// them on a computer: the profile's folder, the resources every profile shares, the account.
+fn enter(home: &Path, launch: &Launch) -> bool {
+    let dir = profile_dir(home, &launch.profile);
+    if let Err(error) = std::fs::create_dir_all(&dir).and_then(|()| std::env::set_current_dir(&dir))
+    {
+        eprintln!("Meridian: cannot use profile {}: {error}", launch.profile);
+        return false;
+    }
+    // SAFETY: no thread of ours reads the environment yet: the game has not started.
+    unsafe {
+        std::env::set_var("HORIZON_RESOURCES", launch::resources_dir(home));
+        if launch.session {
+            std::env::set_var("HORIZON_SESSION_FILE", launch::session_file(home));
+        }
+        if let Some(name) = &launch.name {
+            std::env::set_var("HORIZON_PLAYER_NAME", name);
+        }
+    }
+    true
 }

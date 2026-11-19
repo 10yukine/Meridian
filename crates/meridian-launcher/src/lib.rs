@@ -775,6 +775,7 @@ mod tests {
 }
 mod account;
 mod ely;
+pub mod launch;
 mod mojang;
 mod real;
 mod sources;

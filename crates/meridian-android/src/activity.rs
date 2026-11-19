@@ -32,3 +32,18 @@ pub(crate) fn capture_pointer(capture: bool) {
             .map(drop)
     });
 }
+
+/// `MeridianActivity.openLink`: the browser on an https:// page; false where none can.
+pub(crate) fn open_link(url: &str) -> bool {
+    with_activity(|env, activity| {
+        let url = env.new_string(url)?;
+        env.call_method(activity, "openLink", "(Ljava/lang/String;)Z", &[JValue::Object(&url)])?
+            .z()
+    })
+    .unwrap_or(false)
+}
+
+/// `MeridianActivity.restart`: the app starts again in a fresh process once this one ends.
+pub(crate) fn restart() {
+    with_activity(|env, activity| env.call_method(activity, "restart", "()V", &[]).map(drop));
+}

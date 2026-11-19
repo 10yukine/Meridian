@@ -3,8 +3,12 @@
 package io.github.u10yukine.meridian;
 
 import android.app.NativeActivity;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Process;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -63,6 +67,35 @@ public class MeridianActivity extends NativeActivity {
                 getWindow().getDecorView().releasePointerCapture();
             }
         });
+    }
+
+    /**
+     * Start the app again in a fresh process once this one ends (RestartActivity): the launcher
+     * and the game each run in their own. The game ends this process right after asking.
+     */
+    public void restart() {
+        startActivity(new Intent(this, RestartActivity.class)
+                .putExtra(RestartActivity.AFTER, Process.myPid())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        runOnUiThread(() -> {
+            // Nothing left on screen for Android to bring back when the process ends.
+            finish();
+            overridePendingTransition(0, 0);
+        });
+    }
+
+    /** The browser on an https:// page (the Microsoft sign-in); false where none can. */
+    public boolean openLink(String url) {
+        if (!url.startsWith("https://")) {
+            return false;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            return false;
+        }
     }
 
     @Override

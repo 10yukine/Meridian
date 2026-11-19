@@ -185,7 +185,10 @@ impl Options {
             .ok_or("missing executable directory")?
             .join("resources");
         let mut o = Self {
-            resources: if sibling.join("horizon-resources.json").exists() {
+            // Meridian: the launcher's prepared resources, which a profile's game folder shares.
+            resources: if let Some(dir) = std::env::var_os("HORIZON_RESOURCES") {
+                dir.into()
+            } else if sibling.join("horizon-resources.json").exists() {
                 sibling
             } else {
                 std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)

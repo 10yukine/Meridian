@@ -217,5 +217,18 @@ pub fn capture_pointer(capture: bool) {
     }
 }
 
+/// Meridian: how the platform opens a web page (`MeridianActivity.openLink`).
+static OPEN_LINK: OnceLock<fn(&str) -> bool> = OnceLock::new();
+
+/// Sets the platform's browser; the first one set stays.
+pub fn set_open_link(open: fn(&str) -> bool) {
+    let _ = OPEN_LINK.set(open);
+}
+
+/// Opens an https:// page in the browser (the Microsoft sign-in); false where none can.
+pub fn open_link(url: &str) -> bool {
+    OPEN_LINK.get().is_some_and(|platform| platform(url))
+}
+
 #[cfg(test)]
 mod tests;

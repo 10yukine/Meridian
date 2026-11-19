@@ -325,6 +325,11 @@ impl MobileLauncher {
         }
     }
 
+    /// Whether a text field has the focus: the phone's keyboard shows for it.
+    pub fn wants_text(&mut self) -> bool {
+        self.active_text_mut().is_some()
+    }
+
     pub fn backspace(&mut self) {
         if let Some(buf) = self.active_text_mut() {
             buf.pop();
