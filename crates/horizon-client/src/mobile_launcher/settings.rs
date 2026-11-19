@@ -226,8 +226,8 @@ impl MobileLauncher {
         let row_h: f32 = if compact_v { 32.0 } else { 46.0 };
         let row_step: f32 = if compact_v { 36.0 } else { 54.0 };
 
-        // Interactive Launcher Font setting (Modern Geist by default; switchable to Minecraft pixel font).
-        // ponytail: lives in process memory via ui_theme::set_pixel_font until the backend persists launcher UI prefs.
+        // Interactive Launcher Font setting (Modern Geist by default; switchable to Minecraft
+        // pixel font and persisted in horizon.txt via ui_theme::preference).
         let pixel_font = ui_theme::pixel_font();
         let pack_font_ready = ui.ro().pack_font_available();
         let font_btn_w = if compact_v { 156.0 } else { 184.0 };
@@ -338,6 +338,9 @@ impl MobileLauncher {
         ];
 
         for (label, value, val_col) in rows {
+            if cy + row_h > cy_top + card_h - 6.0 {
+                break;
+            }
             if let Some(p) = ui.paint() {
                 p.rounded(inner_x, cy, inner_w, row_h, 8.0, palette::surface());
                 p.text_line(

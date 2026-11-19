@@ -219,6 +219,22 @@ pub(crate) fn pixel_font() -> bool {
 pub(crate) fn set_pixel_font(pixel: bool) {
     PIXEL_FONT.with(|flag| flag.set(pixel));
 }
+const LAUNCHER_FONT_KEY: &str = "launcherFont";
+/// Load the persisted launcher font choice from `dir/horizon.txt` (`pixel` vs `modern`).
+pub(crate) fn load_pixel_font_pref(dir: &Path) -> bool {
+    let pixel = preference(dir, LAUNCHER_FONT_KEY).is_some_and(|v| v.eq_ignore_ascii_case("pixel"));
+    set_pixel_font(pixel);
+    pixel
+}
+/// Apply and persist the launcher font choice to `dir/horizon.txt`, preserving other preferences.
+pub(crate) fn save_pixel_font_pref(dir: &Path, pixel: bool) {
+    set_pixel_font(pixel);
+    set_preference(
+        dir,
+        LAUNCHER_FONT_KEY,
+        Some(if pixel { "pixel" } else { "modern" }),
+    );
+}
 /// Whether this atlas has loaded the resource pack's pixel bitmap font (prepared 26.3 files exist).
 pub(crate) fn pack_font_ready(atlas: &HudAtlas) -> bool {
     atlas.font.glyph('A').rect.is_some()

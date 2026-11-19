@@ -3,10 +3,12 @@
 //! `crate::ui_theme` so no prepared pack is required.
 //!
 //! Shell layout:
-//! - Left sidebar (above top bar, under bottom bar): Meridian North Star logo, Home, Mods, Skins, Settings.
-//! - Top bar (right of sidebar): Meridian wordmark, optional background install pill, version badge (top right).
-//! - Bottom dock bar (full width): Player head (account switcher), single-line Profile bar (toggles floating
-//!   Profile Switcher popup), and Play/Install CTA.
+//! - Left sidebar (above top bar, under bottom bar): Meridian North Star logo, then Home, Mods,
+//!   Skins, and Settings in one stack.
+//! - Top bar (right of sidebar): "Meridian Launcher" title, optional background install pill,
+//!   version badge (top right).
+//! - Bottom dock bar (full width): Player head (account switcher), single-line Profile bar
+//!   (opens an upward bar-width Profile dropdown), and Play/Install CTA.
 
 mod auth;
 mod home;
@@ -22,6 +24,7 @@ use crate::launcher_backend::{
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
+use std::path::PathBuf;
 use widgets::{
     Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, draw_backdrop,
     draw_button, draw_icon_chevron, draw_north_star_badge, draw_play_button,
@@ -100,8 +103,8 @@ enum ButtonId {
     // Home & Profiles
     OpenNewProfile,
     SelectProfile(usize),
-    ProfilesPrevPage,
-    ProfilesNextPage,
+    ProfileScrollUp,
+    ProfileScrollDown,
     InstallSelected,
     PlaySelected,
     ViewInstallScreen,
@@ -153,6 +156,8 @@ enum ButtonId {
 /// Interactive Meridian launcher backed by [`Backend`].
 pub struct MobileLauncher {
     backend: Box<dyn Backend>,
+    /// Folder holding `horizon.txt` for persisted launcher UI preferences (`None` in unit tests).
+    prefs_dir: Option<PathBuf>,
     route: Route,
     profile_popup_open: bool,
     // Auth & account addition
@@ -169,8 +174,8 @@ pub struct MobileLauncher {
     ely_otp: String,
     ely_error: Option<String>,
     status_note: Option<String>,
-    // Paging
-    profile_page: usize,
+    // Paging & dropdown scroll
+    profile_scroll: usize,
     account_page: usize,
     // New profile state
     new_profile_name: String,
@@ -190,10 +195,28 @@ pub struct MobileLauncher {
     rename_modal: Option<(String, String, Option<String>)>,
 }
 
+#[cfg(not(test))]
+fn default_prefs_dir() -> Option<PathBuf> {
+    std::env::var_os("HORIZON_HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+}
+
+#[cfg(test)]
+fn default_prefs_dir() -> Option<PathBuf> {
+    None
+}
+
 impl MobileLauncher {
     pub fn new(backend: Box<dyn Backend>) -> Self {
+        let prefs_dir = default_prefs_dir();
+        if let Some(dir) = &prefs_dir {
+            ui_theme::load_pixel_font_pref(dir);
+        }
         Self {
             backend,
+            prefs_dir,
             route: Route::Home,
             profile_popup_open: false,
             adding_account: false,
@@ -209,7 +232,7 @@ impl MobileLauncher {
             ely_otp: String::new(),
             ely_error: None,
             status_note: None,
-            profile_page: 0,
+            profile_scroll: 0,
             account_page: 0,
             new_profile_name: String::new(),
             new_profile_preset: None,
@@ -224,6 +247,27 @@ impl MobileLauncher {
             mods_error: None,
             confirm_remove_profile: None,
             rename_modal: None,
+        }
+    }
+
+    /// Bind launcher UI preferences (`horizon.txt`) to an explicit folder and load them immediately.
+    pub fn with_prefs_dir(mut self, dir: PathBuf) -> Self {
+        ui_theme::load_pixel_font_pref(&dir);
+        self.prefs_dir = Some(dir);
+        self
+    }
+
+    /// Scroll active lists (for example the profile dropdown when more profiles exist than fit).
+    /// Positive `delta_y` scrolls upward toward earlier items; negative scrolls downward.
+    pub fn scroll(&mut self, delta_y: f32) {
+        if !self.profile_popup_open || delta_y.abs() < 0.01 {
+            return;
+        }
+        let max_idx = self.backend.profiles().len().saturating_sub(1);
+        if delta_y > 0.0 {
+            self.profile_scroll = self.profile_scroll.saturating_sub(1);
+        } else {
+            self.profile_scroll = (self.profile_scroll + 1).min(max_idx);
         }
     }
 
@@ -476,12 +520,21 @@ impl MobileLauncher {
                 self.rename_modal = None;
                 self.mod_search_focused = false;
                 self.profile_popup_open = !self.profile_popup_open;
+                if self.profile_popup_open {
+                    let (_, _, sel_idx) = self.selected_profile_snapshot();
+                    self.profile_scroll = sel_idx.saturating_sub(2);
+                }
             }
             ButtonId::CloseProfilePopup => {
                 self.profile_popup_open = false;
             }
             ButtonId::ToggleLauncherFont => {
-                ui_theme::set_pixel_font(!ui_theme::pixel_font());
+                let next = !ui_theme::pixel_font();
+                if let Some(dir) = &self.prefs_dir {
+                    ui_theme::save_pixel_font_pref(dir, next);
+                } else {
+                    ui_theme::set_pixel_font(next);
+                }
             }
             ButtonId::TopProgressBanner | ButtonId::ViewInstallScreen => {
                 self.profile_popup_open = false;
@@ -659,11 +712,12 @@ impl MobileLauncher {
                     self.profile_popup_open = false;
                 }
             }
-            ButtonId::ProfilesPrevPage => {
-                self.profile_page = self.profile_page.saturating_sub(1);
+            ButtonId::ProfileScrollUp => {
+                self.profile_scroll = self.profile_scroll.saturating_sub(1);
             }
-            ButtonId::ProfilesNextPage => {
-                self.profile_page = self.profile_page.saturating_add(1);
+            ButtonId::ProfileScrollDown => {
+                let max_idx = self.backend.profiles().len().saturating_sub(1);
+                self.profile_scroll = (self.profile_scroll + 1).min(max_idx);
             }
             ButtonId::InstallSelected => {
                 self.profile_popup_open = false;
@@ -926,10 +980,28 @@ impl MobileLauncher {
             draw_backdrop(p, ui_w, ui_h);
         }
 
-        let short_h = ui_h < 460.0;
+        let kb_h = ui_h < 300.0;
+        let short_h = ui_h < 580.0;
         let compact_w = ui_w < 860.0;
-        let pad = if compact_w { 12.0 } else { 18.0 };
-        let top_h = if short_h { 44.0 } else { 54.0 };
+        let wide_w = ui_w >= 1200.0;
+        let pad = if kb_h {
+            10.0
+        } else if compact_w {
+            12.0
+        } else if short_h {
+            14.0
+        } else {
+            18.0
+        };
+        let top_h = if kb_h {
+            34.0
+        } else if ui_h < 380.0 {
+            42.0
+        } else if short_h {
+            46.0
+        } else {
+            54.0
+        };
 
         let accounts = self.backend.accounts();
         let active_idx = self.backend.active_account();
@@ -941,10 +1013,16 @@ impl MobileLauncher {
 
         if onboarding {
             self.draw_onboarding_top_bar(ui, &mut hits, ui_w, pad, top_h);
-            let v_margin = if short_h { 8.0 } else { 18.0 };
+            let v_margin = if kb_h {
+                4.0
+            } else if short_h {
+                8.0
+            } else {
+                18.0
+            };
             let content_top = top_h + v_margin;
-            let content_h = (ui_h - content_top - v_margin).max(240.0);
-            let card_w = (ui_w - pad * 2.0).min(640.0);
+            let content_h = (ui_h - content_top - v_margin).max(0.0);
+            let card_w = (ui_w - pad * 2.0).min(if wide_w { 760.0 } else { 640.0 });
             let card_x = ((ui_w - card_w) * 0.5).round();
 
             if self.route == Route::Settings {
@@ -1016,9 +1094,25 @@ impl MobileLauncher {
         }
 
         // ---- Signed-in Shell: Left Sidebar (above top bar, under bottom bar) + Top Bar + Full-Width Bottom Dock ----
-        let bottom_h = if short_h { 58.0 } else { 70.0 };
-        let rail_w = if compact_w { 64.0 } else { 72.0 };
-        let rail_h = (ui_h - bottom_h).max(240.0);
+        let bottom_h = if kb_h {
+            46.0
+        } else if ui_h < 380.0 {
+            54.0
+        } else if short_h {
+            58.0
+        } else {
+            68.0
+        };
+        let rail_w = if kb_h {
+            58.0
+        } else if compact_w {
+            64.0
+        } else if short_h {
+            68.0
+        } else {
+            72.0
+        };
+        let rail_h = (ui_h - bottom_h).max(0.0);
 
         let mut bg_hits = Vec::new();
 
@@ -1041,7 +1135,7 @@ impl MobileLauncher {
             );
             self.draw_rail(ui, chrome_hits, rail_w, rail_h, top_h, short_h);
         }
-        let prof_center_x = self.draw_bottom_bar(
+        let (prof_x, prof_w) = self.draw_bottom_bar(
             ui,
             &mut hits,
             ui_w,
@@ -1057,12 +1151,18 @@ impl MobileLauncher {
             col_danger,
         );
 
-        let v_margin = if short_h { 6.0 } else { 12.0 };
+        let v_margin = if kb_h {
+            4.0
+        } else if short_h {
+            6.0
+        } else {
+            12.0
+        };
         let main_x = rail_w + pad;
         let main_y = top_h + v_margin;
         let main_w = (ui_w - rail_w - pad * 2.0).max(280.0);
-        let main_h = (rail_h - top_h - v_margin * 2.0).max(180.0);
-        let modal_w = main_w.min(600.0);
+        let main_h = (rail_h - top_h - v_margin * 2.0).max(0.0);
+        let modal_w = main_w.min(if wide_w { 720.0 } else { 600.0 });
         let modal_x = main_x + ((main_w - modal_w) * 0.5).round();
 
         let top_hits = if self.profile_popup_open {
@@ -1183,11 +1283,10 @@ impl MobileLauncher {
                 ui,
                 &mut hits,
                 ui_w,
-                rail_w,
                 top_h,
                 ui_h - bottom_h,
-                pad,
-                prof_center_x,
+                prof_x,
+                prof_w,
                 &setup,
                 &profiles,
                 col_success,
@@ -1205,23 +1304,25 @@ impl MobileLauncher {
         pad: f32,
         top_h: f32,
     ) {
-        let btn_h = (top_h - 10.0).max(34.0);
+        let tight_top = top_h < 40.0;
+        let btn_h = (top_h - if tight_top { 6.0 } else { 10.0 }).clamp(26.0, 42.0);
         let btn_y = ((top_h - btn_h) * 0.5).round();
         let settings_w =
             (ui.ro().measure(Face::Medium, ui_theme::body(), "Settings") + 24.0).max(86.0);
         if let Some(p) = ui.paint() {
             p.rounded(0.0, 0.0, ui_w, top_h, 0.0, palette::rail());
             p.rounded(0.0, top_h - 1.0, ui_w, 1.0, 0.0, palette::border_subtle());
-            let badge_sz = (top_h - 16.0).clamp(28.0, 36.0);
+            let badge_sz = (top_h - if tight_top { 8.0 } else { 14.0 }).clamp(24.0, 36.0);
             draw_north_star_badge(p, pad, ((top_h - badge_sz) * 0.5).round(), badge_sz);
+            let title_sz = if tight_top { 15.5 } else { 18.5 };
             p.text_line(
                 Face::SemiBold,
-                19.0,
+                title_sz,
                 top_h,
-                pad + badge_sz + 12.0,
+                pad + badge_sz + 10.0,
                 0.0,
                 palette::text(),
-                "Meridian",
+                "Meridian Launcher",
             );
             let ver = concat!("v", env!("CARGO_PKG_VERSION"), "  |  MC 26.3");
             let vw = p.measure(Face::Mono, 11.5, ver);
@@ -1264,11 +1365,19 @@ impl MobileLauncher {
         setup: &Setup,
         profiles: &[Profile],
     ) {
+        let tight_top = top_h < 40.0;
         let ver = concat!("v", env!("CARGO_PKG_VERSION"), "  |  MC 26.3");
-        let ver_pill_h = (top_h - 20.0).clamp(24.0, 28.0);
+        let ver_pill_h = (top_h - if tight_top { 10.0 } else { 18.0 }).clamp(22.0, 28.0);
         let ver_pill_y = ((top_h - ver_pill_h) * 0.5).round();
         let ver_pill_w = ui.ro().measure(Face::Mono, 11.5, ver) + 22.0;
         let ver_pill_x = ui_w - pad - ver_pill_w;
+        let title_sz = if tight_top {
+            15.5
+        } else if top_h < 50.0 {
+            17.5
+        } else {
+            19.5
+        };
 
         if let Some(p) = ui.paint() {
             // Top bar spans only to the right of the left rail so the left rail sits above it.
@@ -1283,12 +1392,12 @@ impl MobileLauncher {
             );
             p.text_line(
                 Face::SemiBold,
-                if top_h < 48.0 { 18.0 } else { 20.0 },
+                title_sz,
                 top_h,
                 rail_w + pad,
                 0.0,
                 palette::text(),
-                "Meridian",
+                "Meridian Launcher",
             );
 
             // Top-right version badge
@@ -1343,9 +1452,11 @@ impl MobileLauncher {
             None
         };
         if let Some(summary) = bg_progress {
-            let btn_h = (top_h - 14.0).max(30.0);
+            let btn_h = (top_h - if tight_top { 6.0 } else { 14.0 }).clamp(26.0, 36.0);
             let btn_y = ((top_h - btn_h) * 0.5).round();
-            let wordmark_w = ui.ro().measure(Face::SemiBold, 20.0, "Meridian");
+            let wordmark_w = ui
+                .ro()
+                .measure(Face::SemiBold, title_sz, "Meridian Launcher");
             let max_pill_w = (ver_pill_x - 10.0 - (rail_w + pad + wordmark_w + 16.0)).max(110.0);
             let pill_w =
                 (ui.ro().measure(Face::Mono, ui_theme::small(), &summary) + 24.0).min(max_pill_w);
@@ -1379,9 +1490,19 @@ impl MobileLauncher {
         }
 
         // Top of left panel: integrated Meridian North Star logo tile
-        let badge_sz = if short_h { 36.0 } else { 44.0 };
+        let tight_rail = h < 275.0;
+        let ultra_tight = h < 190.0;
+        let badge_sz = if ultra_tight {
+            26.0
+        } else if tight_rail {
+            32.0
+        } else if short_h {
+            36.0
+        } else {
+            42.0
+        };
         let badge_x = ((w - badge_sz) * 0.5).round();
-        let badge_y = ((top_h - badge_sz) * 0.5).max(6.0).round();
+        let badge_y = ((top_h - badge_sz) * 0.5).max(4.0).round();
         let logo_hit = HitRect {
             id: ButtonId::GoHome,
             x: badge_x,
@@ -1391,18 +1512,46 @@ impl MobileLauncher {
         };
         if let Some(p) = ui.paint() {
             draw_north_star_badge(p, badge_x, badge_y, badge_sz);
-            let div_y = (badge_y + badge_sz + if short_h { 8.0 } else { 12.0 }).max(top_h + 4.0);
-            p.rounded(14.0, div_y, w - 28.0, 1.0, 0.0, palette::border_subtle());
+            let div_y = if ultra_tight {
+                badge_y + badge_sz + 4.0
+            } else {
+                (badge_y + badge_sz + if tight_rail { 5.0 } else { 8.0 }).max(top_h - 1.0)
+            };
+            p.rounded(12.0, div_y, w - 24.0, 1.0, 0.0, palette::border_subtle());
         }
         hits.push(logo_hit);
 
-        let item_w = (w - 16.0).clamp(48.0, 56.0);
+        let item_w = (w - 14.0).clamp(44.0, 56.0);
         let item_x = ((w - item_w) * 0.5).round();
-        let item_h = if short_h { 44.0 } else { 52.0 };
-        let gap = if short_h { 6.0 } else { 10.0 };
-        let mut sy = (badge_y + badge_sz + if short_h { 16.0 } else { 24.0 }).max(top_h + 14.0);
+        let mut sy = if ultra_tight {
+            badge_y + badge_sz + 8.0
+        } else {
+            (badge_y + badge_sz + if tight_rail { 10.0 } else { 14.0 }).max(top_h + 8.0)
+        };
+        let gap: f32 = if ultra_tight {
+            3.0
+        } else if tight_rail {
+            4.0
+        } else if short_h {
+            6.0
+        } else {
+            8.0
+        };
+        let bot_pad: f32 = if ultra_tight {
+            4.0
+        } else if tight_rail {
+            6.0
+        } else if short_h {
+            8.0
+        } else {
+            14.0
+        };
+        let avail_rail = (h - sy - bot_pad).max(96.0);
+        let max_item_h = ((avail_rail - gap * 3.0) * 0.25).floor().max(22.0);
+        let item_h = (if short_h { 46.0_f32 } else { 52.0 }).min(max_item_h);
 
-        let upper_items = [
+        // Single clean nav stack: Home, Mods, Skins, Settings (right after Skins).
+        let nav_items = [
             (
                 ButtonId::GoHome,
                 RailIcon::Home,
@@ -1428,7 +1577,7 @@ impl MobileLauncher {
                 self.route == Route::Settings,
             ),
         ];
-        for (id, icon, label, active) in upper_items {
+        for (id, icon, label, active) in nav_items {
             draw_rail_item(
                 ui, hits, id, item_x, sy, item_w, item_h, active, icon, label,
             );
@@ -1452,23 +1601,24 @@ impl MobileLauncher {
         col_success: u32,
         col_warn: u32,
         col_danger: u32,
-    ) -> f32 {
+    ) -> (f32, f32) {
         if let Some(p) = ui.paint() {
             p.rounded(0.0, y, ui_w, h, 0.0, palette::rail());
             p.rounded(0.0, y, ui_w, 1.0, 0.0, palette::border_subtle());
         }
 
-        let bar_h = (h - 14.0).clamp(44.0, 50.0);
+        let tight_dock = h < 54.0;
+        let bar_h = (h - if tight_dock { 8.0 } else { 14.0 }).clamp(36.0, 50.0);
         let by = y + ((h - bar_h) * 0.5).round();
         let gap = if compact_w { 10.0 } else { 14.0 };
-        let acct_w = if compact_w { 168.0 } else { 206.0 };
-        let play_w = if compact_w { 156.0 } else { 188.0 };
+        let acct_w = if compact_w { 168.0 } else { 200.0 };
+        let play_w = if compact_w { 156.0 } else { 180.0 };
         let play_x = ui_w - pad - play_w;
 
         let mid_left = pad + acct_w + gap;
         let mid_right = play_x - gap;
         let mid_avail = (mid_right - mid_left).max(160.0);
-        let prof_w = mid_avail.min(if compact_w { 390.0 } else { 460.0 });
+        let prof_w = mid_avail.min(if compact_w { 390.0 } else { 448.0 });
         let ideal_prof_x = ((ui_w - prof_w) * 0.5).round();
         let prof_x = ideal_prof_x.clamp(mid_left, (mid_right - prof_w).max(mid_left));
 
@@ -1520,7 +1670,7 @@ impl MobileLauncher {
                 }
             }
 
-            let head_sz = (bar_h - 10.0).clamp(32.0, 38.0);
+            let head_sz = (bar_h - 8.0).clamp(28.0, 38.0);
             let head_y = by + ((bar_h - head_sz) * 0.5).round();
             let head = account.as_ref().and_then(|a| self.backend.player_head(a));
             draw_player_head_with_dot(
@@ -1533,15 +1683,23 @@ impl MobileLauncher {
                 dot_col,
             );
 
-            let tx = pad + head_sz + 16.0;
-            let max_tw = (acct_w - head_sz - 28.0).max(40.0);
-            let fit_n = truncate_to_fit(p, Face::SemiBold, 14.0, acct_name, max_tw - 14.0);
-            let nw = p.measure(Face::SemiBold, 14.0, &fit_n);
-            let name_y = by + if bar_h < 46.0 { 5.0 } else { 7.0 };
+            let tx = pad + head_sz + 14.0;
+            let max_tw = (acct_w - head_sz - 24.0).max(40.0);
+            let fit_n = truncate_to_fit(p, Face::SemiBold, 13.5, acct_name, max_tw - 14.0);
+            let nw = p.measure(Face::SemiBold, 13.5, &fit_n);
+            let name_y = by
+                + if bar_h < 42.0 {
+                    3.0
+                } else if bar_h < 46.0 {
+                    5.0
+                } else {
+                    7.0
+                };
+            let name_h = if bar_h < 42.0 { 16.0 } else { 18.0 };
             p.text_line(
                 Face::SemiBold,
-                14.0,
-                18.0,
+                13.5,
+                name_h,
                 tx,
                 name_y,
                 palette::text(),
@@ -1550,26 +1708,26 @@ impl MobileLauncher {
             draw_icon_chevron(
                 p,
                 tx + nw + 8.0,
-                name_y + 9.0,
+                name_y + name_h * 0.5,
                 6.0,
                 palette::muted(),
                 active,
             );
 
-            let fit_sub = truncate_to_fit(p, Face::Regular, 11.0, acct_sub, max_tw);
+            let fit_sub = truncate_to_fit(p, Face::Regular, 10.5, acct_sub, max_tw);
             p.text_line(
                 Face::Regular,
-                11.0,
-                15.0,
+                10.5,
+                14.0,
                 tx,
-                name_y + 18.0,
+                name_y + name_h,
                 palette::muted(),
                 &fit_sub,
             );
         }
         hits.push(acct_hit);
 
-        // 2. Bottom-center: Single-line Profile Selector Pill (toggles floating popup)
+        // 2. Bottom-center: Single-line Profile Selector Pill (toggles upward bar-width dropdown)
         let selected_id = self.backend.selected_profile();
         let selected = profiles
             .iter()
@@ -1580,7 +1738,7 @@ impl MobileLauncher {
         let sel_state = selected.map_or(ProfileState::Available, |p| {
             effective_profile_state(p, setup)
         });
-        let pill_h = (bar_h - 6.0).clamp(38.0, 44.0);
+        let pill_h = (bar_h - if bar_h < 42.0 { 2.0 } else { 6.0 }).clamp(34.0, 44.0);
         let pill_y = by + ((bar_h - pill_h) * 0.5).round();
         let prof_hit = HitRect {
             id: ButtonId::ToggleProfilePicker,
@@ -1823,6 +1981,6 @@ impl MobileLauncher {
                 ),
             }
         }
-        prof_x + prof_w * 0.5
+        (prof_x, prof_w)
     }
 }

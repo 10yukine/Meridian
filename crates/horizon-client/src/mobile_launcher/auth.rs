@@ -154,24 +154,122 @@ impl MobileLauncher {
         avail_h: f32,
         col_danger: u32,
     ) {
+        let valid = valid_offline_name(self.offline_name.trim());
+        let feedback = self.offline_error.as_deref().or(if valid {
+            None
+        } else {
+            Some("Enter 1-16 letters, digits, or underscores.")
+        });
+
+        let tight_v = avail_h < 185.0;
         let compact_v = avail_h < 320.0;
-        let card_h = 270.0_f32.min(avail_h);
+        let pad_x = if tight_v { 18.0 } else { 28.0 };
+        let inner_x = x + pad_x;
+        let inner_w = (w - pad_x * 2.0).max(200.0);
+
+        // Ultra-tight keyboard-lifted layout: title + Back in header, input + Continue side-by-side.
+        if tight_v && inner_w >= 420.0 {
+            let needed_h: f32 = if feedback.is_some() { 118.0 } else { 100.0 };
+            let card_h = needed_h.min(avail_h);
+            let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
+            draw_plate(ui, x, cy_top, w, card_h, palette::border());
+
+            let hdr_h = 30.0;
+            let mut cy = cy_top + 8.0;
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::SemiBold,
+                    18.0,
+                    hdr_h,
+                    inner_x,
+                    cy,
+                    palette::text(),
+                    "Choose Offline Name",
+                );
+            }
+            draw_button(
+                ui,
+                hits,
+                ButtonId::CancelOffline,
+                inner_x + inner_w - 86.0,
+                cy,
+                86.0,
+                hdr_h,
+                Tone::Secondary,
+                "Back",
+            );
+            cy += hdr_h + 6.0;
+
+            let row_h = (card_h - (cy - cy_top) - if feedback.is_some() { 24.0 } else { 8.0 })
+                .clamp(34.0, 42.0);
+            let confirm_w = 176.0_f32.min(inner_w * 0.38);
+            draw_input_box(
+                ui,
+                hits,
+                ButtonId::FocusOfflineName,
+                inner_x,
+                cy,
+                inner_w - confirm_w - 10.0,
+                row_h,
+                "Player Name",
+                &self.offline_name,
+                false,
+                true,
+            );
+            draw_button(
+                ui,
+                hits,
+                ButtonId::ConfirmOffline,
+                inner_x + inner_w - confirm_w,
+                cy,
+                confirm_w,
+                row_h,
+                Tone::Primary,
+                "Continue Offline",
+            );
+            cy += row_h + 4.0;
+            if let Some(msg) = feedback
+                && let Some(p) = ui.paint()
+            {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), msg, inner_w);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    16.0,
+                    inner_x,
+                    cy,
+                    col_danger,
+                    &fit,
+                );
+            }
+            return;
+        }
+
+        let pad_y: f32 = if compact_v { 12.0 } else { 22.0 };
+        let hdr_step: f32 = if compact_v { 30.0 } else { 56.0 };
+        let field_h: f32 = if compact_v { 40.0 } else { 46.0 };
+        let field_gap: f32 = if compact_v { 8.0 } else { 10.0 };
+        let fb_step: f32 = if feedback.is_some() {
+            if compact_v { 20.0 } else { 24.0 }
+        } else {
+            0.0
+        };
+        let btn_h: f32 = if compact_v { 40.0 } else { 48.0 };
+        let needed_h = pad_y * 2.0 + hdr_step + field_h + field_gap + fb_step + btn_h;
+        let card_h = needed_h.min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, palette::border());
 
-        let inner_x = x + 28.0;
-        let inner_w = w - 56.0;
-        let mut cy = cy_top + if compact_v { 14.0 } else { 24.0 };
-
+        let mut cy = cy_top + pad_y;
         if let Some(p) = ui.paint() {
             p.text_line(
                 Face::SemiBold,
                 if compact_v {
-                    21.0
+                    20.0
                 } else {
                     ui_theme::sizes().title
                 },
-                if compact_v { 26.0 } else { 32.0 },
+                if compact_v { 24.0 } else { 30.0 },
                 inner_x,
                 cy,
                 palette::text(),
@@ -183,13 +281,13 @@ impl MobileLauncher {
                     ui_theme::small(),
                     18.0,
                     inner_x,
-                    cy + 34.0,
+                    cy + 32.0,
                     palette::muted(),
                     "1 to 16 characters: A-Z, a-z, 0-9, or underscore.",
                 );
             }
         }
-        cy += if compact_v { 34.0 } else { 60.0 };
+        cy += hdr_step;
 
         draw_input_box(
             ui,
@@ -198,20 +296,14 @@ impl MobileLauncher {
             inner_x,
             cy,
             inner_w,
-            if compact_v { 44.0 } else { 48.0 },
+            field_h,
             "Player Name",
             &self.offline_name,
             false,
             true,
         );
-        cy += if compact_v { 50.0 } else { 58.0 };
+        cy += field_h + field_gap;
 
-        let valid = valid_offline_name(self.offline_name.trim());
-        let feedback = self.offline_error.as_deref().or(if valid {
-            None
-        } else {
-            Some("Enter 1-16 letters, digits, or underscores.")
-        });
         if let Some(msg) = feedback {
             if let Some(p) = ui.paint() {
                 let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), msg, inner_w);
@@ -225,10 +317,10 @@ impl MobileLauncher {
                     &fit,
                 );
             }
-            cy += if compact_v { 20.0 } else { 24.0 };
+            cy += fb_step;
         }
 
-        let btn_h = if compact_v { 48.0 } else { 50.0 };
+        let eff_btn_h = btn_h.min((cy_top + card_h - cy - 6.0).max(34.0));
         let back_w = 128.0;
         draw_button(
             ui,
@@ -237,7 +329,7 @@ impl MobileLauncher {
             inner_x,
             cy,
             inner_w - back_w - 12.0,
-            btn_h,
+            eff_btn_h,
             Tone::Primary,
             "Continue Offline",
         );
@@ -248,7 +340,7 @@ impl MobileLauncher {
             inner_x + inner_w - back_w,
             cy,
             back_w,
-            btn_h,
+            eff_btn_h,
             Tone::Secondary,
             "Back",
         );
@@ -265,15 +357,142 @@ impl MobileLauncher {
         avail_h: f32,
         col_danger: u32,
     ) {
-        let compact_v = avail_h < 330.0;
-        let card_h = 282.0_f32.min(avail_h);
+        let compact_v = avail_h < 320.0;
+        let pad_x = if avail_h < 220.0 { 18.0 } else { 28.0 };
+        let inner_x = x + pad_x;
+        let inner_w = (w - pad_x * 2.0).max(200.0);
+
+        // Compact keyboard-lifted landscape: keep Username, Password, 2FA on one horizontal row
+        // so every field and Sign In stay visible above the soft keyboard with generous tap targets.
+        if avail_h < 280.0 && inner_w >= 540.0 {
+            let pad_y: f32 = if avail_h < 180.0 { 8.0 } else { 12.0 };
+            let hdr_h: f32 = 24.0;
+            let gap: f32 = if avail_h < 180.0 { 6.0 } else { 8.0 };
+            let field_h: f32 = if avail_h < 180.0 { 36.0 } else { 42.0 };
+            let btn_h: f32 = if avail_h < 180.0 { 36.0 } else { 42.0 };
+            let needed_h = pad_y * 2.0 + hdr_h + gap + field_h + gap + btn_h;
+            let card_h = needed_h.min(avail_h);
+            let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
+            draw_plate(ui, x, cy_top, w, card_h, palette::border());
+
+            let mut cy = cy_top + pad_y;
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::SemiBold,
+                    18.5,
+                    hdr_h,
+                    inner_x,
+                    cy,
+                    palette::text(),
+                    "Sign in with Ely.by",
+                );
+                if let Some(err) = &self.ely_error {
+                    let title_w = p.measure(Face::SemiBold, 18.5, "Sign in with Ely.by");
+                    let err_room = (inner_w - title_w - 16.0).max(80.0);
+                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, err_room);
+                    let ew = p.measure(Face::Regular, ui_theme::small(), &fit);
+                    p.text_line(
+                        Face::Regular,
+                        ui_theme::small(),
+                        hdr_h,
+                        inner_x + inner_w - ew,
+                        cy,
+                        col_danger,
+                        &fit,
+                    );
+                }
+            }
+            cy += hdr_h + gap;
+
+            let col_gap = 8.0;
+            let usable = inner_w - col_gap * 2.0;
+            let user_w = (usable * 0.40).round();
+            let pass_w = (usable * 0.34).round();
+            let otp_w = (usable - user_w - pass_w).max(110.0);
+            draw_input_box(
+                ui,
+                hits,
+                ButtonId::FocusElyUsername,
+                inner_x,
+                cy,
+                user_w,
+                field_h,
+                "Username",
+                &self.ely_username,
+                false,
+                self.ely_field == ElyField::Username,
+            );
+            draw_input_box(
+                ui,
+                hits,
+                ButtonId::FocusElyPassword,
+                inner_x + user_w + col_gap,
+                cy,
+                pass_w,
+                field_h,
+                "Password",
+                &self.ely_password,
+                true,
+                self.ely_field == ElyField::Password,
+            );
+            draw_input_box(
+                ui,
+                hits,
+                ButtonId::FocusElyOtp,
+                inner_x + user_w + pass_w + col_gap * 2.0,
+                cy,
+                otp_w,
+                field_h,
+                "2FA (Opt)",
+                &self.ely_otp,
+                false,
+                self.ely_field == ElyField::Otp,
+            );
+            cy += field_h + gap;
+
+            let eff_btn_h = btn_h.min((cy_top + card_h - cy - 6.0).max(34.0));
+            let back_w = 112.0;
+            draw_button(
+                ui,
+                hits,
+                ButtonId::ConfirmEly,
+                inner_x,
+                cy,
+                inner_w - back_w - 10.0,
+                eff_btn_h,
+                Tone::Primary,
+                "Sign In",
+            );
+            draw_button(
+                ui,
+                hits,
+                ButtonId::CancelEly,
+                inner_x + inner_w - back_w,
+                cy,
+                back_w,
+                eff_btn_h,
+                Tone::Secondary,
+                "Back",
+            );
+            return;
+        }
+
+        let pad_y: f32 = if compact_v { 12.0 } else { 20.0 };
+        let hdr_step: f32 = if compact_v { 28.0 } else { 38.0 };
+        let field_h: f32 = if compact_v { 38.0 } else { 44.0 };
+        let gap: f32 = if compact_v { 8.0 } else { 10.0 };
+        let err_step: f32 = if self.ely_error.is_some() {
+            if compact_v { 20.0 } else { 24.0 }
+        } else {
+            0.0
+        };
+        let btn_h: f32 = if compact_v { 42.0 } else { 48.0 };
+        let needed_h = pad_y * 2.0 + hdr_step + (field_h + gap) * 2.0 + err_step + btn_h;
+        let card_h = needed_h.min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, palette::border());
 
-        let inner_x = x + 28.0;
-        let inner_w = w - 56.0;
-        let mut cy = cy_top + if compact_v { 12.0 } else { 22.0 };
-
+        let mut cy = cy_top + pad_y;
         if let Some(p) = ui.paint() {
             p.text_line(
                 Face::SemiBold,
@@ -289,10 +508,8 @@ impl MobileLauncher {
                 "Sign in with Ely.by",
             );
         }
-        cy += if compact_v { 28.0 } else { 40.0 };
+        cy += hdr_step;
 
-        let field_h = if compact_v { 38.0 } else { 44.0 };
-        let gap = if compact_v { 8.0 } else { 12.0 };
         draw_input_box(
             ui,
             hits,
@@ -350,10 +567,10 @@ impl MobileLauncher {
                     &fit,
                 );
             }
-            cy += if compact_v { 20.0 } else { 24.0 };
+            cy += err_step;
         }
 
-        let btn_h = if compact_v { 48.0 } else { 50.0 };
+        let eff_btn_h = btn_h.min((cy_top + card_h - cy - 6.0).max(34.0));
         let back_w = 120.0;
         draw_button(
             ui,
@@ -362,7 +579,7 @@ impl MobileLauncher {
             inner_x,
             cy,
             inner_w - back_w - 10.0,
-            btn_h,
+            eff_btn_h,
             Tone::Primary,
             "Sign In",
         );
@@ -373,7 +590,7 @@ impl MobileLauncher {
             inner_x + inner_w - back_w,
             cy,
             back_w,
-            btn_h,
+            eff_btn_h,
             Tone::Secondary,
             "Back",
         );
