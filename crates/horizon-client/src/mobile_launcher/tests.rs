@@ -378,6 +378,11 @@ fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
     assert_eq!(launcher.route, Route::Skins);
     click_button(&mut launcher, size, ButtonId::GoHome);
 
+    // Open Mods once on Vanilla, then create a custom profile and confirm rail Mods switches to it.
+    click_button(&mut launcher, size, ButtonId::OpenMods);
+    assert_eq!(launcher.route, Route::Mods);
+    click_button(&mut launcher, size, ButtonId::GoHome);
+
     // Create profile with mixed-case display name distinct from its slug id
     click_button(&mut launcher, size, ButtonId::OpenNewProfile);
     launcher.typed("My Pack");
@@ -386,7 +391,7 @@ fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
     assert_eq!(launcher.backend().selected_profile(), "my-pack");
     assert_eq!(launcher.backend().profiles()[1].name, "My Pack");
 
-    click_button(&mut launcher, size, ButtonId::OpenModsForSelected);
+    click_button(&mut launcher, size, ButtonId::OpenMods);
     assert_eq!(launcher.route, Route::Mods);
     click_button(&mut launcher, size, ButtonId::ToggleProfileMod(0));
     assert!(!launcher.backend().mods("my-pack")[0].enabled);
@@ -516,6 +521,9 @@ fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
 
         click_button(&mut ready, size, ButtonId::OpenMods);
         assert_hits_fit_without_overlap(&ready, size, "mod-manager");
+
+        click_button(&mut ready, size, ButtonId::ModManagerPickProfile(0));
+        assert_hits_fit_without_overlap(&ready, size, "mod-manager-vanilla");
 
         click_button(&mut ready, size, ButtonId::OpenSkins);
         assert_hits_fit_without_overlap(&ready, size, "skins");

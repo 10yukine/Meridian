@@ -22,9 +22,10 @@ use crate::launcher_backend::{
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
 use widgets::{
-    Canvas, HitRect, Tone, account_short, draw_backdrop, draw_button, draw_north_star_logo,
-    draw_player_head, draw_sidebar_item, effective_profile_state, palette, profile_badge_parts,
-    profile_stats_line, stage_fraction, stage_name, stage_pill_text, truncate_to_fit,
+    Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, count_label,
+    draw_backdrop, draw_button, draw_icon_chevron, draw_north_star_badge, draw_play_button,
+    draw_player_head_with_dot, draw_rail_item, effective_profile_state, palette, stage_fraction,
+    stage_name, stage_pill_text, truncate_to_fit,
 };
 
 /// Action requested by clicking on [`MobileLauncher`].
@@ -487,9 +488,7 @@ impl MobileLauncher {
             ButtonId::OpenMods => {
                 self.confirm_remove_profile = None;
                 self.rename_modal = None;
-                let profiles = self.backend.profiles();
-                let pid = self.effective_mods_profile_id(&profiles);
-                self.mods_profile_id = Some(pid);
+                self.mods_profile_id = Some(self.backend.selected_profile());
                 self.mods_list_page = 0;
                 self.mod_registry_page = 0;
                 self.mods_error = None;
@@ -911,8 +910,8 @@ impl MobileLauncher {
 
         let short_h = ui_h < 460.0;
         let compact_w = ui_w < 860.0;
-        let pad = if compact_w { 12.0 } else { 20.0 };
-        let top_h = if short_h { 44.0 } else { 52.0 };
+        let pad = if compact_w { 12.0 } else { 18.0 };
+        let top_h = if short_h { 44.0 } else { 54.0 };
 
         let accounts = self.backend.accounts();
         let active_idx = self.backend.active_account();
@@ -922,12 +921,8 @@ impl MobileLauncher {
         let sign_in = self.backend.sign_in();
         let profiles = self.backend.profiles();
 
-        // ---- Top Strip: Logo (top left) + optional background progress pill ----
-        self.draw_top_bar(
-            ui, &mut hits, ui_w, pad, top_h, onboarding, &setup, &profiles,
-        );
-
         if onboarding {
+            self.draw_onboarding_top_bar(ui, &mut hits, ui_w, pad, top_h);
             let v_margin = if short_h { 8.0 } else { 18.0 };
             let content_top = top_h + v_margin;
             let content_h = (ui_h - content_top - v_margin).max(240.0);
@@ -1002,12 +997,13 @@ impl MobileLauncher {
             return hits;
         }
 
-        // ---- Signed-in Shell: Left Sidebar + Bottom Dock Bar + Main Content Area ----
-        let bottom_h = if short_h { 60.0 } else { 72.0 };
-        let sidebar_w = if compact_w { 132.0 } else { 164.0 };
-        let mid_h = (ui_h - top_h - bottom_h).max(200.0);
+        // ---- Signed-in Shell: Slim Left Icon Rail + Minimal Top Header + Unified Bottom Dock ----
+        let bottom_h = if short_h { 58.0 } else { 70.0 };
+        let rail_w = if compact_w { 64.0 } else { 72.0 };
+        let rail_h = (ui_h - bottom_h).max(240.0);
 
-        self.draw_sidebar(ui, &mut hits, top_h, sidebar_w, mid_h, short_h);
+        self.draw_rail(ui, &mut hits, rail_w, rail_h, short_h);
+        self.draw_workspace_header(ui, &mut hits, rail_w, ui_w, pad, top_h, &setup, &profiles);
         self.draw_bottom_bar(
             ui,
             &mut hits,
@@ -1024,11 +1020,11 @@ impl MobileLauncher {
             col_danger,
         );
 
-        let v_margin = if short_h { 8.0 } else { 16.0 };
-        let main_x = sidebar_w + pad;
+        let v_margin = if short_h { 6.0 } else { 12.0 };
+        let main_x = rail_w + pad;
         let main_y = top_h + v_margin;
-        let main_w = (ui_w - sidebar_w - pad * 2.0).max(280.0);
-        let main_h = (mid_h - v_margin * 2.0).max(180.0);
+        let main_w = (ui_w - rail_w - pad * 2.0).max(280.0);
+        let main_h = (rail_h - top_h - v_margin * 2.0).max(180.0);
         let modal_w = main_w.min(600.0);
         let modal_x = main_x + ((main_w - modal_w) * 0.5).round();
 
@@ -1156,69 +1152,72 @@ impl MobileLauncher {
         hits
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_top_bar(
+    fn draw_onboarding_top_bar(
         &self,
         ui: &mut Canvas<'_, '_>,
         hits: &mut Vec<HitRect>,
         ui_w: f32,
         pad: f32,
         top_h: f32,
-        onboarding: bool,
-        setup: &Setup,
-        profiles: &[Profile],
     ) {
         if let Some(p) = ui.paint() {
-            p.rounded(0.0, 0.0, ui_w, top_h, 0.0, palette::card());
-            p.rounded(0.0, top_h - 1.0, ui_w, 1.0, 0.0, palette::border());
-        }
-
-        let btn_h = (top_h - 8.0).max(36.0);
-        let btn_y = ((top_h - btn_h) * 0.5).round();
-        let wordmark_w = ui.ro().measure(Face::SemiBold, 19.0, "Meridian");
-        let brand_w = 34.0 + wordmark_w + 16.0;
-        let logo_hit = HitRect {
-            id: ButtonId::GoHome,
-            x: pad,
-            y: btn_y,
-            w: brand_w,
-            h: btn_h,
-        };
-        if let Some(p) = ui.paint() {
-            draw_north_star_logo(p, pad + 2.0, ((top_h - 26.0) * 0.5).round(), 26.0);
+            p.rounded(0.0, 0.0, ui_w, top_h, 0.0, palette::rail());
+            p.rounded(0.0, top_h - 1.0, ui_w, 1.0, 0.0, palette::border_subtle());
+            let badge_sz = (top_h - 18.0).clamp(28.0, 34.0);
+            draw_north_star_badge(p, pad, ((top_h - badge_sz) * 0.5).round(), badge_sz);
             p.text_line(
                 Face::SemiBold,
                 19.0,
                 top_h,
-                pad + 34.0,
+                pad + badge_sz + 12.0,
                 0.0,
                 palette::text(),
                 "Meridian",
             );
         }
-        if !onboarding {
-            hits.push(logo_hit);
-        }
+        let btn_h = (top_h - 10.0).max(34.0);
+        let btn_y = ((top_h - btn_h) * 0.5).round();
+        let settings_w =
+            (ui.ro().measure(Face::Medium, ui_theme::body(), "Settings") + 24.0).max(86.0);
+        draw_button(
+            ui,
+            hits,
+            ButtonId::OpenSettings,
+            ui_w - pad - settings_w,
+            btn_y,
+            settings_w,
+            btn_h,
+            if self.route == Route::Settings {
+                Tone::Banner
+            } else {
+                Tone::Ghost
+            },
+            "Settings",
+        );
+    }
 
-        if onboarding {
-            let settings_w =
-                (ui.ro().measure(Face::Medium, ui_theme::body(), "Settings") + 24.0).max(86.0);
-            draw_button(
-                ui,
-                hits,
-                ButtonId::OpenSettings,
-                ui_w - pad - settings_w,
-                btn_y,
-                settings_w,
-                btn_h,
-                if self.route == Route::Settings {
-                    Tone::Banner
-                } else {
-                    Tone::Secondary
-                },
-                "Settings",
+    #[allow(clippy::too_many_arguments)]
+    fn draw_workspace_header(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        rail_w: f32,
+        ui_w: f32,
+        pad: f32,
+        top_h: f32,
+        setup: &Setup,
+        profiles: &[Profile],
+    ) {
+        if let Some(p) = ui.paint() {
+            p.text_line(
+                Face::SemiBold,
+                if top_h < 48.0 { 18.0 } else { 20.0 },
+                top_h,
+                rail_w + pad,
+                0.0,
+                palette::text(),
+                "Meridian",
             );
-            return;
         }
 
         // Top right: only show a background progress pill while an install runs off-screen.
@@ -1237,7 +1236,10 @@ impl MobileLauncher {
             None
         };
         if let Some(summary) = bg_progress {
-            let max_pill_w = (ui_w - pad * 2.0 - brand_w - 16.0).max(120.0);
+            let btn_h = (top_h - 14.0).max(32.0);
+            let btn_y = ((top_h - btn_h) * 0.5).round();
+            let wordmark_w = ui.ro().measure(Face::SemiBold, 20.0, "Meridian");
+            let max_pill_w = (ui_w - rail_w - pad * 2.0 - wordmark_w - 20.0).max(120.0);
             let pill_w =
                 (ui.ro().measure(Face::Mono, ui_theme::small(), &summary) + 24.0).min(max_pill_w);
             draw_button(
@@ -1254,44 +1256,84 @@ impl MobileLauncher {
         }
     }
 
-    fn draw_sidebar(
+    fn draw_rail(
         &self,
         ui: &mut Canvas<'_, '_>,
         hits: &mut Vec<HitRect>,
-        top_y: f32,
         w: f32,
         h: f32,
         short_h: bool,
     ) {
         if let Some(p) = ui.paint() {
-            p.rounded(0.0, top_y, w, h, 0.0, palette::card());
-            p.rounded(w - 1.0, top_y, 1.0, h, 0.0, palette::border());
+            p.rounded(0.0, 0.0, w, h, 0.0, palette::rail());
+            p.rounded(w - 1.0, 0.0, 1.0, h, 0.0, palette::border_subtle());
         }
 
-        let sx = 10.0;
-        let sw = w - 20.0;
-        let mut sy = top_y + if short_h { 10.0 } else { 16.0 };
-        let item_h = 48.0;
-        let gap = if short_h { 8.0 } else { 10.0 };
+        // Top-left: Glowing North Star brand badge
+        let badge_sz = if short_h { 36.0 } else { 42.0 };
+        let badge_x = ((w - badge_sz) * 0.5).round();
+        let badge_y = if short_h { 8.0 } else { 10.0 };
+        let logo_hit = HitRect {
+            id: ButtonId::GoHome,
+            x: badge_x,
+            y: badge_y,
+            w: badge_sz,
+            h: badge_sz,
+        };
+        if let Some(p) = ui.paint() {
+            draw_north_star_badge(p, badge_x, badge_y, badge_sz);
+            let div_y = badge_y + badge_sz + if short_h { 8.0 } else { 12.0 };
+            p.rounded(14.0, div_y, w - 28.0, 1.0, 0.0, palette::border_subtle());
+        }
+        hits.push(logo_hit);
 
-        let items = [
+        let item_w = (w - 16.0).clamp(48.0, 56.0);
+        let item_x = ((w - item_w) * 0.5).round();
+        let item_h = if short_h { 44.0 } else { 52.0 };
+        let gap = if short_h { 6.0 } else { 10.0 };
+        let mut sy = badge_y + badge_sz + if short_h { 16.0 } else { 24.0 };
+
+        let upper_items = [
             (
                 ButtonId::GoHome,
+                RailIcon::Home,
                 "Home",
                 matches!(self.route, Route::Home | Route::Install | Route::NewProfile),
             ),
-            (ButtonId::OpenMods, "Mods", self.route == Route::Mods),
-            (ButtonId::OpenSkins, "Skins", self.route == Route::Skins),
             (
-                ButtonId::OpenSettings,
-                "Settings",
-                self.route == Route::Settings,
+                ButtonId::OpenMods,
+                RailIcon::Mods,
+                "Mods",
+                self.route == Route::Mods,
+            ),
+            (
+                ButtonId::OpenSkins,
+                RailIcon::Skins,
+                "Skins",
+                self.route == Route::Skins,
             ),
         ];
-        for (id, label, active) in items {
-            draw_sidebar_item(ui, hits, id, sx, sy, sw, item_h, active, label);
+        for (id, icon, label, active) in upper_items {
+            draw_rail_item(
+                ui, hits, id, item_x, sy, item_w, item_h, active, icon, label,
+            );
             sy += item_h + gap;
         }
+
+        // Bottom of left rail: Settings anchored cleanly above the bottom dock
+        let settings_y = (h - item_h - if short_h { 8.0 } else { 14.0 }).max(sy + 4.0);
+        draw_rail_item(
+            ui,
+            hits,
+            ButtonId::OpenSettings,
+            item_x,
+            settings_y,
+            item_w,
+            item_h,
+            self.route == Route::Settings,
+            RailIcon::Settings,
+            "Settings",
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1312,20 +1354,25 @@ impl MobileLauncher {
         col_danger: u32,
     ) {
         if let Some(p) = ui.paint() {
-            p.rounded(0.0, y, ui_w, h, 0.0, palette::card());
-            p.rounded(0.0, y, ui_w, 1.0, 0.0, palette::border());
+            p.rounded(0.0, y, ui_w, h, 0.0, palette::rail());
+            p.rounded(0.0, y, ui_w, 1.0, 0.0, palette::border_subtle());
         }
 
-        let bar_h = (h - 12.0).clamp(48.0, 54.0);
+        let bar_h = (h - 14.0).clamp(44.0, 50.0);
         let by = y + ((h - bar_h) * 0.5).round();
-        let gap = 12.0;
-        let acct_w = if compact_w { 168.0 } else { 200.0 };
-        let play_w = if compact_w { 184.0 } else { 220.0 };
-        let prof_x = pad + acct_w + gap;
-        let prof_w = (ui_w - pad * 2.0 - acct_w - play_w - gap * 2.0).max(160.0);
+        let gap = if compact_w { 10.0 } else { 14.0 };
+        let acct_w = if compact_w { 176.0 } else { 216.0 };
+        let play_w = if compact_w { 164.0 } else { 196.0 };
         let play_x = ui_w - pad - play_w;
 
-        // 1. Bottom-left: Player Head (Account Switcher)
+        let mid_left = pad + acct_w + gap;
+        let mid_right = play_x - gap;
+        let mid_avail = (mid_right - mid_left).max(160.0);
+        let prof_w = mid_avail.min(if compact_w { 300.0 } else { 360.0 });
+        let ideal_prof_x = ((ui_w - prof_w) * 0.5).round();
+        let prof_x = ideal_prof_x.clamp(mid_left, (mid_right - prof_w).max(mid_left));
+
+        // 1. Bottom-left: Borderless Player Head + Account Switcher
         let acct_hit = HitRect {
             id: ButtonId::OpenAccountSwitcher,
             x: pad,
@@ -1334,66 +1381,95 @@ impl MobileLauncher {
             h: bar_h,
         };
         let (acct_name, acct_sub, dot_col) = match account {
-            Some(a @ Account::Microsoft { .. }) => (account_short(a), "Microsoft", col_success),
-            Some(a @ Account::Ely { .. }) => (account_short(a), "Ely.by", col_success),
-            Some(a @ Account::Offline { .. }) => (account_short(a), "Offline", col_warn),
-            None => ("Account", "Sign in", palette::muted()),
+            Some(a @ Account::Microsoft { .. }) => {
+                (account_short(a), account_provider_tag(a), col_success)
+            }
+            Some(a @ Account::Ely { .. }) => {
+                (account_short(a), account_provider_tag(a), col_success)
+            }
+            Some(a @ Account::Offline { .. }) => {
+                (account_short(a), account_provider_tag(a), col_warn)
+            }
+            None => ("Account", "Not signed in", palette::muted()),
         };
         if let Some(p) = ui.paint() {
             let active = self.route == Route::AccountSwitcher;
-            let fill = if active {
-                color::with_alpha(palette::accent(), 0.22)
-            } else if acct_hit.contains(p.cursor) {
-                palette::surface_hover()
-            } else {
-                palette::surface()
-            };
-            let bdr = if active {
-                palette::accent_star()
-            } else {
-                palette::border()
-            };
-            p.rounded(pad, by, acct_w, bar_h, 10.0, fill);
-            p.border(pad, by, acct_w, bar_h, 10.0, bdr);
+            let hovered = acct_hit.contains(p.cursor);
+            if active || hovered {
+                p.rounded(
+                    pad,
+                    by,
+                    acct_w,
+                    bar_h,
+                    10.0,
+                    if active {
+                        color::with_alpha(palette::accent(), 0.16)
+                    } else {
+                        palette::surface()
+                    },
+                );
+                if active {
+                    p.border(
+                        pad,
+                        by,
+                        acct_w,
+                        bar_h,
+                        10.0,
+                        color::with_alpha(palette::accent_star(), 0.65),
+                    );
+                }
+            }
 
-            let head_sz = (bar_h - 14.0).clamp(30.0, 36.0);
+            let head_sz = (bar_h - 10.0).clamp(32.0, 38.0);
             let head_y = by + ((bar_h - head_sz) * 0.5).round();
             let head = account.as_ref().and_then(|a| self.backend.player_head(a));
-            draw_player_head(p, pad + 8.0, head_y, head_sz, head.as_ref(), acct_name);
+            draw_player_head_with_dot(
+                p,
+                pad + 6.0,
+                head_y,
+                head_sz,
+                head.as_ref(),
+                acct_name,
+                dot_col,
+            );
 
             let tx = pad + head_sz + 16.0;
-            let max_tw = (acct_w - head_sz - 34.0).max(40.0);
-            let fit_n = truncate_to_fit(p, Face::SemiBold, 14.0, acct_name, max_tw);
+            let max_tw = (acct_w - head_sz - 28.0).max(40.0);
+            let fit_n = truncate_to_fit(p, Face::SemiBold, 14.0, acct_name, max_tw - 14.0);
+            let nw = p.measure(Face::SemiBold, 14.0, &fit_n);
+            let name_y = by + if bar_h < 46.0 { 5.0 } else { 7.0 };
             p.text_line(
                 Face::SemiBold,
                 14.0,
                 18.0,
                 tx,
-                by + 7.0,
+                name_y,
                 palette::text(),
                 &fit_n,
             );
-            p.text_line(
-                Face::Mono,
-                11.0,
-                16.0,
-                tx,
-                by + 25.0,
+            draw_icon_chevron(
+                p,
+                tx + nw + 8.0,
+                name_y + 9.0,
+                6.0,
                 palette::muted(),
-                acct_sub,
+                active,
             );
-            p.rounded(
-                pad + acct_w - 14.0,
-                by + ((bar_h - 6.0) * 0.5).round(),
-                6.0,
-                6.0,
-                3.0,
-                dot_col,
+
+            let fit_sub = truncate_to_fit(p, Face::Regular, 11.0, acct_sub, max_tw);
+            p.text_line(
+                Face::Regular,
+                11.0,
+                15.0,
+                tx,
+                name_y + 18.0,
+                palette::muted(),
+                &fit_sub,
             );
         }
         hits.push(acct_hit);
 
-        // 2. Bottom-center: Profile Bar selector (dropdown style)
+        // 2. Bottom-center: Centered Profile Selector Pill
         let selected_id = self.backend.selected_profile();
         let selected = profiles
             .iter()
@@ -1404,120 +1480,120 @@ impl MobileLauncher {
         let sel_state = selected.map_or(ProfileState::Available, |p| {
             effective_profile_state(p, setup)
         });
+        let pill_h = (bar_h - 6.0).clamp(38.0, 44.0);
+        let pill_y = by + ((bar_h - pill_h) * 0.5).round();
         let prof_hit = HitRect {
             id: ButtonId::ToggleProfilePicker,
             x: prof_x,
-            y: by,
+            y: pill_y,
             w: prof_w,
-            h: bar_h,
+            h: pill_h,
         };
         if let Some(p) = ui.paint() {
             let open = self.route == Route::Profiles;
+            let hovered = prof_hit.contains(p.cursor);
             let fill = if open {
-                color::with_alpha(palette::accent(), 0.22)
-            } else if prof_hit.contains(p.cursor) {
+                color::with_alpha(palette::accent(), 0.16)
+            } else if hovered {
                 palette::surface_hover()
             } else {
                 palette::surface()
             };
-            let bdr = if open {
-                palette::accent_star()
+            let bdr = if open || hovered {
+                color::with_alpha(palette::accent_star(), 0.75)
             } else {
                 palette::border()
             };
-            p.rounded(prof_x, by, prof_w, bar_h, 10.0, fill);
-            p.border(prof_x, by, prof_w, bar_h, 10.0, bdr);
-
-            let badge_sz = (bar_h - 14.0).clamp(30.0, 36.0);
-            let badge_y = by + ((bar_h - badge_sz) * 0.5).round();
+            p.rounded(prof_x, pill_y, prof_w, pill_h, 11.0, fill);
+            p.border(prof_x, pill_y, prof_w, pill_h, 11.0, bdr);
+            // Subtle centered violet underline accent along bottom of the pill
+            let line_w = if open || hovered {
+                prof_w * 0.48
+            } else {
+                prof_w * 0.24
+            };
             p.rounded(
-                prof_x + 8.0,
-                badge_y,
-                badge_sz,
-                badge_sz,
-                7.0,
-                if sel_id == VANILLA {
-                    palette::card()
+                prof_x + ((prof_w - line_w) * 0.5).round(),
+                pill_y + pill_h - 2.0,
+                line_w,
+                2.0,
+                1.0,
+                if open || hovered {
+                    palette::accent_star()
                 } else {
-                    color::with_alpha(palette::accent(), 0.26)
+                    color::with_alpha(palette::accent(), 0.42)
                 },
             );
-            p.border(
-                prof_x + 8.0,
-                badge_y,
-                badge_sz,
-                badge_sz,
-                7.0,
-                palette::accent_star(),
-            );
-            draw_north_star_logo(
-                p,
-                prof_x + 8.0 + ((badge_sz - 20.0) * 0.5).round(),
-                badge_y + ((badge_sz - 20.0) * 0.5).round(),
-                20.0,
-            );
 
-            let chev = if open { "^" } else { "v" };
-            let chev_x = prof_x + prof_w - 22.0;
-            p.text_line(Face::Mono, 14.0, bar_h, chev_x, by, palette::muted(), chev);
-
-            let (state_lbl, state_col) =
-                profile_badge_parts(&sel_state, true, col_success, col_danger);
-            let st_w = p.measure(Face::Mono, 11.0, &state_lbl) + 14.0;
-            let st_x = chev_x - st_w - 10.0;
-            let tx = prof_x + badge_sz + 18.0;
-            let show_badge = st_x > tx + 110.0;
-            if show_badge {
-                let st_y = by + ((bar_h - 22.0) * 0.5).round();
-                p.rounded(
-                    st_x,
-                    st_y,
-                    st_w,
-                    22.0,
-                    5.0,
-                    color::with_alpha(state_col, 0.18),
-                );
-                p.border(st_x, st_y, st_w, 22.0, 5.0, state_col);
-                p.text_line(
-                    Face::Mono,
-                    11.0,
-                    22.0,
-                    st_x + 7.0,
-                    st_y,
-                    state_col,
-                    &state_lbl,
-                );
-            }
-
-            let text_right = if show_badge {
-                st_x - 10.0
-            } else {
-                chev_x - 8.0
+            let state_dot = match &sel_state {
+                ProfileState::Installed => col_success,
+                ProfileState::Installing(_) | ProfileState::Available => palette::accent_star(),
+                ProfileState::Failed(_) => col_danger,
             };
-            let max_tw = (text_right - tx).max(50.0);
-            let fit_n = truncate_to_fit(p, Face::SemiBold, 15.0, sel_name, max_tw);
+            p.rounded(
+                prof_x + 14.0,
+                pill_y + ((pill_h - 8.0) * 0.5).round(),
+                8.0,
+                8.0,
+                4.0,
+                state_dot,
+            );
+
+            let summary = match (&sel_state, selected) {
+                (ProfileState::Installing(prog), _) => {
+                    format!(
+                        "Installing {}%",
+                        (stage_fraction(prog) * 100.0).round() as u32
+                    )
+                }
+                (ProfileState::Available, _) => "Needs install".to_owned(),
+                (ProfileState::Failed(_), _) => "Install failed".to_owned(),
+                (ProfileState::Installed, Some(prof)) if prof.mods > 0 => format!(
+                    "{}  |  {}",
+                    count_label(prof.mods, "mod", "mods"),
+                    count_label(prof.worlds, "world", "worlds")
+                ),
+                (ProfileState::Installed, Some(prof)) => {
+                    format!("26.3  |  {}", count_label(prof.worlds, "world", "worlds"))
+                }
+                _ => "Minecraft 26.3".to_owned(),
+            };
+
+            let tx = prof_x + 30.0;
+            let chev_x = prof_x + prof_w - 18.0;
+            let max_tw = (chev_x - 10.0 - tx).max(60.0);
+            let name_fit = truncate_to_fit(p, Face::SemiBold, 13.5, sel_name, max_tw * 0.58);
+            let nw = p.measure(Face::SemiBold, 13.5, &name_fit);
             p.text_line(
                 Face::SemiBold,
-                15.0,
-                18.0,
+                13.5,
+                pill_h,
                 tx,
-                by + 6.0,
+                pill_y,
                 palette::text(),
-                &fit_n,
+                &name_fit,
             );
-
-            let sub = selected
-                .map(profile_stats_line)
-                .unwrap_or_else(|| "0 mods  |  0 worlds".to_owned());
-            let fit_s = truncate_to_fit(p, Face::Mono, 11.0, &sub, max_tw);
-            p.text_line(
-                Face::Mono,
-                11.0,
-                16.0,
-                tx,
-                by + 26.0,
+            let rem_w = max_tw - nw - 12.0;
+            if rem_w > 46.0 {
+                let sep_and_sub = format!("  -  {summary}");
+                let fit_s = truncate_to_fit(p, Face::Regular, 12.0, &sep_and_sub, rem_w + 12.0);
+                p.text_line(
+                    Face::Regular,
+                    12.0,
+                    pill_h,
+                    tx + nw,
+                    pill_y,
+                    palette::muted(),
+                    &fit_s,
+                );
+            }
+            draw_icon_chevron(
+                p,
+                chev_x,
+                pill_y + pill_h * 0.5,
+                7.0,
                 palette::muted(),
-                &fit_s,
+                open,
             );
         }
         hits.push(prof_hit);
@@ -1525,7 +1601,7 @@ impl MobileLauncher {
         // 3. Bottom-right: Primary Play / Install CTA
         let base_ready = matches!(setup, Setup::Ready);
         if account.is_none() {
-            draw_button(
+            draw_play_button(
                 ui,
                 hits,
                 ButtonId::OpenAccountSwitcher,
@@ -1533,12 +1609,12 @@ impl MobileLauncher {
                 by,
                 play_w,
                 bar_h,
-                Tone::Primary,
                 "Pick Account",
+                false,
             );
         } else if sel_id == VANILLA || !base_ready {
             match setup {
-                Setup::Needed => draw_button(
+                Setup::Needed => draw_play_button(
                     ui,
                     hits,
                     ButtonId::InstallSelected,
@@ -1546,12 +1622,12 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    Tone::Primary,
                     if sel_id == VANILLA {
                         "Install Game"
                     } else {
                         "Install Base Game"
                     },
+                    false,
                 ),
                 Setup::Running(prog) => {
                     let pct = (stage_fraction(prog) * 100.0).round() as u32;
@@ -1578,7 +1654,7 @@ impl MobileLauncher {
                     Tone::Danger,
                     "Retry Install",
                 ),
-                Setup::Ready => draw_button(
+                Setup::Ready => draw_play_button(
                     ui,
                     hits,
                     ButtonId::PlaySelected,
@@ -1586,13 +1662,13 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    Tone::Primary,
                     "Play",
+                    true,
                 ),
             }
         } else {
             match sel_state {
-                ProfileState::Available => draw_button(
+                ProfileState::Available => draw_play_button(
                     ui,
                     hits,
                     ButtonId::InstallSelected,
@@ -1600,30 +1676,30 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    Tone::Primary,
                     "Install Profile",
+                    false,
                 ),
                 ProfileState::Installing(ref prog) => {
                     let frac = stage_fraction(prog);
                     let pct = (frac * 100.0).round() as u32;
                     if let Some(p) = ui.paint() {
-                        p.rounded(play_x, by, play_w, bar_h, 10.0, palette::surface());
-                        p.border(play_x, by, play_w, bar_h, 10.0, palette::accent_star());
+                        p.rounded(play_x, by, play_w, bar_h, 11.0, palette::surface());
+                        p.border(play_x, by, play_w, bar_h, 11.0, palette::accent_star());
                         if frac > 0.0 {
                             p.rounded(
-                                play_x + 2.0,
-                                by + 2.0,
-                                ((play_w - 4.0) * frac).max(10.0),
-                                bar_h - 4.0,
+                                play_x + 3.0,
+                                by + 3.0,
+                                ((play_w - 6.0) * frac).max(12.0),
+                                bar_h - 6.0,
                                 8.0,
-                                color::with_alpha(palette::accent(), 0.35),
+                                color::with_alpha(palette::accent_fill(), 0.78),
                             );
                         }
                         let txt = format!("Installing {pct}%...");
-                        let tw = p.measure(Face::Medium, ui_theme::sizes().ui, &txt);
+                        let tw = p.measure(Face::SemiBold, 14.0, &txt);
                         p.text_line(
-                            Face::Medium,
-                            ui_theme::sizes().ui,
+                            Face::SemiBold,
+                            14.0,
                             bar_h,
                             play_x + ((play_w - tw) * 0.5).round(),
                             by,
@@ -1643,7 +1719,7 @@ impl MobileLauncher {
                     Tone::Danger,
                     "Retry Install",
                 ),
-                ProfileState::Installed => draw_button(
+                ProfileState::Installed => draw_play_button(
                     ui,
                     hits,
                     ButtonId::PlaySelected,
@@ -1651,8 +1727,8 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    Tone::Primary,
                     "Play",
+                    true,
                 ),
             }
         }

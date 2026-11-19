@@ -32,46 +32,112 @@ impl MobileLauncher {
             .find(|p| p.id == selected_id)
             .or_else(|| profiles.first());
         let sel_is_custom = selected.is_some_and(|p| p.id != VANILLA);
+        let sel_name = selected.map_or("Vanilla", |p| p.name.as_str());
 
-        let mut list_y = y;
-        let mut list_h = avail_h;
+        // Single calm unified workspace panel
+        draw_plate(ui, x, y, w, avail_h, palette::border());
+        let lx = x + if compact_v { 16.0 } else { 22.0 };
+        let lw = w - if compact_v { 32.0 } else { 44.0 };
+        let mut ly = y + if compact_v { 10.0 } else { 18.0 };
+        let hdr_h: f32 = if compact_v { 36.0 } else { 54.0 };
+        let btn_h: f32 = if compact_v { 34.0 } else { 38.0 };
+        let btn_y = ly + ((hdr_h - btn_h) * 0.5).round();
 
-        // On desktop Home, display a sleek North Star hero banner for the active profile above the cards.
+        let new_w = if compact_v { 126.0 } else { 138.0 };
+        let mut right_edge = lx + lw;
+        draw_button(
+            ui,
+            hits,
+            ButtonId::OpenNewProfile,
+            right_edge - new_w,
+            btn_y,
+            new_w,
+            btn_h,
+            Tone::Secondary,
+            "+ New profile",
+        );
+        right_edge -= new_w + 8.0;
+
+        if sel_is_custom {
+            let del_w = if compact_v { 72.0 } else { 80.0 };
+            draw_button(
+                ui,
+                hits,
+                ButtonId::AskRemoveSelected,
+                right_edge - del_w,
+                btn_y,
+                del_w,
+                btn_h,
+                Tone::Danger,
+                "Delete",
+            );
+            right_edge -= del_w + 6.0;
+            let ren_w = if compact_v { 76.0 } else { 84.0 };
+            draw_button(
+                ui,
+                hits,
+                ButtonId::OpenRenameSelected,
+                right_edge - ren_w,
+                btn_y,
+                ren_w,
+                btn_h,
+                Tone::Secondary,
+                "Rename",
+            );
+            right_edge -= ren_w + 6.0;
+        }
+
         if !compact_v && picker_title.is_none() {
-            let hero_h = 104.0;
-            draw_plate(ui, x, y, w, hero_h, palette::accent_star());
-            let hx = x + 22.0;
-            let hw = w - 44.0;
-            let sel_name = selected.map_or("Vanilla", |p| p.name.as_str());
-            let actions_w = if sel_is_custom { 286.0 } else { 96.0 };
-            if let Some(p) = ui.paint() {
+            let mods_w = 78.0;
+            draw_button(
+                ui,
+                hits,
+                ButtonId::OpenModsForSelected,
+                right_edge - mods_w,
+                btn_y,
+                mods_w,
+                btn_h,
+                Tone::Ghost,
+                "Mods",
+            );
+            right_edge -= mods_w + 8.0;
+        }
+
+        if let Some(p) = ui.paint() {
+            let title_max = (right_edge - lx - 10.0).max(80.0);
+            let heading = picker_title.unwrap_or(sel_name);
+            let fit_heading = truncate_to_fit(
+                p,
+                Face::SemiBold,
+                if compact_v { 18.0 } else { 22.0 },
+                heading,
+                title_max,
+            );
+            if compact_v {
                 p.text_line(
-                    Face::Mono,
-                    ui_theme::small(),
-                    16.0,
-                    hx,
-                    y + 14.0,
-                    palette::accent_star(),
-                    "MINECRAFT: JAVA EDITION 26.3",
-                );
-                let title_fit = truncate_to_fit(
-                    p,
                     Face::SemiBold,
-                    22.0,
-                    sel_name,
-                    (hw - actions_w - 16.0).max(80.0),
+                    18.0,
+                    hdr_h,
+                    lx,
+                    ly,
+                    palette::text(),
+                    &fit_heading,
                 );
+            } else {
                 p.text_line(
                     Face::SemiBold,
                     22.0,
                     28.0,
-                    hx,
-                    y + 34.0,
+                    lx,
+                    ly + 2.0,
                     palette::text(),
-                    &title_fit,
+                    &fit_heading,
                 );
                 let sub = if let Some(note) = &self.status_note {
                     note.clone()
+                } else if picker_title.is_some() {
+                    "Worlds stay separate per profile. Vanilla keeps your main game folder."
+                        .to_owned()
                 } else if let Some(prof) = selected {
                     profile_stats_line(prof)
                 } else {
@@ -82,164 +148,41 @@ impl MobileLauncher {
                 } else {
                     palette::muted()
                 };
-                let sub_fit = truncate_to_fit(
-                    p,
-                    Face::Mono,
-                    ui_theme::small(),
-                    &sub,
-                    (hw - actions_w - 16.0).max(80.0),
-                );
-                p.text_line(
-                    Face::Mono,
-                    ui_theme::small(),
-                    18.0,
-                    hx,
-                    y + 68.0,
-                    sub_col,
-                    &sub_fit,
-                );
-            }
-
-            let act_h = 40.0;
-            let ay = y + ((hero_h - act_h) * 0.5).round();
-            if sel_is_custom {
-                let mut rx = hx + hw - 88.0;
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::AskRemoveSelected,
-                    rx,
-                    ay,
-                    88.0,
-                    act_h,
-                    Tone::Danger,
-                    "Delete",
-                );
-                rx -= 96.0;
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::OpenRenameSelected,
-                    rx,
-                    ay,
-                    88.0,
-                    act_h,
-                    Tone::Secondary,
-                    "Rename",
-                );
-                rx -= 96.0;
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::OpenModsForSelected,
-                    rx,
-                    ay,
-                    88.0,
-                    act_h,
-                    Tone::Secondary,
-                    "Mods",
-                );
-            } else {
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::OpenModsForSelected,
-                    hx + hw - 92.0,
-                    ay,
-                    92.0,
-                    act_h,
-                    Tone::Secondary,
-                    "Mods",
-                );
-            }
-
-            list_y = y + hero_h + 12.0;
-            list_h = (avail_h - hero_h - 12.0).max(160.0);
-        }
-
-        // Profiles panel
-        draw_plate(ui, x, list_y, w, list_h, palette::border());
-        let lx = x + 20.0;
-        let lw = w - 40.0;
-        let mut ly = list_y + if compact_v { 10.0 } else { 16.0 };
-        let hdr_h = if compact_v { 34.0 } else { 40.0 };
-
-        if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::SemiBold,
-                if compact_v { 18.0 } else { 20.0 },
-                hdr_h,
-                lx,
-                ly,
-                palette::text(),
-                picker_title.unwrap_or("Profiles"),
-            );
-        }
-
-        let new_w = if compact_v { 128.0 } else { 144.0 };
-        let mut right_edge = lx + lw;
-        draw_button(
-            ui,
-            hits,
-            ButtonId::OpenNewProfile,
-            right_edge - new_w,
-            ly,
-            new_w,
-            hdr_h,
-            Tone::Secondary,
-            "+ New profile",
-        );
-        right_edge -= new_w + 8.0;
-
-        // On compact phone landscape or in the Profile Picker, expose Rename/Delete right in the header.
-        if (compact_v || picker_title.is_some()) && sel_is_custom {
-            let del_w = 76.0;
-            draw_button(
-                ui,
-                hits,
-                ButtonId::AskRemoveSelected,
-                right_edge - del_w,
-                ly,
-                del_w,
-                hdr_h,
-                Tone::Danger,
-                "Delete",
-            );
-            right_edge -= del_w + 6.0;
-            let ren_w = 82.0;
-            draw_button(
-                ui,
-                hits,
-                ButtonId::OpenRenameSelected,
-                right_edge - ren_w,
-                ly,
-                ren_w,
-                hdr_h,
-                Tone::Secondary,
-                "Rename",
-            );
-        }
-        ly += hdr_h + if compact_v { 6.0 } else { 8.0 };
-
-        if !compact_v {
-            if let Some(p) = ui.paint() {
+                let fit_sub = truncate_to_fit(p, Face::Regular, ui_theme::small(), &sub, title_max);
                 p.text_line(
                     Face::Regular,
                     ui_theme::small(),
                     18.0,
                     lx,
+                    ly + 32.0,
+                    sub_col,
+                    &fit_sub,
+                );
+            }
+            let div_y = ly + hdr_h + if compact_v { 6.0 } else { 12.0 };
+            p.rounded(x + 1.0, div_y, w - 2.0, 1.0, 0.0, palette::border_subtle());
+        }
+        ly += hdr_h + if compact_v { 14.0 } else { 26.0 };
+
+        if !compact_v && picker_title.is_none() {
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::Mono,
+                    11.0,
+                    16.0,
+                    lx,
                     ly,
                     palette::muted(),
-                    "Worlds stay separate per profile. Vanilla keeps your main game folder.",
+                    "PROFILES  -  WORLDS STAY SEPARATE PER PROFILE",
                 );
             }
             ly += 24.0;
         }
 
-        let bottom_pad = if compact_v { 8.0 } else { 14.0 };
-        let item_h = if compact_v { 70.0 } else { 84.0 };
-        let item_gap = if compact_v { 6.0 } else { 8.0 };
-        let space = (list_y + list_h - bottom_pad - ly).max(item_h);
+        let bottom_pad = if compact_v { 8.0 } else { 16.0 };
+        let item_h = if compact_v { 66.0 } else { 78.0 };
+        let item_gap = if compact_v { 6.0 } else { 10.0 };
+        let space = (y + avail_h - bottom_pad - ly).max(item_h);
         let fit_all = ((space + item_gap) / (item_h + item_gap)).floor().max(1.0) as usize;
         let needs_pager = profiles.len() > fit_all;
         let pager_h = if needs_pager { 38.0 } else { 0.0 };
@@ -263,27 +206,37 @@ impl MobileLauncher {
             };
             if let Some(p) = ui.paint() {
                 let fill = if is_selected {
-                    color::with_alpha(palette::accent(), 0.16)
+                    color::with_alpha(palette::accent(), 0.14)
                 } else if card_hit.contains(p.cursor) {
                     palette::surface_hover()
                 } else {
                     palette::surface()
                 };
                 let bdr = if is_selected {
-                    palette::accent_star()
+                    color::with_alpha(palette::accent_star(), 0.72)
                 } else {
                     palette::border()
                 };
-                p.rounded(lx, ly, lw, item_h, 10.0, fill);
-                p.border(lx, ly, lw, item_h, 10.0, bdr);
+                p.rounded(lx, ly, lw, item_h, 11.0, fill);
+                p.border(lx, ly, lw, item_h, 11.0, bdr);
+                if is_selected {
+                    p.rounded(
+                        lx + 4.0,
+                        ly + 14.0,
+                        3.0,
+                        item_h - 28.0,
+                        1.5,
+                        palette::accent_star(),
+                    );
+                }
 
                 let (badge, bcol) =
                     profile_badge_parts(&state, is_selected, col_success, col_danger);
                 let bw = p.measure(Face::Mono, ui_theme::small(), &badge) + 16.0;
-                let bx = lx + lw - 12.0 - bw;
-                let by = ly + if compact_v { 8.0 } else { 12.0 };
-                p.rounded(bx, by, bw, 22.0, 5.0, color::with_alpha(bcol, 0.18));
-                p.border(bx, by, bw, 22.0, 5.0, bcol);
+                let bx = lx + lw - 14.0 - bw;
+                let by = ly + if compact_v { 8.0 } else { 14.0 };
+                p.rounded(bx, by, bw, 22.0, 6.0, color::with_alpha(bcol, 0.16));
+                p.border(bx, by, bw, 22.0, 6.0, color::with_alpha(bcol, 0.75));
                 p.text_line(
                     Face::Mono,
                     ui_theme::small(),
@@ -294,19 +247,20 @@ impl MobileLauncher {
                     &badge,
                 );
 
-                let title_w = (bx - (lx + 14.0) - 10.0).max(60.0);
+                let text_x = lx + if is_selected { 18.0 } else { 14.0 };
+                let title_w = (bx - text_x - 12.0).max(60.0);
                 let fit_name = truncate_to_fit(
                     p,
                     Face::SemiBold,
-                    if compact_v { 16.0 } else { 18.0 },
+                    if compact_v { 15.5 } else { 17.0 },
                     &profile.name,
                     title_w,
                 );
                 p.text_line(
                     Face::SemiBold,
-                    if compact_v { 16.0 } else { 18.0 },
-                    24.0,
-                    lx + 14.0,
+                    if compact_v { 15.5 } else { 17.0 },
+                    22.0,
+                    text_x,
                     by - 1.0,
                     palette::text(),
                     &fit_name,
@@ -314,13 +268,13 @@ impl MobileLauncher {
 
                 let stats = profile_stats_line(profile);
                 let fit_stats =
-                    truncate_to_fit(p, Face::Mono, ui_theme::small(), &stats, lw - 28.0);
-                let sy = ly + if compact_v { 34.0 } else { 40.0 };
+                    truncate_to_fit(p, Face::Mono, ui_theme::small(), &stats, lw - 32.0);
+                let sy = ly + if compact_v { 32.0 } else { 40.0 };
                 p.text_line(
                     Face::Mono,
                     ui_theme::small(),
                     18.0,
-                    lx + 14.0,
+                    text_x,
                     sy,
                     palette::muted(),
                     &fit_stats,
@@ -328,15 +282,15 @@ impl MobileLauncher {
 
                 if let ProfileState::Installing(prog) = &state {
                     let frac = stage_fraction(prog);
-                    let bar_y = ly + item_h - 12.0;
-                    p.rounded(lx + 14.0, bar_y, lw - 28.0, 6.0, 3.0, palette::bg_outer());
+                    let bar_y = ly + item_h - 11.0;
+                    p.rounded(text_x, bar_y, lw - 32.0, 5.0, 2.5, palette::bg_outer());
                     if frac > 0.0 {
                         p.rounded(
-                            lx + 14.0,
+                            text_x,
                             bar_y,
-                            ((lw - 28.0) * frac).max(8.0),
-                            6.0,
-                            3.0,
+                            ((lw - 32.0) * frac).max(8.0),
+                            5.0,
+                            2.5,
                             palette::accent(),
                         );
                     }
@@ -347,7 +301,7 @@ impl MobileLauncher {
         }
 
         if needs_pager {
-            let py = list_y + list_h - bottom_pad - 32.0;
+            let py = y + avail_h - bottom_pad - 32.0;
             if page > 0 {
                 draw_button(
                     ui,
