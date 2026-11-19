@@ -19,6 +19,14 @@ use winit::event::{MouseButton, Touch, TouchPhase};
 const PAD_SPEED: f64 = 1100.0;
 /// Stick tilt below this doesn't move the pointer.
 const PAD_DEADZONE: f32 = 0.25;
+/// A brief grace for a nearly finished cache. A longer wait costs more than an uncached start.
+const MAX_FILE_WAIT: Duration = Duration::from_secs(1);
+
+enum GameFiles {
+    Pending,
+    Writing(std::thread::JoinHandle<()>),
+    Done,
+}
 
 struct Host {
     root: std::path::PathBuf,
@@ -40,8 +48,8 @@ struct Host {
     settings: Settings,
     /// Play was pressed and the hand-off written.
     play: bool,
-    /// The controls' Bedrock artwork was asked for (once the game files are there).
-    art: bool,
+    game_files: GameFiles,
+    play_requested_at: Option<Instant>,
     started: Instant,
     shown: bool,
     error: Option<Box<dyn std::error::Error>>,
@@ -89,7 +97,8 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
         last_tick: Instant::now(),
         settings,
         play: false,
-        art: false,
+        game_files: GameFiles::Pending,
+        play_requested_at: None,
         started,
         shown: false,
         error: None,
@@ -178,8 +187,19 @@ impl Host {
     }
 
     fn click(&mut self, event_loop: &ActiveEventLoop) {
+        if self.play_requested_at.is_some() {
+            return;
+        }
         match self.with_ui(|screen, ui| screen.click(ui)) {
-            Some(Action::Play) => self.hand_off(event_loop),
+            Some(Action::Play) => {
+                self.prepare_game_files();
+                if matches!(&self.game_files, GameFiles::Writing(job) if !job.is_finished()) {
+                    self.play_requested_at.get_or_insert_with(Instant::now);
+                    self.screen.note("Finishing game files…");
+                } else {
+                    self.hand_off(event_loop);
+                }
+            }
             Some(Action::OpenUrl(url)) => {
                 if !android_runtime::open_link(&url) {
                     eprintln!("Meridian: no browser opened the sign-in page");
@@ -190,6 +210,44 @@ impl Host {
         }
         // A tap on a field brings the keyboard back even after Back put it away.
         self.sync_keyboard(true);
+    }
+
+    /// Check the Bedrock art first, since replacing it can invalidate the prepared data file.
+    fn prepare_game_files(&mut self) {
+        if !matches!(self.game_files, GameFiles::Pending)
+            || !matches!(self.screen.backend().setup(), Setup::Ready)
+        {
+            return;
+        }
+        let resources = launch::resources_dir(&self.root);
+        let job = std::thread::Builder::new()
+            .name("Meridian game files".into())
+            .spawn(move || {
+                match controls_art::fetch(&resources) {
+                    Ok(count) => eprintln!("Meridian: control artwork: {count} files"),
+                    Err(error) => {
+                        eprintln!("Meridian: control artwork: {error}");
+                        return;
+                    }
+                }
+                horizon_threads::idle_current();
+                let started = Instant::now();
+                match controls_art::write_prepared_cache(&resources) {
+                    Ok(true) => eprintln!(
+                        "Meridian: launcher wrote horizon-data.bin in {} ms",
+                        started.elapsed().as_millis()
+                    ),
+                    Ok(false) => {}
+                    Err(error) => eprintln!("Meridian: launcher cache not written: {error}"),
+                }
+            });
+        self.game_files = match job {
+            Ok(job) => GameFiles::Writing(job),
+            Err(error) => {
+                eprintln!("Meridian: game files worker not started: {error}");
+                GameFiles::Done
+            }
+        };
     }
 
     /// The selected profile with the account's session or offline name, for the next process.
@@ -364,17 +422,16 @@ impl ApplicationHandler for Host {
         self.last_tick = now;
         self.ime = android_runtime::ime_height();
         self.pad_input(event_loop, seconds);
-        // The touch controls' MCPE look (the default), fetched once the game files are there:
-        // about 75 KB from Mojang, checked, so it's ready before Play.
-        if !self.art && matches!(self.screen.backend().setup(), Setup::Ready) {
-            self.art = true;
-            let resources = launch::resources_dir(&self.root);
-            let _ = std::thread::Builder::new()
-                .name("controls-art".into())
-                .spawn(move || match controls_art::fetch(&resources) {
-                    Ok(count) => eprintln!("Meridian: control artwork: {count} files"),
-                    Err(error) => eprintln!("Meridian: control artwork: {error}"),
-                });
+        self.prepare_game_files();
+        if matches!(&self.game_files, GameFiles::Writing(job) if job.is_finished()) {
+            self.game_files = GameFiles::Done;
+        }
+        if self.play_requested_at.is_some_and(|at| {
+            matches!(self.game_files, GameFiles::Done)
+                || now.saturating_duration_since(at) >= MAX_FILE_WAIT
+        }) {
+            self.play_requested_at = None;
+            self.hand_off(event_loop);
         }
         // Sign-in and downloads move on without input: redraw ten times a second, and every
         // frame while a controller moves the pointer.
