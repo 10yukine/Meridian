@@ -1,12 +1,12 @@
 //! Mod Manager: profile name tabs, per-mod ON/OFF + Remove controls, and Horizon registry browser.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, draw_button, draw_input_box, draw_plate, format_size, palette,
-    truncate_to_fit,
+    Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_plate, format_size,
+    palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{ModSearch, Profile, VANILLA};
-use crate::ui_theme::{self, Face};
+use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
     #[allow(clippy::too_many_arguments)]
@@ -27,17 +27,31 @@ impl MobileLauncher {
 
         let ix = x + 16.0;
         let iw = w - 32.0;
-        let mut cy = y + if compact_v { 8.0 } else { 16.0 };
-        let top_btn_h = if compact_v { 32.0 } else { 38.0 };
+        let mut cy = y + if compact_v { 8.0 } else { 14.0 };
+        let top_btn_h = if compact_v { 32.0 } else { 36.0 };
 
+        let new_w = if compact_v { 116.0 } else { 128.0 };
+        draw_button(
+            ui,
+            hits,
+            ButtonId::OpenNewProfile,
+            ix + iw - new_w,
+            cy,
+            new_w,
+            top_btn_h,
+            Tone::Ghost,
+            "+ New profile",
+        );
+
+        let tabs_right = ix + iw - new_w - 10.0;
         let pid = self.effective_mods_profile_id(profiles);
         let mut chip_x = ix;
         for (i, prof) in profiles.iter().enumerate() {
             // Always show the profile's display name (not its folder id).
             let label = prof.name.as_str();
             let cw =
-                (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 24.0).clamp(72.0, 180.0);
-            if chip_x + cw > ix + iw {
+                (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 26.0).clamp(72.0, 180.0);
+            if chip_x + cw > tabs_right {
                 break;
             }
             draw_button(
@@ -51,43 +65,113 @@ impl MobileLauncher {
                 if prof.id == pid {
                     Tone::Banner
                 } else {
-                    Tone::Secondary
+                    Tone::Ghost
                 },
                 label,
             );
             chip_x += cw + 6.0;
         }
         cy += top_btn_h + if compact_v { 6.0 } else { 12.0 };
+        if let Some(p) = ui.paint() {
+            p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
+        }
+        cy += if compact_v { 8.0 } else { 14.0 };
 
         if pid == VANILLA {
+            let rem_h = (y + avail_h - cy).max(150.0);
+            let center_x = x + w * 0.5;
+            let badge_sz = if compact_v { 44.0 } else { 58.0 };
+            let block_h = if compact_v { 144.0 } else { 194.0 };
+            let mut ey = cy + ((rem_h - block_h) * 0.5).max(4.0).round();
+
             if let Some(p) = ui.paint() {
+                let bx = (center_x - badge_sz * 0.5).round();
+                p.rounded(
+                    bx - 4.0,
+                    ey - 4.0,
+                    badge_sz + 8.0,
+                    badge_sz + 8.0,
+                    18.0,
+                    color::with_alpha(palette::accent(), 0.10),
+                );
+                p.rounded(
+                    bx,
+                    ey,
+                    badge_sz,
+                    badge_sz,
+                    14.0,
+                    color::with_alpha(palette::accent(), 0.18),
+                );
+                p.border(
+                    bx,
+                    ey,
+                    badge_sz,
+                    badge_sz,
+                    14.0,
+                    color::with_alpha(palette::accent_star(), 0.55),
+                );
+                draw_icon_box(
+                    p,
+                    center_x,
+                    ey + badge_sz * 0.5,
+                    badge_sz * 0.46,
+                    palette::accent_star(),
+                );
+                p.rounded(
+                    bx + badge_sz - 6.0,
+                    ey - 2.0,
+                    8.0,
+                    8.0,
+                    4.0,
+                    palette::accent(),
+                );
+                ey += badge_sz + if compact_v { 10.0 } else { 18.0 };
+
+                let heading = "Vanilla plays without mods";
+                let h_sz = if compact_v { 17.0 } else { 19.0 };
+                let hw = p.measure(Face::SemiBold, h_sz, heading);
                 p.text_line(
                     Face::SemiBold,
-                    20.0,
-                    28.0,
-                    ix,
-                    cy + 10.0,
+                    h_sz,
+                    24.0,
+                    (center_x - hw * 0.5).round(),
+                    ey,
                     palette::text(),
-                    "Vanilla plays without mods",
+                    heading,
                 );
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::sizes().ui,
-                    22.0,
-                    ix,
-                    cy + 42.0,
-                    palette::muted(),
-                    "Your main game folder keeps vanilla worlds safe. Create or pick a modded profile.",
-                );
+                ey += if compact_v { 24.0 } else { 30.0 };
+
+                let sub = "Your main game folder keeps vanilla worlds untouched. Create a modded profile to add Horizon mods.";
+                let sub_max = (iw - 40.0).min(460.0);
+                for (li, line) in wrap_lines(p, Face::Regular, ui_theme::small(), sub, sub_max)
+                    .into_iter()
+                    .take(2)
+                    .enumerate()
+                {
+                    let lw = p.measure(Face::Regular, ui_theme::small(), &line);
+                    p.text_line(
+                        Face::Regular,
+                        ui_theme::small(),
+                        18.0,
+                        (center_x - lw * 0.5).round(),
+                        ey + li as f32 * 18.0,
+                        palette::muted(),
+                        &line,
+                    );
+                }
             }
+            let cta_w = 216.0;
+            let cta_h = if compact_v { 38.0 } else { 44.0 };
+            let cta_y = (cy + ((rem_h - block_h) * 0.5).max(4.0).round() + block_h - cta_h)
+                .min(y + avail_h - cta_h - 10.0);
             draw_button(
                 ui,
                 hits,
                 ButtonId::OpenNewProfile,
-                ix,
-                cy + 80.0,
-                210.0,
-                46.0,
+                (center_x - cta_w * 0.5).round(),
+                cta_y,
+                cta_w,
+                cta_h,
                 Tone::Primary,
                 "+ Create Modded Profile",
             );
@@ -165,14 +249,49 @@ impl MobileLauncher {
 
         if mods.is_empty() {
             if let Some(p) = ui.paint() {
+                let cx = x + w * 0.5;
+                let mid_y = py + ((y + h - py) * 0.5).max(52.0);
+                let sz = if compact_v { 36.0 } else { 44.0 };
+                let bx = (cx - sz * 0.5).round();
+                let by = (mid_y - sz - 10.0).max(py + 6.0).round();
+                p.rounded(
+                    bx,
+                    by,
+                    sz,
+                    sz,
+                    11.0,
+                    color::with_alpha(palette::accent(), 0.16),
+                );
+                p.border(
+                    bx,
+                    by,
+                    sz,
+                    sz,
+                    11.0,
+                    color::with_alpha(palette::accent_star(), 0.45),
+                );
+                draw_icon_box(p, cx, by + sz * 0.5, sz * 0.48, palette::accent_star());
+                let title = "No mods in this profile yet";
+                let tw = p.measure(Face::Medium, 13.5, title);
+                p.text_line(
+                    Face::Medium,
+                    13.5,
+                    18.0,
+                    (cx - tw * 0.5).round(),
+                    by + sz + 10.0,
+                    palette::text(),
+                    title,
+                );
+                let sub = "Add mods from Horizon's registry ->";
+                let sw = p.measure(Face::Regular, ui_theme::small(), sub);
                 p.text_line(
                     Face::Regular,
                     ui_theme::small(),
-                    20.0,
-                    px,
-                    py + 8.0,
+                    16.0,
+                    (cx - sw * 0.5).round(),
+                    by + sz + 30.0,
                     palette::muted(),
-                    "No mods yet. Add from Horizon's registry ->",
+                    sub,
                 );
             }
             return;

@@ -7,7 +7,7 @@ use super::widgets::{
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{Account, Profile, Setup};
-use crate::ui_theme::{self, Face};
+use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
     #[allow(clippy::too_many_arguments)]
@@ -38,8 +38,16 @@ impl MobileLauncher {
                 palette::text(),
                 "Skins & Capes",
             );
+            p.rounded(
+                x + 1.0,
+                cy + if compact_v { 30.0 } else { 38.0 },
+                w - 2.0,
+                1.0,
+                0.0,
+                palette::border_subtle(),
+            );
         }
-        cy += if compact_v { 34.0 } else { 44.0 };
+        cy += if compact_v { 38.0 } else { 52.0 };
 
         let preview_sz = if compact_v { 120.0 } else { 180.0 };
         let head_sz = if compact_v { 72.0 } else { 104.0 };
@@ -50,8 +58,23 @@ impl MobileLauncher {
             .map_or("Not signed in", account_provider_tag);
 
         if let Some(p) = ui.paint() {
+            p.rounded(
+                ix - 3.0,
+                cy - 3.0,
+                preview_sz + 6.0,
+                preview_sz + 6.0,
+                17.0,
+                color::with_alpha(palette::accent(), 0.10),
+            );
             p.rounded(ix, cy, preview_sz, preview_sz, 14.0, palette::surface());
-            p.border(ix, cy, preview_sz, preview_sz, 14.0, palette::accent_star());
+            p.border(
+                ix,
+                cy,
+                preview_sz,
+                preview_sz,
+                14.0,
+                color::with_alpha(palette::accent_star(), 0.55),
+            );
             draw_player_head(
                 p,
                 ix + ((preview_sz - head_sz) * 0.5).round(),
@@ -177,8 +200,16 @@ impl MobileLauncher {
                 palette::text(),
                 "Launcher Settings",
             );
+            p.rounded(
+                x + 1.0,
+                cy + hdr_h + if compact_v { 4.0 } else { 8.0 },
+                w - 2.0,
+                1.0,
+                0.0,
+                palette::border_subtle(),
+            );
         }
-        cy += hdr_h + if compact_v { 8.0 } else { 14.0 };
+        cy += hdr_h + if compact_v { 10.0 } else { 18.0 };
 
         let total_profile_bytes: u64 = profiles.iter().map(|p| p.size).sum();
         let rows = [

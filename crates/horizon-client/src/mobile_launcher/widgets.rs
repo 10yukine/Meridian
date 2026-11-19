@@ -1,4 +1,4 @@
-//! Shared North Star visual tokens, drawing helpers, and formatting utilities.
+//! Shared North Star visual tokens, geometric icons, and formatting helpers.
 
 use super::ButtonId;
 use crate::launcher_backend::{
@@ -11,25 +11,31 @@ pub(super) mod palette {
     use super::color;
 
     pub fn bg_outer() -> u32 {
-        color::hex(0x08020f, 255)
+        color::hex(0x080310, 255)
     }
-    pub fn bg_mid() -> u32 {
-        color::hex(0x0c0414, 235)
-    }
-    pub fn bg_inner() -> u32 {
-        color::hex(0x100719, 225)
+    pub fn rail() -> u32 {
+        color::hex(0x0b0514, 248)
     }
     pub fn card() -> u32 {
-        color::hex(0x140b21, 242)
+        color::hex(0x0f081c, 244)
     }
     pub fn surface() -> u32 {
-        color::hex(0x1c112d, 255)
+        color::hex(0x170e29, 255)
     }
     pub fn surface_hover() -> u32 {
-        color::hex(0x26183d, 255)
+        color::hex(0x211538, 255)
     }
     pub fn border() -> u32 {
-        color::hex(0x706c79, 120)
+        color::hex(0x2a1e42, 220)
+    }
+    pub fn border_subtle() -> u32 {
+        color::hex(0x211735, 190)
+    }
+    pub fn accent_fill() -> u32 {
+        color::hex(0x7c45ec, 255)
+    }
+    pub fn accent_fill_hover() -> u32 {
+        color::hex(0x8f5cff, 255)
     }
     pub fn accent() -> u32 {
         color::hex(0xa575f6, 255)
@@ -37,20 +43,14 @@ pub(super) mod palette {
     pub fn accent_star() -> u32 {
         color::hex(0xa990ff, 255)
     }
-    pub fn on_accent() -> u32 {
-        color::hex(0x08020f, 255)
-    }
     pub fn text() -> u32 {
         color::hex(0xffffff, 255)
     }
     pub fn body() -> u32 {
-        color::hex(0xf9f9fa, 255)
+        color::hex(0xebe8f2, 255)
     }
     pub fn muted() -> u32 {
-        color::hex(0x9b94a8, 255)
-    }
-    pub fn pillar_muted() -> u32 {
-        color::hex(0x706c79, 255)
+        color::hex(0x8c859e, 255)
     }
 }
 
@@ -61,6 +61,14 @@ pub(super) enum Tone {
     Ghost,
     Danger,
     Banner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RailIcon {
+    Home,
+    Mods,
+    Skins,
+    Settings,
 }
 
 pub(super) struct HitRect {
@@ -100,23 +108,21 @@ impl<'a> Canvas<'_, 'a> {
 
 pub(super) fn draw_backdrop(p: &mut Ui, w: f32, h: f32) {
     p.rounded(0.0, 0.0, w, h, 0.0, palette::bg_outer());
-    let (cx, cy) = (w * 0.54, h * 0.46);
-    for (scale, col) in [
-        (1.06, color::with_alpha(palette::bg_mid(), 0.45)),
-        (0.86, color::with_alpha(palette::bg_inner(), 0.45)),
-        (0.66, color::with_alpha(palette::bg_inner(), 0.35)),
-        (0.46, color::with_alpha(palette::accent(), 10.0 / 255.0)),
-        (0.30, color::with_alpha(palette::accent_star(), 8.0 / 255.0)),
+    // Ultra-subtle ambient violet tint anchored gently off-center (no visible ring banding).
+    for (cx_f, cy_f, scale, alpha) in [
+        (0.18, 0.14, 0.72, 0.024),
+        (0.54, 0.44, 0.92, 0.018),
+        (0.84, 0.86, 0.68, 0.020),
     ] {
         let rw = w * scale;
         let rh = h * scale;
         p.rounded(
-            (cx - rw * 0.5).round(),
-            (cy - rh * 0.5).round(),
+            (w * cx_f - rw * 0.5).round(),
+            (h * cy_f - rh * 0.5).round(),
             rw,
             rh,
-            (rw.min(rh) * 0.48).max(24.0),
-            col,
+            (rw.min(rh) * 0.5).max(40.0),
+            color::with_alpha(palette::accent(), alpha),
         );
     }
 }
@@ -128,63 +134,154 @@ pub(super) fn draw_plate(ui: &mut Canvas<'_, '_>, x: f32, y: f32, w: f32, h: f32
     }
 }
 
-/// Vector-free pixel construction of `03 North Star.svg`:
-/// muted left pillar, white right pillar, violet diagonal sweep, and 4-point star at upper-right.
-pub(super) fn draw_north_star_logo(p: &mut Ui, x: f32, y: f32, size: f32) {
-    let s = size / 26.0;
+/// Glowing North Star tile badge anchored at the top-left of the launcher shell.
+pub(super) fn draw_north_star_badge(p: &mut Ui, x: f32, y: f32, size: f32) {
+    // Soft ambient violet halo
     p.rounded(
-        x + 3.0 * s,
-        y + 6.0 * s,
-        4.5 * s,
-        14.0 * s,
-        1.0,
-        palette::pillar_muted(),
+        x - 3.0,
+        y - 3.0,
+        size + 6.0,
+        size + 6.0,
+        14.0,
+        color::with_alpha(palette::accent(), 0.16),
     );
-    for step in 0..5 {
-        let f = step as f32;
+    p.rounded(x, y, size, size, 11.0, palette::accent_fill());
+    p.border(
+        x,
+        y,
+        size,
+        size,
+        11.0,
+        color::with_alpha(palette::accent_star(), 0.85),
+    );
+    // Crisp bold white Meridian "M" monogram centered inside the tile
+    let fs = (size * 0.54).round();
+    let mw = p.measure(Face::SemiBold, fs, "M");
+    p.text_line(
+        Face::SemiBold,
+        fs,
+        size,
+        x + ((size - mw) * 0.5).round(),
+        y,
+        palette::text(),
+        "M",
+    );
+    // Tiny North Star glint at upper-right corner of the tile
+    p.rounded(
+        x + size - 7.0,
+        y + 1.0,
+        6.0,
+        6.0,
+        3.0,
+        palette::accent_star(),
+    );
+}
+
+pub(super) fn draw_icon_home(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let s = sz / 18.0;
+    let x = cx - sz * 0.5;
+    let y = cy - sz * 0.5;
+    // Pitched roof steps
+    p.rounded(x + 7.5 * s, y + 1.5 * s, 3.0 * s, 2.0 * s, 0.8, col);
+    p.rounded(x + 4.5 * s, y + 3.5 * s, 9.0 * s, 2.0 * s, 0.8, col);
+    p.rounded(x + 1.5 * s, y + 5.5 * s, 15.0 * s, 2.2 * s, 0.8, col);
+    // Walls & doorway frame
+    p.rounded(x + 3.0 * s, y + 7.5 * s, 2.4 * s, 8.5 * s, 0.8, col);
+    p.rounded(x + 12.6 * s, y + 7.5 * s, 2.4 * s, 8.5 * s, 0.8, col);
+    p.rounded(x + 3.0 * s, y + 14.0 * s, 4.4 * s, 2.0 * s, 0.6, col);
+    p.rounded(x + 10.6 * s, y + 14.0 * s, 4.4 * s, 2.0 * s, 0.6, col);
+    p.rounded(x + 7.2 * s, y + 10.6 * s, 3.6 * s, 1.8 * s, 0.6, col);
+}
+
+pub(super) fn draw_icon_mods(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let s = sz / 18.0;
+    let x = cx - sz * 0.5;
+    let y = cy - sz * 0.5;
+    // Modular 2x2 cube grid with detached upper-right add-on block
+    p.border(x + 2.0 * s, y + 2.5 * s, 6.2 * s, 6.2 * s, 1.8, col);
+    p.rounded(x + 10.5 * s, y + 1.5 * s, 5.8 * s, 5.8 * s, 1.6, col);
+    p.border(x + 2.0 * s, y + 10.2 * s, 6.2 * s, 6.2 * s, 1.8, col);
+    p.border(x + 9.8 * s, y + 10.2 * s, 6.2 * s, 6.2 * s, 1.8, col);
+}
+
+pub(super) fn draw_icon_skins(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let s = sz / 18.0;
+    let x = cx - sz * 0.5;
+    let y = cy - sz * 0.5;
+    // Crisp Minecraft player tunic silhouette (shoulders + sleeves + torso)
+    p.rounded(x + 1.5 * s, y + 3.0 * s, 4.5 * s, 4.6 * s, 1.2, col);
+    p.rounded(x + 12.0 * s, y + 3.0 * s, 4.5 * s, 4.6 * s, 1.2, col);
+    p.rounded(x + 4.8 * s, y + 3.0 * s, 8.4 * s, 2.2 * s, 0.8, col);
+    p.border(x + 4.8 * s, y + 4.6 * s, 8.4 * s, 11.4 * s, 1.8, col);
+    // Collar dip highlight
+    p.rounded(
+        x + 7.2 * s,
+        y + 2.6 * s,
+        3.6 * s,
+        2.2 * s,
+        1.0,
+        palette::rail(),
+    );
+}
+
+pub(super) fn draw_icon_settings(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let s = sz / 18.0;
+    let x = cx - sz * 0.5;
+    let y = cy - sz * 0.5;
+    // Outer ring & center hub
+    p.border(x + 3.5 * s, y + 3.5 * s, 11.0 * s, 11.0 * s, 5.5 * s, col);
+    p.rounded(x + 7.0 * s, y + 7.0 * s, 4.0 * s, 4.0 * s, 2.0 * s, col);
+    // 4 cardinal teeth
+    p.rounded(x + 7.6 * s, y + 1.0 * s, 2.8 * s, 3.0 * s, 0.8, col);
+    p.rounded(x + 7.6 * s, y + 14.0 * s, 2.8 * s, 3.0 * s, 0.8, col);
+    p.rounded(x + 1.0 * s, y + 7.6 * s, 3.0 * s, 2.8 * s, 0.8, col);
+    p.rounded(x + 14.0 * s, y + 7.6 * s, 3.0 * s, 2.8 * s, 0.8, col);
+}
+
+pub(super) fn draw_icon_play(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let slices = 6;
+    let left = cx - sz * 0.42;
+    let step_w = (sz * 0.88) / slices as f32;
+    for i in 0..slices {
+        let t = i as f32 / (slices - 1) as f32;
+        let h = (sz * (1.0 - t * 0.82)).max(2.0);
         p.rounded(
-            x + (2.0 + f * 4.0) * s,
-            y + (16.5 - f * 1.4) * s,
-            6.0 * s,
-            2.5 * s,
-            1.0,
-            palette::accent(),
+            left + i as f32 * step_w,
+            cy - h * 0.5,
+            step_w + 0.8,
+            h,
+            0.6,
+            col,
         );
     }
-    p.rounded(
-        x + 17.5 * s,
-        y + 5.0 * s,
-        4.5 * s,
-        15.0 * s,
-        1.0,
-        palette::text(),
-    );
-    let sx = x + 13.0 * s;
-    let sy = y + 5.5 * s;
-    p.rounded(
-        sx - 4.0 * s,
-        sy - 1.0 * s,
-        8.0 * s,
-        2.0 * s,
-        0.5,
-        palette::accent_star(),
-    );
-    p.rounded(
-        sx - 1.0 * s,
-        sy - 4.0 * s,
-        2.0 * s,
-        8.0 * s,
-        0.5,
-        palette::accent_star(),
-    );
-    p.rounded(
-        sx - 2.0 * s,
-        sy - 2.0 * s,
-        4.0 * s,
-        4.0 * s,
-        1.0,
-        palette::accent_star(),
-    );
+}
+
+pub(super) fn draw_icon_box(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let s = sz / 24.0;
+    let x = cx - sz * 0.5;
+    let y = cy - sz * 0.5;
+    // Lid
+    p.border(x + 2.0 * s, y + 3.5 * s, 20.0 * s, 4.8 * s, 2.0, col);
+    // Body
+    p.border(x + 3.5 * s, y + 8.0 * s, 17.0 * s, 12.5 * s, 2.4, col);
+    // Handle slot
+    p.rounded(x + 9.0 * s, y + 12.0 * s, 6.0 * s, 2.2 * s, 1.0, col);
+}
+
+pub(super) fn draw_icon_chevron(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32, up: bool) {
+    let half = sz * 0.5;
+    let steps = 4;
+    for i in 0..steps {
+        let t = i as f32 / (steps - 1) as f32;
+        let dx = (1.0 - t) * half;
+        let dy = if up {
+            (0.5 - t) * half * 0.9
+        } else {
+            (t - 0.5) * half * 0.9
+        };
+        p.rounded(cx - dx - 0.8, cy + dy - 0.8, 2.0, 2.0, 0.8, col);
+        p.rounded(cx + dx - 1.2, cy + dy - 0.8, 2.0, 2.0, 0.8, col);
+    }
 }
 
 pub(super) fn draw_player_head(
@@ -217,19 +314,19 @@ pub(super) fn draw_player_head(
                 );
             }
         }
-        p.border(x, y, size, size, 2.0, palette::border());
+        p.border(x, y, size, size, 3.0, palette::border());
     } else {
-        p.rounded(x, y, size, size, 4.0, palette::surface_hover());
-        p.border(x, y, size, size, 4.0, palette::accent_star());
+        p.rounded(x, y, size, size, 6.0, palette::surface_hover());
+        p.border(x, y, size, size, 6.0, palette::accent_star());
         let initial: String = name
             .chars()
             .next()
             .map_or('?', |c| c.to_ascii_uppercase())
             .to_string();
-        let iw = p.measure(Face::SemiBold, size * 0.55, &initial);
+        let iw = p.measure(Face::SemiBold, size * 0.52, &initial);
         p.text_line(
             Face::SemiBold,
-            size * 0.55,
+            size * 0.52,
             size,
             x + ((size - iw) * 0.5).round(),
             y,
@@ -237,6 +334,22 @@ pub(super) fn draw_player_head(
             &initial,
         );
     }
+}
+
+pub(super) fn draw_player_head_with_dot(
+    p: &mut Ui,
+    x: f32,
+    y: f32,
+    size: f32,
+    head: Option<&Head>,
+    name: &str,
+    dot_col: u32,
+) {
+    draw_player_head(p, x, y, size, head, name);
+    let dx = x + size - 7.0;
+    let dy = y + size - 7.0;
+    p.rounded(dx - 2.0, dy - 2.0, 11.0, 11.0, 5.5, palette::rail());
+    p.rounded(dx, dy, 7.0, 7.0, 3.5, dot_col);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -260,8 +373,8 @@ pub(super) fn draw_input_box(
         } else {
             palette::border()
         };
-        p.rounded(x, y, w, h, 8.0, palette::surface());
-        p.border(x, y, w, h, 8.0, bdr);
+        p.rounded(x, y, w, h, 9.0, palette::surface());
+        p.border(x, y, w, h, 9.0, bdr);
         let mut tx = x + 12.0;
         if !label.is_empty() {
             p.text_line(
@@ -318,19 +431,23 @@ pub(super) fn draw_button(
         let hovered = hit.contains(p.cursor);
         let danger = color::hex(menu_style::get().settings.danger, 255);
         let (plate, border, ink) = match (tone, hovered) {
-            (Tone::Primary, false) => (palette::accent(), None, palette::on_accent()),
+            (Tone::Primary, false) => (
+                palette::accent_fill(),
+                Some(color::with_alpha(palette::accent_star(), 0.72)),
+                palette::text(),
+            ),
             (Tone::Primary, true) => (
-                palette::accent_star(),
-                Some(palette::text()),
-                palette::on_accent(),
+                palette::accent_fill_hover(),
+                Some(palette::accent_star()),
+                palette::text(),
             ),
             (Tone::Banner, false) => (
-                color::with_alpha(palette::accent(), 0.24),
+                color::with_alpha(palette::accent(), 0.22),
                 Some(palette::accent_star()),
                 palette::text(),
             ),
             (Tone::Banner, true) => (
-                color::with_alpha(palette::accent(), 0.36),
+                color::with_alpha(palette::accent(), 0.34),
                 Some(palette::text()),
                 palette::text(),
             ),
@@ -343,8 +460,8 @@ pub(super) fn draw_button(
                 palette::text(),
             ),
             (Tone::Ghost, false) => (0x0000_0000, None, palette::muted()),
-            (Tone::Ghost, true) => (palette::surface(), None, palette::text()),
-            (Tone::Danger, false) => (color::with_alpha(danger, 0.16), Some(danger), danger),
+            (Tone::Ghost, true) => (palette::surface(), Some(palette::border()), palette::text()),
+            (Tone::Danger, false) => (color::with_alpha(danger, 0.14), Some(danger), danger),
             (Tone::Danger, true) => (danger, Some(danger), palette::text()),
         };
         let radius = 10.0;
@@ -364,7 +481,67 @@ pub(super) fn draw_button(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_sidebar_item(
+pub(super) fn draw_play_button(
+    ui: &mut Canvas<'_, '_>,
+    hits: &mut Vec<HitRect>,
+    id: ButtonId,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    label: &str,
+    with_play_icon: bool,
+) {
+    let hit = HitRect { id, x, y, w, h };
+    if let Some(p) = ui.paint() {
+        let hovered = hit.contains(p.cursor);
+        // Subtle purple glow behind the primary launch CTA
+        p.rounded(
+            x - 2.0,
+            y - 2.0,
+            w + 4.0,
+            h + 4.0,
+            13.0,
+            color::with_alpha(palette::accent(), if hovered { 0.24 } else { 0.14 }),
+        );
+        let fill = if hovered {
+            palette::accent_fill_hover()
+        } else {
+            palette::accent_fill()
+        };
+        p.rounded(x, y, w, h, 11.0, fill);
+        p.border(
+            x,
+            y,
+            w,
+            h,
+            11.0,
+            color::with_alpha(palette::accent_star(), if hovered { 0.95 } else { 0.72 }),
+        );
+        let icon_span = if with_play_icon { 18.0 } else { 0.0 };
+        let room = (w - 22.0 - icon_span).max(24.0);
+        let font_size = p.fit(Face::SemiBold, 15.0, label, room);
+        let tw = p.measure(Face::SemiBold, font_size, label);
+        let total_w = tw + icon_span;
+        let start_x = x + ((w - total_w) * 0.5).round();
+        if with_play_icon {
+            draw_icon_play(p, start_x + 5.0, y + h * 0.5, 11.0, palette::text());
+        }
+        p.text_line(
+            Face::SemiBold,
+            font_size,
+            h,
+            start_x + icon_span,
+            y,
+            palette::text(),
+            label,
+        );
+    }
+    hits.push(hit);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_rail_item(
     ui: &mut Canvas<'_, '_>,
     hits: &mut Vec<HitRect>,
     id: ButtonId,
@@ -373,6 +550,7 @@ pub(super) fn draw_sidebar_item(
     w: f32,
     h: f32,
     active: bool,
+    icon: RailIcon,
     label: &str,
 ) {
     let hit = HitRect { id, x, y, w, h };
@@ -380,35 +558,64 @@ pub(super) fn draw_sidebar_item(
         let hovered = hit.contains(p.cursor);
         let (fill, bdr, ink) = if active {
             (
-                color::with_alpha(palette::accent(), 0.22),
-                Some(palette::accent_star()),
+                color::with_alpha(palette::accent(), 0.20),
+                Some(color::with_alpha(palette::accent_star(), 0.75)),
                 palette::text(),
             )
         } else if hovered {
-            (
-                palette::surface_hover(),
-                Some(palette::border()),
-                palette::text(),
-            )
+            (palette::surface(), Some(palette::border()), palette::body())
         } else {
             (0x0000_0000, None, palette::muted())
         };
+        if active {
+            p.rounded(
+                x - 2.0,
+                y - 2.0,
+                w + 4.0,
+                h + 4.0,
+                14.0,
+                color::with_alpha(palette::accent(), 0.12),
+            );
+        }
         if fill >> 24 != 0 {
-            p.rounded(x, y, w, h, 10.0, fill);
+            p.rounded(x, y, w, h, 12.0, fill);
         }
         if let Some(b) = bdr {
-            p.border(x, y, w, h, 10.0, b);
+            p.border(x, y, w, h, 12.0, b);
         }
         if active {
-            p.rounded(x + 3.0, y + 10.0, 3.0, h - 20.0, 1.5, palette::accent());
+            p.rounded(
+                x - 5.0,
+                y + 12.0,
+                3.0,
+                h - 24.0,
+                1.5,
+                palette::accent_star(),
+            );
         }
-        let font_size = p.fit(
+        let compact = h < 48.0;
+        let icon_sz = if compact { 16.0 } else { 18.0 };
+        let icon_cy = y + if compact { 16.0 } else { 19.0 };
+        let icon_cx = x + w * 0.5;
+        let icon_col = if active { palette::accent_star() } else { ink };
+        match icon {
+            RailIcon::Home => draw_icon_home(p, icon_cx, icon_cy, icon_sz, icon_col),
+            RailIcon::Mods => draw_icon_mods(p, icon_cx, icon_cy, icon_sz, icon_col),
+            RailIcon::Skins => draw_icon_skins(p, icon_cx, icon_cy, icon_sz, icon_col),
+            RailIcon::Settings => draw_icon_settings(p, icon_cx, icon_cy, icon_sz, icon_col),
+        }
+        let lbl_sz = if compact { 9.0 } else { 9.5 };
+        let lw = p.measure(Face::Medium, lbl_sz, label);
+        let ly = y + h - if compact { 14.0 } else { 16.0 };
+        p.text_line(
             Face::Medium,
-            ui_theme::sizes().ui,
+            lbl_sz,
+            13.0,
+            x + ((w - lw) * 0.5).round(),
+            ly,
+            ink,
             label,
-            (w - 28.0).max(20.0),
         );
-        p.text_line(Face::Medium, font_size, h, x + 16.0, y, ink, label);
     }
     hits.push(hit);
 }

@@ -2,7 +2,8 @@
 
 use super::widgets::{
     Canvas, HitRect, Tone, account_provider_tag, account_short, draw_button, draw_input_box,
-    draw_north_star_logo, draw_plate, draw_player_head, palette, truncate_to_fit, wrap_lines,
+    draw_north_star_badge, draw_plate, draw_player_head_with_dot, palette, truncate_to_fit,
+    wrap_lines,
 };
 use super::{ButtonId, ElyField, MobileLauncher};
 use crate::launcher_backend::{Account, SignIn, valid_offline_name};
@@ -44,8 +45,8 @@ impl MobileLauncher {
         }
 
         if let Some(p) = ui.paint() {
-            let logo_sz = if compact_v { 34.0 } else { 44.0 };
-            draw_north_star_logo(p, inner_x, cy, logo_sz);
+            let logo_sz = if compact_v { 36.0 } else { 44.0 };
+            draw_north_star_badge(p, inner_x, cy, logo_sz);
             let title_x = inner_x + logo_sz + 14.0;
             p.text_line(
                 Face::SemiBold,
@@ -629,6 +630,14 @@ impl MobileLauncher {
                 palette::text(),
                 "Accounts",
             );
+            p.rounded(
+                x + 1.0,
+                cy + hdr_h + if compact_v { 4.0 } else { 8.0 },
+                w - 2.0,
+                1.0,
+                0.0,
+                palette::border_subtle(),
+            );
         }
         draw_button(
             ui,
@@ -641,7 +650,7 @@ impl MobileLauncher {
             Tone::Primary,
             "+ Add account",
         );
-        cy += hdr_h + if compact_v { 8.0 } else { 14.0 };
+        cy += hdr_h + if compact_v { 10.0 } else { 20.0 };
 
         let bottom_pad = if compact_v { 10.0 } else { 16.0 };
         let item_h = if compact_v { 54.0 } else { 66.0 };
@@ -690,7 +699,19 @@ impl MobileLauncher {
                 let head_y = cy + ((item_h - head_sz) * 0.5).round();
                 let head = self.backend.player_head(acct);
                 let short = account_short(acct);
-                draw_player_head(p, inner_x + 12.0, head_y, head_sz, head.as_ref(), short);
+                let dot_col = match acct {
+                    Account::Offline { .. } => palette::accent_star(),
+                    Account::Microsoft { .. } | Account::Ely { .. } => col_success,
+                };
+                draw_player_head_with_dot(
+                    p,
+                    inner_x + 12.0,
+                    head_y,
+                    head_sz,
+                    head.as_ref(),
+                    short,
+                    dot_col,
+                );
                 let tx = inner_x + head_sz + 24.0;
                 p.text_line(
                     Face::SemiBold,
