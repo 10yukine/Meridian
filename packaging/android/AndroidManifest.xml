@@ -12,9 +12,12 @@
         android:debuggable="true"
         android:extractNativeLibs="true"
         android:hasCode="true">
-        <!-- NativeActivity plus what the NDK cannot do (java/, MeridianActivity). -->
+        <!-- NativeActivity plus what the NDK cannot do (java/, MeridianActivity). One instance:
+             the home-screen icon brings the running launcher or game back instead of starting a
+             second one, which would end the process (a restart's task has no launcher intent). -->
         <activity
             android:name="io.github.u10yukine.meridian.MeridianActivity"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard|screenLayout|uiMode|smallestScreenSize|density"
             android:exported="true"
             android:screenOrientation="sensorLandscape">
