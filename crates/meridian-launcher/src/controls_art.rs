@@ -86,10 +86,23 @@ pub fn fetch(resources: &Path) -> Result<usize, String> {
     Ok(fetched)
 }
 
+/// Writes the prepared data file after the caller finishes checking the artwork.
+/// Call on a background thread. Returns false when a usable file is already on disk.
+pub fn write_prepared_cache(resources: &Path) -> io::Result<bool> {
+    use horizon_core::prepared_files;
+    // The launcher atlas may still hold an open copy even after fetch unlinks a stale cache.
+    if resources.join(prepared_files::FILE_NAME).is_file()
+        && prepared_files::open(resources).is_some()
+    {
+        return Ok(false);
+    }
+    prepared_files::write(resources)?;
+    Ok(true)
+}
+
 /// The game reads `assets` from the prepared folder's `horizon-data.bin` when it has one, and
 /// that holds only what was there when the game wrote it: a file added since reads as missing.
-/// Remove it when it lacks this artwork (or holds older bytes), so the next start reads the
-/// folder and writes it again with the artwork in.
+/// Remove it when it lacks this artwork (or holds older bytes), so the writer includes it.
 fn drop_stale_data_file(resources: &Path, manifest: &Manifest, fetched: usize) -> io::Result<()> {
     use horizon_core::prepared_files;
     let Some(held) = prepared_files::files_under(&folder(resources)) else {
@@ -155,6 +168,28 @@ mod tests {
         // A file that doesn't check out is fetched again, never kept.
         let entry = &manifest.files[0];
         assert!(!checks_out(entry, b"not a texture"));
+    }
+
+    #[test]
+    fn cache_writer_replaces_an_unlinked_cache_with_the_new_art() {
+        use horizon_core::prepared_files;
+        let root = prepared(&[]);
+        assert!(!write_prepared_cache(&root).unwrap());
+        fs::remove_file(root.join(prepared_files::FILE_NAME)).unwrap();
+        let art = folder(&root).join("ui/jump.png");
+        fs::create_dir_all(art.parent().unwrap()).unwrap();
+        fs::write(&art, b"new art").unwrap();
+        assert!(write_prepared_cache(&root).unwrap());
+        // Open under an alias so the launcher process's previously cached handle is not reused.
+        let reopened = prepared_files::open(&root.join("assets/..")).unwrap();
+        assert_eq!(
+            reopened
+                .read("assets/minecraft/textures/gui/bedrock/ui/jump.png")
+                .unwrap()
+                .unwrap(),
+            b"new art"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// A prepared root with `horizon-data.bin` written over `art` (paths in the artwork folder).

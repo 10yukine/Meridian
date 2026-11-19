@@ -463,8 +463,9 @@ fn far_back() -> bool {
 
 /// Run the calling thread only on a core nothing else wants: work that may
 /// take seconds and that nothing waits for yet (the stronghold rings while a
-/// world opens). The idle class on Linux, background quality of service on
-/// macOS, idle priority on Windows. Whether the OS took it.
+/// world opens). The idle class on Linux, lowest thread priority on Android,
+/// background quality of service on macOS, and idle priority on Windows.
+/// Returns whether the OS accepted the change.
 pub fn idle_current() -> bool {
     idle()
 }
@@ -475,6 +476,12 @@ fn idle() -> bool {
     // SAFETY: sets the calling thread's own policy (pid 0); `param` lives
     // across the call.
     unsafe { libc::sched_setscheduler(0, libc::SCHED_IDLE, &param) == 0 }
+}
+
+#[cfg(target_os = "android")]
+fn idle() -> bool {
+    // SAFETY: on Android/Linux, id 0 targets the calling thread; no pointers.
+    unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 19) == 0 }
 }
 
 #[cfg(target_vendor = "apple")]
@@ -492,7 +499,7 @@ fn idle() -> bool {
     unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE) != 0 }
 }
 
-#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple", windows)))]
 fn idle() -> bool {
     false
 }
