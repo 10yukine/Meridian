@@ -384,14 +384,24 @@ impl MobileLauncher {
             y + h - foot_pad
         };
 
-        let blurb = "Release notes, launcher updates, and GitHub highlights will show here once the feed is enabled.";
+        let blurb = "Release notes and launcher updates will show here.";
         let line_h = if compact_v { 16.0 } else { 19.0 };
         let max_lines = (((text_bottom - cy) / line_h).floor().max(0.0) as usize).min(4);
-        for (i, line) in wrap_lines(p, Face::Regular, ui_theme::small(), blurb, iw)
-            .into_iter()
-            .take(max_lines)
-            .enumerate()
-        {
+        let lines = wrap_lines(p, Face::Regular, ui_theme::small(), blurb, iw);
+        let cut = lines.len() > max_lines;
+        for (i, line) in lines.into_iter().take(max_lines).enumerate() {
+            // A line cut short says so, instead of ending mid-sentence.
+            let line = if cut && i + 1 == max_lines {
+                truncate_to_fit(
+                    p,
+                    Face::Regular,
+                    ui_theme::small(),
+                    &format!("{line}..."),
+                    iw,
+                )
+            } else {
+                line
+            };
             p.text_line(
                 Face::Regular,
                 ui_theme::small(),

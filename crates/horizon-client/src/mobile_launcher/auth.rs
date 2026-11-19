@@ -160,6 +160,12 @@ impl MobileLauncher {
         } else {
             Some("Enter 1-16 letters, digits, or underscores.")
         });
+        // The rule is a hint until a name is turned down: red only for an error.
+        let feedback_col = if self.offline_error.is_some() {
+            col_danger
+        } else {
+            palette::muted()
+        };
 
         let tight_v = avail_h < 185.0;
         let compact_v = avail_h < 320.0;
@@ -238,7 +244,7 @@ impl MobileLauncher {
                     16.0,
                     inner_x,
                     cy,
-                    col_danger,
+                    feedback_col,
                     &fit,
                 );
             }
@@ -313,7 +319,7 @@ impl MobileLauncher {
                     18.0,
                     inner_x,
                     cy,
-                    col_danger,
+                    feedback_col,
                     &fit,
                 );
             }
