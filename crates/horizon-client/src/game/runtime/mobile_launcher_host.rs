@@ -49,6 +49,10 @@ struct Host {
 /// the hand-off for the game is written.
 pub fn run(root: &std::path::Path) -> Result<bool> {
     let started = Instant::now();
+    horizon_client::spans::startup::init(started);
+    // Horizon's look, as the game's start gives it (`entry::start`): with it the design
+    // system's fonts, built in, so the launcher's text shows before any game files exist.
+    crate::entry::horizon_look::give();
     let settings = Settings::load(&Game::options_path());
     // The player's language, from the strings compiled in: there may be no prepared ones yet.
     horizon_client::lang::set(horizon_client::lang::Language::load(

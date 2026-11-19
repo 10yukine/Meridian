@@ -197,7 +197,7 @@ impl MobileLauncher {
             show_more_auth: false,
             auth_form: None,
             sign_in_provider: SignInProvider::Microsoft,
-            offline_name: "Player".to_owned(),
+            offline_name: String::new(),
             offline_error: None,
             ely_field: ElyField::Username,
             ely_username: String::new(),

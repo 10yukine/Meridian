@@ -82,7 +82,9 @@ fn android_main(app: AndroidApp) {
     horizon_client_render::android_runtime::set_ime_height(activity::ime_height);
     // The launcher and the game each run in a process of their own (winit makes one event loop
     // per process); `launch.json` says which this one is (docs/launcher-spec.md, "Hand-off").
-    match launch::take(&home) {
+    let launch = launch::take(&home);
+    trace_startup(&home, if launch.is_some() { "game" } else { "launcher" });
+    match launch {
         None => match horizon_client::game::mobile_launcher_host::run(&home) {
             Ok(true) => activity::restart(),
             Ok(false) => {}
@@ -104,6 +106,20 @@ fn android_main(app: AndroidApp) {
     }
     // Ending the process when the game ends keeps Android from reusing it for the next launch.
     std::process::exit(0);
+}
+
+/// A developer's switch: with `files/startup-trace` present, this start writes its timeline
+/// (`HORIZON_STARTUP_TRACE`, Chrome trace events) to `files/startup-trace-<which>.json`.
+fn trace_startup(home: &Path, which: &str) {
+    if home.join("startup-trace").exists() {
+        // SAFETY: no thread of ours reads the environment yet: nothing has started.
+        unsafe {
+            std::env::set_var(
+                "HORIZON_STARTUP_TRACE",
+                home.join(format!("startup-trace-{which}.json")),
+            );
+        }
+    }
 }
 
 /// The game folder and account the launcher chose, as `--game-dir` and `--session-file` give
