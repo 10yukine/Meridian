@@ -29,7 +29,7 @@ Add `--complete` if your installation has the full assets and you want sounds an
 pwsh -File packaging/android/Test-Phone.ps1 -Resources $resources
 ```
 
-Use `-Serial <adb-serial>` when multiple devices are connected. The script installs with `adb install -r`, copies the resource contents into the debug app's private `files/.local/horizon-client/26.3/` through ADB, then launches the NativeActivity and saves startup logcat beside the APK. It uploads a temporary tar archive to Android's shell storage, extracts it under `run-as`, and removes the archive.
+Use `-Serial <adb-serial>` when multiple devices are connected. The script installs with `adb install -r`, copies the resource contents into the debug app's private `files/.local/horizon-client/26.3/` through ADB, then launches `MeridianActivity` (NativeActivity, `java/`) and saves startup logcat beside the APK. It uploads a temporary tar archive to Android's shell storage, extracts it under `run-as`, and removes the archive.
 
 The capture includes game output under `RustStdoutStderr` and Android activity messages under `RustAndroidGlue`.
 

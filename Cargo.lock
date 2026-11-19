@@ -3507,6 +3507,7 @@ dependencies = [
  "horizon-client-render",
  "horizon-game",
  "horizon-guest-stack",
+ "jni 0.21.1",
  "winit",
 ]
 

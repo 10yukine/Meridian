@@ -25,12 +25,13 @@ $cxx = Join-Path $toolchain 'sysroot/usr/lib/aarch64-linux-android/libc++_shared
 $aapt2 = Join-Path $tools 'aapt2.exe'
 $zipalign = Join-Path $tools 'zipalign.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
-foreach ($required in $aapt2, $zipalign, $apksigner, $readelf, $clang, $cxx, $platform) {
+$d8 = Join-Path $tools 'd8.bat'
+foreach ($required in $aapt2, $zipalign, $apksigner, $d8, $readelf, $clang, $cxx, $platform) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Android SDK file is missing: $required"
     }
 }
-Get-Command keytool -ErrorAction Stop | Out-Null
+Get-Command keytool, javac -ErrorAction Stop | Out-Null
 
 if ($LibraryPath -and !$OutputDirectory) {
     throw 'Pass -OutputDirectory with -LibraryPath to keep fixture APKs separate from the normal output.'
@@ -91,14 +92,23 @@ $unsigned = Join-Path $work 'unsigned.apk'
 $aligned = Join-Path $work 'aligned.apk'
 $signed = Join-Path $work 'signed.apk'
 $java = Join-Path $work 'libmeridian_java.so'
+$classes = Join-Path $work 'classes'
 try {
     & $clang (Join-Path $PSScriptRoot 'Java-Launcher.c') -ldl -o $java
+    # MeridianActivity (java/) as classes.dex, with Starling's javac and d8 flags.
+    $sources = (Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'java') -Recurse -Filter *.java).FullName
+    javac --release 8 -nowarn '-Xlint:-options' -classpath $platform -d $classes $sources
+    $compiled = (Get-ChildItem -LiteralPath $classes -Recurse -Filter *.class).FullName
+    & $d8 --release --min-api 26 --lib $platform --output $work $compiled
     & $aapt2 link -o $unsigned --manifest (Join-Path $PSScriptRoot 'AndroidManifest.xml') -I $platform
     $zip = [IO.Compression.ZipFile]::Open($unsigned, [IO.Compression.ZipArchiveMode]::Update)
     try {
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
             $zip, $library, 'lib/arm64-v8a/libmeridian.so',
             [IO.Compression.CompressionLevel]::NoCompression
+        ) | Out-Null
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $zip, (Join-Path $work 'classes.dex'), 'classes.dex'
         ) | Out-Null
         foreach ($native in $java, $cxx) {
             $name = Split-Path -Leaf $native
@@ -121,5 +131,5 @@ try {
     foreach ($file in $unsigned, $aligned, $signed, $java) {
         if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file }
     }
-    [IO.Directory]::Delete($work)
+    [IO.Directory]::Delete($work, $true)
 }

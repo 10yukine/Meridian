@@ -278,6 +278,11 @@ impl Game<'_> {
         if !self.internal_grab() {
             window.set_cursor_visible(!self.captured);
         }
+        // Meridian: Android holds a mouse as the activity's pointer capture (winit can't).
+        #[cfg(target_os = "android")]
+        if self.captured != was_grabbed {
+            horizon_client_render::android_runtime::capture_pointer(self.captured);
+        }
     }
     /// The game's pointer grab leaves the system pointer where the person at the computer has
     /// it: a genuinely hidden `--offscreen` run, an agent's window no one has clicked yet, or a

@@ -438,6 +438,12 @@ Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
 `crates/horizon-client-render/src/android_runtime.rs` and `android_runtime/tests/` are adapted from the
 input part of Starling's `crates/horizon-client-render/src/android_runtime.rs` at the same commit.
 
+`packaging/android/java/io/github/u10yukine/meridian/MeridianActivity.java` and
+`crates/meridian-android/src/activity.rs` adapt the pointer capture of Starling's
+`packaging/android/java/io/github/juanluci/starling/StarlingActivity.java` and its `with_activity`
+(`crates/horizon-client/src/android.rs`) at
+[5432370d5736](https://github.com/starling-client/starling/tree/5432370d573642041585c69b40fb045b27133488).
+
 `crates/meridian-launcher/src/ely.rs` and the Ely.by routing in
 `crates/horizon-client-render/src/auth.rs` are adapted from Starling's
 `crates/starling-account/src/ely.rs` and `crates/horizon-client-render/src/auth.rs`

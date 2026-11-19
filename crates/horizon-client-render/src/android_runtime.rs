@@ -15,7 +15,7 @@ use crate::android_gamepad::{Devices, InputMode, Selection};
 use crate::gamepad::PadState;
 use crate::keypad::{Keypad, Settings};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 use winit::event::{DeviceEvent, ElementState};
 use winit::keyboard::KeyCode;
 
@@ -199,6 +199,22 @@ pub fn mouse_event(device: winit::event::DeviceId, event: MouseEvent) {
 pub fn take_mouse_events() -> Vec<(winit::event::DeviceId, MouseEvent)> {
     MOUSE_READ.store(true, Ordering::Relaxed);
     std::mem::take(&mut *lock(&MOUSE))
+}
+
+/// Meridian: how the activity captures the mouse (`MeridianActivity.capturePointer`), set by the
+/// platform: captured, the pointer hides and its moves come to the hook as relative motion.
+static POINTER_CAPTURE: OnceLock<fn(bool)> = OnceLock::new();
+
+/// Sets the platform's pointer capture; the first one set stays.
+pub fn set_pointer_capture(capture: fn(bool)) {
+    let _ = POINTER_CAPTURE.set(capture);
+}
+
+/// Captures the mouse for the game's mouse look, or lets it go. Fingers are not affected.
+pub fn capture_pointer(capture: bool) {
+    if let Some(platform) = POINTER_CAPTURE.get() {
+        platform(capture);
+    }
 }
 
 #[cfg(test)]

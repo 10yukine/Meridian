@@ -77,7 +77,7 @@ if ($InstallOnly) { return }
 $since = (adb @device shell "date '+%m-%d %H:%M:%S.000'").Trim()
 $startInfo = $null
 try {
-    $startInfo = adb @device shell am start -W -n "$app/android.app.NativeActivity"
+    $startInfo = adb @device shell am start -W -n "$app/io.github.u10yukine.meridian.MeridianActivity"
     $startInfo | Write-Host
     if (!($startInfo -match '^Status: ok\s*$')) { throw 'Android did not report a successful launch.' }
     adb @device shell pidof $app | Out-Null

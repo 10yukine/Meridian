@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Ludovic Marie and the Horizon contributors.
+// SPDX-License-Identifier: MIT
+//! Calls into `MeridianActivity` (`packaging/android/java`), for what the NDK can't do. Adapted
+//! from Starling's `with_activity` and `capture_pointer` (`crates/horizon-client/src/android.rs`)
+//! at 5432370d5736.
+use jni::objects::{JObject, JValue};
+
+/// Runs `f` with the activity on the calling thread, which stays attached to the VM. None before
+/// the game starts, or when the call threw (the exception is logged and cleared).
+fn with_activity<R>(
+    f: impl FnOnce(&mut jni::JNIEnv, &JObject) -> jni::errors::Result<R>,
+) -> Option<R> {
+    let app = horizon_client::ANDROID_APP.get()?;
+    // SAFETY: the VM and the activity are NativeActivity's, alive as long as the process; the
+    // activity is a global reference, which this neither deletes nor keeps.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
+    let mut env = vm.attach_current_thread_permanently().ok()?;
+    let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+    let result = f(&mut env, &activity);
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+    }
+    result.ok()
+}
+
+/// `MeridianActivity.capturePointer`: captured, the mouse's pointer hides and its moves come as
+/// relative motion (`input.rs`).
+pub(crate) fn capture_pointer(capture: bool) {
+    with_activity(|env, activity| {
+        env.call_method(activity, "capturePointer", "(Z)V", &[JValue::Bool(u8::from(capture))])
+            .map(drop)
+    });
+}
