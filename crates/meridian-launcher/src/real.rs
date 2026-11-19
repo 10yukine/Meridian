@@ -588,8 +588,10 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
             Stage::Download,
             Some("Downloading Minecraft files".into()),
         );
-        jdk
+        Some(jdk)
     };
+    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+    let jdk = None;
     let game = root.join(".local/launcher-downloads");
     let os = if cfg!(windows) {
         "windows"
@@ -600,7 +602,7 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
     };
     let report = meter();
     let download = |url: &str| fetch(&agent, url, MAX_DOWNLOAD, cancel, report);
-    mojang::download(
+    let assets = mojang::download_game(
         &pins,
         &game,
         os,
@@ -659,21 +661,21 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
             progress.done = (fraction * 100.0) as u64;
         }
     };
-    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
-    let made = horizon_prepare::prepare_with_java(&options, &log, &progress, jdk)?;
-    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
-    let made = horizon_prepare::prepare_with_progress(&options, &log, &progress)?;
+    let made = std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            // The main progress counter now belongs to preparation, so asset bytes don't
+            // advance it. Each downloaded object is still verified and kept on cancellation.
+            let fetch_asset = |url: &str| fetch(&agent, url, MAX_DOWNLOAD, cancel, |_| {});
+            assets.download(DOWNLOAD_JOBS, &fetch_asset, cancel, &|_| {})
+        });
+        horizon_prepare::prepare_for_launcher(&options, &log, &progress, jdk, move || {
+            worker
+                .join()
+                .map_err(|_| "The asset download stopped unexpectedly".to_owned())??;
+            cancelled(cancel)
+        })
+    })?;
     cancelled(cancel)?;
-    for complete in [
-        horizon_prepare::sounds,
-        horizon_prepare::packs,
-        horizon_prepare::panorama,
-        horizon_prepare::fonts,
-        horizon_prepare::languages,
-    ] {
-        cancelled(cancel)?;
-        complete(root, Some(&game), &|_| {})?;
-    }
     let missing = horizon_prepare::check(root, &made)?;
     if missing.is_empty() {
         Ok(())

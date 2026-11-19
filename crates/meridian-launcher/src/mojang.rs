@@ -25,10 +25,9 @@ struct File {
     path: PathBuf,
 }
 
-/// Downloads the pinned version into `dir`, `jobs` files at a time; files already there and
-/// whole are kept. Required files and assets must all verify,
-/// and `cancel` stops the download between files.
-pub(crate) fn download(
+/// Downloads and checks the jars, libraries and asset index. The resulting asset transfer can
+/// run while the preparer works on the already verified game files.
+pub(crate) fn download_game(
     pins: &Pins,
     dir: &Path,
     os: &str,
@@ -37,7 +36,7 @@ pub(crate) fn download(
     fetch: Fetch,
     cancel: &AtomicBool,
     log: &dyn Fn(String),
-) -> Result<(), String> {
+) -> Result<Assets, String> {
     let v = &pins.version;
     let versions = dir.join("versions").join(v);
     let manifest = versions.join(format!("{v}.json"));
@@ -113,25 +112,34 @@ pub(crate) fn download(
             .join("assets/indexes")
             .join(relative(&format!("{}.json", text(index, "id")?))?),
     };
-    let assets = fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)
-        .and_then(|_| objects(&read_json(&index.path)?, dir))
-        .and_then(|objects| {
-            log(format!("Downloading game assets ({} files)", objects.len()));
-            // A connection that fails now and then is tried again, and a file that still fails
-            // does not stop the others: the next download fetches what is left.
-            let retrying = |url: &str| {
-                let mut got = fetch(url);
-                for _ in 0..2 {
-                    if got.is_ok() {
-                        break;
-                    }
-                    got = fetch(url);
+    fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)?;
+    Ok(Assets(objects(&read_json(&index.path)?, dir)?))
+}
+
+pub(crate) struct Assets(Vec<File>);
+
+impl Assets {
+    pub(crate) fn download(
+        &self,
+        jobs: usize,
+        fetch: Fetch,
+        cancel: &AtomicBool,
+        log: &dyn Fn(String),
+    ) -> Result<(), String> {
+        log(format!("Downloading game assets ({} files)", self.0.len()));
+        // Retry transit failures, while keeping every object that succeeds for the next run.
+        let retrying = |url: &str| {
+            let mut got = fetch(url);
+            for _ in 0..2 {
+                if got.is_ok() {
+                    break;
                 }
-                got
-            };
-            fetch_each(&objects, jobs, &retrying, cancel, log, false)
-        });
-    assets
+                got = fetch(url);
+            }
+            got
+        };
+        fetch_each(&self.0, jobs, &retrying, cancel, log, false)
+    }
 }
 fn read_json(path: &Path) -> Result<Value, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;

@@ -605,7 +605,7 @@ impl Run<'_> {
 
 /// Prepares the resources; returns their folder (`resources_dir`).
 pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
-    prepare_impl(options, log, &|_| {}, false, None)
+    prepare_impl(options, log, &|_| {}, Mode::Prepare, None)
 }
 
 /// `prepare`, telling `progress` the fraction done as each stage begins, and 1 at the end.
@@ -614,12 +614,12 @@ pub fn prepare_with_progress(
     log: Log,
     progress: Progress,
 ) -> Result<PathBuf, String> {
-    prepare_impl(options, log, progress, false, None)
+    prepare_impl(options, log, progress, Mode::Prepare, None)
 }
 
 /// Release build tool: compile and link-check only Horizon's original exporter classes.
 pub fn compile_exporters(options: &Options, log: Log) -> Result<PathBuf, String> {
-    prepare_impl(options, log, &|_| {}, true, None)
+    prepare_impl(options, log, &|_| {}, Mode::Compile, None)
 }
 
 /// Prepare with an explicitly supplied Java launcher, such as the executable installed by Android.
@@ -629,17 +629,44 @@ pub fn prepare_with_java(
     progress: Progress,
     jdk: java::Jdk,
 ) -> Result<PathBuf, String> {
-    prepare_impl(options, log, progress, false, Some(jdk))
+    prepare_impl(options, log, progress, Mode::Prepare, Some(jdk))
+}
+
+/// Prepares a playable install without producing development inventories. The caller supplies
+/// the verified game files and the asset index up front. Independent exporters can run while
+/// the launcher fetches the index's objects; only importing those objects waits for the download.
+pub fn prepare_for_launcher(
+    options: &Options,
+    log: Log,
+    progress: Progress,
+    jdk: Option<java::Jdk>,
+    finish_assets: impl FnOnce() -> Result<(), String> + Send,
+) -> Result<PathBuf, String> {
+    prepare_impl(
+        options,
+        log,
+        progress,
+        Mode::Launcher(Box::new(finish_assets)),
+        jdk,
+    )
+}
+
+enum Mode<'a> {
+    Prepare,
+    Compile,
+    Launcher(pool::Lane<'a, ()>),
 }
 
 fn prepare_impl(
     options: &Options,
     log: Log,
     progress: Progress,
-    compile_only: bool,
+    mode: Mode<'_>,
     jdk: Option<java::Jdk>,
 ) -> Result<PathBuf, String> {
     let started = Instant::now();
+    let compile_only = matches!(mode, Mode::Compile);
+    let launcher = matches!(mode, Mode::Launcher(_));
     let root = &std::path::absolute(&options.root)
         .map_err(|e| format!("{}: {e}", options.root.display()))?;
     let lock = artifacts::Lock::read(root)?;
@@ -655,12 +682,21 @@ fn prepare_impl(
     // The import and the exporters' scratch files.
     let _local_lock = hold_lock(&root.join(".local"), log)?;
     let reused = if options.import {
-        artifacts::reuse_verified(root, log)?
+        artifacts::reuse_verified(root, !launcher, log)?
     } else {
         None
     };
     let (found, client_libraries) = match reused {
         Some(checked) => checked,
+        None if launcher && options.import => artifacts::import_checked(
+            root,
+            &lock,
+            options.minecraft_dir.as_deref(),
+            &options.inputs,
+            options.server_jar.as_deref(),
+            false,
+            log,
+        )?,
         None => {
             if options.import {
                 artifacts::import(
@@ -749,7 +785,11 @@ fn prepare_impl(
             // Not current until this preparation finishes: --check says so meanwhile, and
             // after a failure.
             check::remove_stamp(&resources)?;
-            steps(&run, &lock, &oracle, minecraft)?;
+            let finish_assets = match mode {
+                Mode::Launcher(finish) => Some(finish),
+                _ => None,
+            };
+            steps(&run, &lock, &oracle, minecraft, finish_assets)?;
             check::write_stamp(&resources)?;
             Ok(resources)
         });
@@ -807,6 +847,7 @@ fn steps(
     lock: &artifacts::Lock,
     oracle: &Path,
     minecraft: Option<&Path>,
+    finish_assets: Option<pool::Lane<'_, ()>>,
 ) -> Result<(), String> {
     let root = &run.resources;
     let repo = &run.root;
@@ -1262,12 +1303,19 @@ fn steps(
         let started = Instant::now();
         let mut indexed = sounds::Assets::load(repo, Some(root), minecraft, &run.inputs, run.log);
         let (version, count) = extract_client_resources(&run.client, root, indexed.as_mut().ok())?;
-        sounds::optional_imports(indexed.as_mut().map_err(|e| e.as_str()), run.log);
+        if finish_assets.is_none() {
+            sounds::optional_imports(indexed.as_mut().map_err(|e| e.as_str()), run.log);
+        }
         (run.log)(&format!(
             "Copied the client's assets and data{}",
             took(started)
         ));
         worldgen_bundles(run)?;
+        if let Some(finish) = finish_assets {
+            (run.log)("Waiting for game asset downloads");
+            finish()?;
+            indexed?.copy_all(run.log)?;
+        }
         Ok(vec![
             (
                 "data_version",
