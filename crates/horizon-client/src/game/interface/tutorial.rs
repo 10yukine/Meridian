@@ -366,6 +366,24 @@ impl super::Game<'_> {
         }
     }
 
+    /// Meridian: a phone's text for the hints that name keys or the mouse: `Some(None)` hides
+    /// one the touch controls have no button for; `None` keeps vanilla's.
+    // ponytail: English only until Meridian has lang files; add `meridian.tutorial.*` keys then.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    fn touch_hint(&self, hint: Hint) -> Option<Option<(&'static str, &'static str)>> {
+        use horizon_client_render::touch::Mode;
+        let dpad = self.pad.touch.settings.mode == Mode::Dpad;
+        Some(Some(match hint {
+            Hint::Move if dpad => ("Move with the arrows", "Tap Jump to jump"),
+            Hint::Move => ("Move with the joystick", "Tap Jump to jump"),
+            Hint::Look => ("Look around", "Drag on the screen to turn"),
+            Hint::PunchTree => ("Punch the tree", "Hold the sword button to break"),
+            Hint::OpenInventory => ("Open inventory", "Tap the ... button"),
+            Hint::SocialInteractions => return Some(None),
+            Hint::FindTree | Hint::CraftPlanks => return None,
+        }))
+    }
+
     pub(super) fn tutorial_toast_slots(&self) -> u32 {
         self.tutorial_toasts
             .iter()
@@ -454,6 +472,15 @@ impl super::Game<'_> {
             self.translate_with_fallback(description_key, description),
             &desc_args,
         )));
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        match self.touch_hint(hint) {
+            Some(Some((t, d))) => {
+                title = Text::literal(t.to_owned());
+                description = Some(Text::literal(d.to_owned()));
+            }
+            Some(None) => return None,
+            None => {}
+        }
         if !self.add_toast(mod_api::ToastKind::Tutorial, &mut title, &mut description) {
             return None;
         }
@@ -577,15 +604,20 @@ impl super::Game<'_> {
                     Hint::CraftPlanks => "wooden_planks",
                     Hint::SocialInteractions => "social_interactions",
                 };
-                batch.sprite_scaled(
-                    atlas,
-                    &format!("gui/sprites/toast/{icon}"),
-                    x + 6.0,
-                    y + 6.0,
-                    20.0,
-                    20.0,
-                    u32::MAX,
-                );
+                let mut icon = format!("gui/sprites/toast/{icon}");
+                // Meridian: on a phone, Move and Look show the touch art (once downloaded), not
+                // keys and a mouse.
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                if let Some(touch) = match t.hint {
+                    Hint::Move => Some("gui/bedrock/controls/up"),
+                    Hint::Look => Some("gui/bedrock/ui/interact"),
+                    _ => None,
+                }
+                .filter(|name| atlas.sprites.contains_key(*name))
+                {
+                    icon = touch.to_owned();
+                }
+                batch.sprite_scaled(atlas, &icon, x + 6.0, y + 6.0, 20.0, 20.0, u32::MAX);
                 let text_y = y + 7.0 + ((t.lines.len().max(2) - t.lines.len()) * 11) as f32 / 2.0;
                 for (n, (line, _)) in t.lines.iter().enumerate() {
                     batch.text_styled(

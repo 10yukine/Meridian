@@ -203,6 +203,12 @@ struct Cache {
 thread_local! {
     static CACHE: RefCell<Option<Cache>> = const { RefCell::new(None) };
     static PIXEL_FONT: Cell<bool> = const { Cell::new(false) };
+    static MIN_DENSITY: Cell<f32> = const { Cell::new(1.0) };
+}
+/// Meridian: the smallest density `Ui` draws at, the display's own (a phone's ~2.6), so a
+/// phone's launcher has its native apps' size, not a 1040x700 window's squeezed onto it.
+pub fn set_min_density(density: f32) {
+    MIN_DENSITY.with(|d| d.set(density));
 }
 /// Whether `Ui` draws text with the resource pack's pixel bitmap font instead of the modern
 /// TrueType faces (default: `false`, modern font).
@@ -440,7 +446,10 @@ impl<'a> Ui<'a> {
     pub fn new(atlas: &'a HudAtlas, batch: &'a mut HudBatch, cursor: (f32, f32)) -> Self {
         let scale = batch.scale;
         let (pw, ph) = (batch.width * scale, batch.height * scale);
-        let density = (pw / 1040.0).min(ph / 700.0).clamp(1.0, 4.0);
+        let density = (pw / 1040.0)
+            .min(ph / 700.0)
+            .max(MIN_DENSITY.with(Cell::get))
+            .clamp(1.0, 4.0);
         Self {
             atlas,
             w: pw / density,

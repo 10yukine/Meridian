@@ -294,6 +294,8 @@ impl ApplicationHandler for Host {
         eprintln!("Meridian: launcher renderer after {} ms", self.started.elapsed().as_millis());
         match made {
             Ok((window, renderer)) => {
+                // Android's density (420 dpi: 2.625), not the fit of a 1040x700 window (~1.5).
+                horizon_client::ui_theme::set_min_density(window.scale_factor() as f32);
                 window.request_redraw();
                 self.window = Some(window);
                 self.renderer = Some(renderer);
