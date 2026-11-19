@@ -311,43 +311,36 @@ impl TouchControls {
             for control in Control::ALL {
                 if self.visible(control) {
                     let p = self.placement(control);
-                    let color = if editor.selected == Some(control) {
-                        rgba(65, 130, 150, 230)
-                    } else {
-                        rgba(43, 62, 81, (p.opacity.max(0.3) * 255.0) as u8)
-                    };
                     let rect = preview(p.rect(self.aspect()));
+                    let bounds = [
+                        rect[0] * b.width,
+                        rect[1] * b.height,
+                        rect[2] * b.width,
+                        rect[3] * b.height,
+                    ];
+                    let selected = editor.selected == Some(control);
+                    let color = rgba(255, 255, 255, (p.opacity * 255.0) as u8);
                     if control == Control::Move {
-                        let bounds = [
-                            rect[0] * b.width,
-                            rect[1] * b.height,
-                            rect[3] * b.height,
-                            rect[3] * b.height,
-                        ];
-                        let opacity = if editor.selected == Some(control) {
-                            1.0
-                        } else {
-                            p.opacity
-                        };
                         super::draw::draw_movement(
                             b,
                             a,
                             bounds,
                             self.settings.mode,
                             [0.0; 2],
-                            editor.selected == Some(control),
-                            rgba(225, 243, 252, (opacity * 255.0) as u8),
+                            false,
+                            color,
                         );
-                        continue;
+                    } else {
+                        self.draw_control(b, a, control, bounds, false, color);
                     }
-                    let name = match control {
-                        Control::Debug => "F3",
-                        Control::Perspective => "F5",
-                        Control::Inventory => "...",
-                        Control::Settings => "Touch",
-                        _ => control.name().split(" / ").next().unwrap_or(control.name()),
-                    };
-                    plate(b, a, rect, name, color);
+                    if selected {
+                        let [x, y, w, h] = bounds;
+                        let outline = rgba(150, 200, 216, 230);
+                        b.fill(a, x, y, w, 1.0, outline);
+                        b.fill(a, x, y + h - 1.0, w, 1.0, outline);
+                        b.fill(a, x, y, 1.0, h, outline);
+                        b.fill(a, x + w - 1.0, y, 1.0, h, outline);
+                    }
                 }
             }
         }
@@ -400,6 +393,43 @@ mod tests {
     fn tap(t: &mut TouchControls, path: &Path, [x, y]: [f32; 2]) {
         t.edit_at(1, [x, y], TouchPhase::Started, path);
         t.edit_at(1, [x, y], TouchPhase::Ended, path);
+    }
+
+    #[test]
+    fn the_editor_uses_bedrock_buttons_and_falls_back_for_missing_sprites() {
+        let mut atlas =
+            HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+                std::path::PathBuf::from("/nonexistent/horizon-touch-preview"),
+            ))
+            .unwrap();
+        let sprite = |u0| crate::hud::Rect {
+            u0,
+            u1: u0 + 0.04,
+            v0: 9.0,
+            v1: 9.04,
+            w: 16,
+            h: 16,
+        };
+        atlas
+            .sprites
+            .insert("gui/bedrock/ui/jump".into(), sprite(9.0));
+        atlas
+            .sprites
+            .insert("gui/sprites/widget/button".into(), sprite(8.0));
+        let mut t = TouchControls::default();
+        t.viewport(2400, 1080);
+        t.open_editor();
+        tap(&mut t, Path::new(FILE), [0.5, 0.64]);
+        let mut batch = HudBatch::new(
+            [2400, 1080],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
+        t.draw_editor(&mut batch, &atlas);
+        assert!(batch.vertices.iter().any(|v| v.uv[0] == 9.0));
+        assert!(batch.vertices.iter().any(|v| v.uv[0] == 8.0));
     }
 
     #[test]
