@@ -4,13 +4,41 @@ param(
     [ValidateSet('release', 'fast')]
     [string]$Profile = 'release',
     [string]$LibraryPath,
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    [switch]$Release,
+    [int]$VersionCode,
+    [string]$VersionName
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-$cargoOutput = Join-Path $root 'target'
+$cargoOutput = if ($env:CARGO_TARGET_DIR) {
+    [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, $root)
+} else {
+    Join-Path $root 'target'
+}
+
+if ($Release) {
+    if ($VersionCode -lt 1 -or [string]::IsNullOrWhiteSpace($VersionName)) {
+        throw 'Release builds require -VersionCode (a positive integer) and -VersionName.'
+    }
+    foreach ($name in 'MERIDIAN_RELEASE_KEYSTORE', 'MERIDIAN_RELEASE_KEY_ALIAS',
+        'MERIDIAN_RELEASE_STORE_PASS', 'MERIDIAN_RELEASE_KEY_PASS') {
+        if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+            throw "Set $name before building a release APK."
+        }
+    }
+    if (!(Test-Path -LiteralPath $env:MERIDIAN_RELEASE_KEYSTORE -PathType Leaf)) {
+        throw 'MERIDIAN_RELEASE_KEYSTORE must point to an existing keystore file.'
+    }
+    $keystore = (Resolve-Path -LiteralPath $env:MERIDIAN_RELEASE_KEYSTORE).Path
+    # apksigner reads the password values directly from the environment.
+    $signing = @('--ks', $keystore, '--ks-key-alias', $env:MERIDIAN_RELEASE_KEY_ALIAS,
+        '--ks-pass', 'env:MERIDIAN_RELEASE_STORE_PASS', '--key-pass', 'env:MERIDIAN_RELEASE_KEY_PASS')
+} elseif ($PSBoundParameters.ContainsKey('VersionCode') -or $PSBoundParameters.ContainsKey('VersionName')) {
+    throw '-VersionCode and -VersionName require -Release.'
+}
 
 if (!$env:ANDROID_HOME) { throw 'Set ANDROID_HOME to the Android SDK directory.' }
 $tools = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0'
@@ -31,7 +59,7 @@ foreach ($required in $aapt2, $zipalign, $apksigner, $d8, $readelf, $clang, $cxx
         throw "Android SDK file is missing: $required"
     }
 }
-Get-Command keytool, javac -ErrorAction Stop | Out-Null
+Get-Command javac -ErrorAction Stop | Out-Null
 
 if ($LibraryPath -and !$OutputDirectory) {
     throw 'Pass -OutputDirectory with -LibraryPath to keep fixture APKs separate from the normal output.'
@@ -79,12 +107,17 @@ if (!((& $readelf --dyn-syms --wide $library) -match '\s+GLOBAL\s+DEFAULT\s+\d+\
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $cargoOutput 'android' }
 [IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
 $out = (Resolve-Path -LiteralPath $OutputDirectory).Path
-$apk = Join-Path $out 'meridian-dev-arm64-v8a.apk'
-$debugKey = Join-Path $HOME '.android/meridian-debug.keystore'
-if (!(Test-Path -LiteralPath $debugKey -PathType Leaf)) {
-    [IO.Directory]::CreateDirectory((Split-Path -Parent $debugKey)) | Out-Null
-    keytool -genkeypair -storetype PKCS12 -keystore $debugKey -storepass android -keypass android `
-        -alias meridian-debug -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Meridian Debug'
+$apkName = if ($Release) { 'meridian-release-arm64-v8a.apk' } else { 'meridian-dev-arm64-v8a.apk' }
+$apk = Join-Path $out $apkName
+if (!$Release) {
+    $debugKey = Join-Path $HOME '.android/meridian-debug.keystore'
+    if (!(Test-Path -LiteralPath $debugKey -PathType Leaf)) {
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $debugKey)) | Out-Null
+        keytool -genkeypair -storetype PKCS12 -keystore $debugKey -storepass android -keypass android `
+            -alias meridian-debug -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Meridian Debug'
+    }
+    $signing = @('--ks', $debugKey, '--ks-key-alias', 'meridian-debug',
+        '--ks-pass', 'pass:android', '--key-pass', 'pass:android')
 }
 
 $work = [IO.Directory]::CreateTempSubdirectory('meridian-apk-').FullName
@@ -100,7 +133,19 @@ try {
     javac --release 8 -nowarn '-Xlint:-options' -classpath $platform -d $classes $sources
     $compiled = (Get-ChildItem -LiteralPath $classes -Recurse -Filter *.class).FullName
     & $d8 --release --min-api 26 --lib $platform --output $work $compiled
-    & $aapt2 link -o $unsigned --manifest (Join-Path $PSScriptRoot 'AndroidManifest.xml') -I $platform
+    $manifest = Join-Path $PSScriptRoot 'AndroidManifest.xml'
+    if ($Release) {
+        $xml = [xml](Get-Content -LiteralPath $manifest -Raw)
+        $android = 'http://schemas.android.com/apk/res/android'
+        $xml.manifest.SetAttribute('package', 'io.github.u10yukine.meridian')
+        $null = $xml.manifest.SetAttribute('versionCode', $android, [string]$VersionCode)
+        $null = $xml.manifest.SetAttribute('versionName', $android, $VersionName)
+        $null = $xml.manifest.application.SetAttribute('label', $android, 'Meridian')
+        $null = $xml.manifest.application.SetAttribute('debuggable', $android, 'false')
+        $manifest = Join-Path $work 'AndroidManifest.xml'
+        $xml.Save($manifest)
+    }
+    & $aapt2 link -o $unsigned --manifest $manifest -I $platform
     $zip = [IO.Compression.ZipFile]::Open($unsigned, [IO.Compression.ZipArchiveMode]::Update)
     try {
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
@@ -121,8 +166,7 @@ try {
         $zip.Dispose()
     }
     & $zipalign -P 16 -f 4 $unsigned $aligned
-    & $apksigner sign --ks $debugKey --ks-key-alias meridian-debug --ks-pass pass:android `
-        --key-pass pass:android --v4-signing-enabled false --out $signed $aligned
+    & $apksigner sign @signing --v4-signing-enabled false --out $signed $aligned
     & $apksigner verify $signed
     & $zipalign -c -P 16 4 $signed
     Move-Item -LiteralPath $signed -Destination $apk -Force

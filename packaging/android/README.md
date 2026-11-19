@@ -1,4 +1,4 @@
-# Meridian Android development APK
+# Meridian Android APKs
 
 Use PowerShell 7.4 or newer on Windows. Install the Rust `aarch64-linux-android` target, `cargo-ndk`, Android platform 36, Build Tools 36.0.0, NDK 28.2.13676358, `adb`, and JDK 25. Set `ANDROID_HOME` to the SDK and put the JDK's `bin` directory on PATH.
 
@@ -10,7 +10,26 @@ From the repository root:
 pwsh -File packaging/android/Build-Apk.ps1 -Profile fast
 ```
 
-The APK is `target/android/meridian-dev-arm64-v8a.apk`. The package is `io.github.u10yukine.meridian.dev`, with Android 8.0 (API 26) as the minimum. The script aligns the APK for 16 KB pages and signs it with the local key at `$HOME/.android/meridian-debug.keystore`. Keep this key to install later debug builds over an existing copy and preserve its data. A release can use `io.github.u10yukine.meridian` with its own production signing key.
+The APK is `target/android/meridian-dev-arm64-v8a.apk`. The package is `io.github.u10yukine.meridian.dev`, with Android 8.0 (API 26) as the minimum. The script aligns the APK for 16 KB pages and signs it with the local key at `$HOME/.android/meridian-debug.keystore`. Keep this key to install later debug builds over an existing copy and preserve its data.
+
+## Build a signed release
+
+Set these environment variables in the process that runs the build.
+
+| Variable | Value |
+| --- | --- |
+| `MERIDIAN_RELEASE_KEYSTORE` | Path to the signing keystore |
+| `MERIDIAN_RELEASE_KEY_ALIAS` | Signing key alias in that keystore |
+| `MERIDIAN_RELEASE_STORE_PASS` | Keystore password |
+| `MERIDIAN_RELEASE_KEY_PASS` | Signing key password |
+
+```powershell
+pwsh -File packaging/android/Build-Apk.ps1 -Release -VersionCode 1 -VersionName 0.1.0
+```
+
+`-Release` builds the non-debuggable `io.github.u10yukine.meridian` package using the Rust `release` profile by default and writes `target/android/meridian-release-arm64-v8a.apk`. The build reads the passwords from the environment and verifies the APK signature and 16 KB alignment. Keep the release keystore and passwords outside the repository. Use the same signing key and increase the version code for app updates.
+
+When `CARGO_TARGET_DIR` is set, both builds use that target directory for native builds and default APK output.
 
 ## Prepare game files on the PC
 
