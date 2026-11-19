@@ -3519,6 +3519,7 @@ dependencies = [
  "horizon-core",
  "horizon-mod-package",
  "horizon-prepare",
+ "horizon-protocol",
  "libc",
  "png",
  "serde",
