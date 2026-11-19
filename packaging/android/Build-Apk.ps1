@@ -145,7 +145,9 @@ try {
         $manifest = Join-Path $work 'AndroidManifest.xml'
         $xml.Save($manifest)
     }
-    & $aapt2 link -o $unsigned --manifest $manifest -I $platform
+    $resources = Join-Path $work 'res.zip'
+    & $aapt2 compile --dir (Join-Path $PSScriptRoot 'res') -o $resources
+    & $aapt2 link -o $unsigned --manifest $manifest -I $platform $resources
     $zip = [IO.Compression.ZipFile]::Open($unsigned, [IO.Compression.ZipArchiveMode]::Update)
     try {
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
