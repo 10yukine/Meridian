@@ -3516,8 +3516,10 @@ name = "meridian-launcher"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "horizon-mod-package",
  "horizon-prepare",
  "libc",
+ "png",
  "serde",
  "serde_json",
  "sha1",

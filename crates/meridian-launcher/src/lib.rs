@@ -139,7 +139,7 @@ pub fn profile_id(name: &str, taken: &[String]) -> String {
 }
 
 /// A mod as the mod manager shows it, from Horizon's mod registry.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModInfo {
     pub id: String,
     pub name: String,
@@ -150,7 +150,7 @@ pub struct ModInfo {
 }
 
 /// A mod in a profile, switched on or off for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProfileMod {
     pub info: ModInfo,
     pub enabled: bool,
