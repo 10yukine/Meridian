@@ -23,10 +23,27 @@ public class MeridianActivity extends NativeActivity {
     /** The game holds the mouse (capturePointer); on the UI thread only. */
     private boolean pointerWanted;
 
+    /** How far the on-screen keyboard covers the window, in pixels; 0 when it's away. */
+    private volatile int imeHeight;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         hideSystemBars();
+        // ponytail: Android 8 to 10 don't report the keyboard's height this way (0 there); read
+        // getWindowVisibleDisplayFrame if players on them need the fields lifted.
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().getDecorView().setOnApplyWindowInsetsListener((view, insets) -> {
+                imeHeight = insets.getInsets(WindowInsets.Type.ime()).bottom;
+                return view.onApplyWindowInsets(insets);
+            });
+        }
+    }
+
+    /** The keyboard's height in window pixels (0 when it's away), for the game to lift its text
+     *  fields above it: the fullscreen window doesn't shrink for it. */
+    public int imeHeight() {
+        return imeHeight;
     }
 
     /**

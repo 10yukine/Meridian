@@ -68,6 +68,43 @@ pub fn take(root: &Path) -> Option<Launch> {
     launch
 }
 
+const RUNNING: &str = "launch-running";
+
+/// The game is about to run: a marker only its normal end removes, so the launcher can tell
+/// next time that it closed unexpectedly (a crash, or Android ending it in the background).
+pub fn game_started(root: &Path) -> io::Result<()> {
+    fs::write(root.join(RUNNING), b"")
+}
+
+/// The game ended normally.
+pub fn game_ended(root: &Path) {
+    let _ = remove(&root.join(RUNNING));
+}
+
+/// Whether the last game closed unexpectedly; asking forgets it.
+pub fn closed_unexpectedly(root: &Path) -> bool {
+    fs::remove_file(root.join(RUNNING)).is_ok()
+}
+
+/// The settings a profile's game takes from Vanilla's when it has none of its own yet, so a new
+/// profile starts the way the player plays instead of with the first-run defaults.
+const SETTINGS: [&str; 3] = ["options.txt", "horizon-graphics.txt", "touch-layout.json"];
+
+/// Copies Vanilla's settings (`root`) into the profile's folder `profile`, leaving the ones it
+/// already has.
+pub fn inherit_settings(root: &Path, profile: &Path) -> io::Result<()> {
+    if profile == root {
+        return Ok(());
+    }
+    for name in SETTINGS {
+        let (from, to) = (root.join(name), profile.join(name));
+        if from.is_file() && !to.exists() {
+            fs::copy(from, to)?;
+        }
+    }
+    Ok(())
+}
+
 fn remove(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -123,6 +160,29 @@ mod tests {
             assert!(!session_file(&root).exists(), "{profile}");
             assert!(!root.join(FILE).exists(), "{profile}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_new_profile_takes_vanillas_settings_and_keeps_its_own() {
+        let root = scratch();
+        let profile = root.join("profiles/pack");
+        fs::create_dir_all(&profile).unwrap();
+        fs::write(root.join("options.txt"), "guiScale:3").unwrap();
+        fs::write(root.join("touch-layout.json"), "vanilla").unwrap();
+        fs::write(profile.join("touch-layout.json"), "own").unwrap();
+        inherit_settings(&root, &profile).unwrap();
+        assert_eq!(fs::read_to_string(profile.join("options.txt")).unwrap(), "guiScale:3");
+        assert_eq!(fs::read_to_string(profile.join("touch-layout.json")).unwrap(), "own");
+        assert!(!profile.join("horizon-graphics.txt").exists());
+
+        assert!(!closed_unexpectedly(&root));
+        game_started(&root).unwrap();
+        game_ended(&root);
+        assert!(!closed_unexpectedly(&root));
+        game_started(&root).unwrap();
+        assert!(closed_unexpectedly(&root));
+        assert!(!closed_unexpectedly(&root));
         fs::remove_dir_all(root).unwrap();
     }
 }

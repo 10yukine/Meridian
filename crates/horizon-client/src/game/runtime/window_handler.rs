@@ -644,6 +644,15 @@ impl Game<'_> {
             }
             return;
         }
+        // Over the keyboard, the chat is drawn lifted (`lift_over_keyboard`): so is the finger.
+        #[cfg(target_os = "android")]
+        let touch = winit::event::Touch {
+            location: winit::dpi::PhysicalPosition::new(
+                touch.location.x,
+                touch.location.y + f64::from(self.keyboard_lift()),
+            ),
+            ..touch
+        };
         self.window_event(
             event_loop,
             id,
@@ -735,6 +744,38 @@ impl Game<'_> {
             window.set_ime_allowed(true);
             self.ime_allowed = true;
             self.ime_area = None;
+        }
+    }
+
+    /// Meridian: how far the phone's keyboard covers the window while the chat is open, in
+    /// pixels. The fullscreen window doesn't shrink for it, so the HUD and touches lift by it.
+    #[cfg(target_os = "android")]
+    fn keyboard_lift(&self) -> u32 {
+        if self.screen == Screen::Chat {
+            horizon_client_render::android_runtime::ime_height()
+        } else {
+            0
+        }
+    }
+
+    /// The chat's HUD above the phone's keyboard. Adapted from Starling's `lift_over_keyboard`
+    /// (`crates/horizon-client/src/game/touch.rs`) at 5432370d5736.
+    #[cfg(target_os = "android")]
+    pub(super) fn lift_over_keyboard(&self, hud: &mut HudBatch) {
+        let lift = self.keyboard_lift();
+        if lift == 0 {
+            return;
+        }
+        let gui = lift as f32 / hud.scale;
+        for vertex in &mut hud.vertices {
+            vertex.pos[1] -= gui;
+        }
+        for (_, blend) in &mut hud.blends {
+            if let horizon_client_render::hud::Blend::Depth(rect)
+            | horizon_client_render::hud::Blend::DepthGlint(rect) = blend
+            {
+                rect[1] = rect[1].saturating_sub(lift);
+            }
         }
     }
 }

@@ -11,7 +11,14 @@ use horizon_client::launcher_backend::{
 };
 use horizon_client::mobile_launcher::{Action, MobileLauncher};
 use horizon_client::ui_theme::Ui;
+use horizon_client_render::android_runtime;
+use horizon_client_render::gamepad::{Button, PadState};
 use winit::event::{MouseButton, Touch, TouchPhase};
+
+/// How fast a controller moves the pointer at full tilt, in window pixels a second.
+const PAD_SPEED: f64 = 1100.0;
+/// Stick tilt below this doesn't move the pointer.
+const PAD_DEADZONE: f32 = 0.25;
 
 struct Host {
     root: std::path::PathBuf,
@@ -23,37 +30,61 @@ struct Host {
     pointer: (f64, f64),
     /// The phone's keyboard is up for a text field.
     keyboard: bool,
+    /// How far the keyboard covers the window, in pixels (polled: the window doesn't shrink).
+    ime: u32,
+    /// The controller last time, and when the pointer last moved by it: its cursor shows while
+    /// it's in use, a finger hides it.
+    pad: PadState,
+    pad_used: Option<Instant>,
+    last_tick: Instant,
     settings: Settings,
     /// Play was pressed and the hand-off written.
     play: bool,
+    started: Instant,
+    shown: bool,
     error: Option<Box<dyn std::error::Error>>,
 }
 
 /// Shows the launcher in `root` (the app's folder) until the player plays or leaves: true when
 /// the hand-off for the game is written.
 pub fn run(root: &std::path::Path) -> Result<bool> {
+    let started = Instant::now();
     let settings = Settings::load(&Game::options_path());
     // The player's language, from the strings compiled in: there may be no prepared ones yet.
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[],
         &settings.language,
     ));
+    let backend = Real::new(root.to_path_buf());
+    eprintln!("Meridian: launcher backend after {} ms", started.elapsed().as_millis());
+    let gui = UiResources {
+        atlas: HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            launch::resources_dir(root),
+        ))?,
+        panorama: Arc::new(horizon_client::gfx::panorama::Faces::colour([0; 4])),
+        splashes: Arc::from(""),
+    };
+    eprintln!("Meridian: launcher atlas after {} ms", started.elapsed().as_millis());
+    let mut screen = MobileLauncher::new(Box::new(backend));
+    if launch::closed_unexpectedly(root) {
+        screen.note("The game closed unexpectedly last time.");
+    }
     let mut host = Host {
         root: root.to_path_buf(),
         window: None,
         renderer: None,
-        gui: UiResources {
-            atlas: HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
-                launch::resources_dir(root),
-            ))?,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces::colour([0; 4])),
-            splashes: Arc::from(""),
-        },
-        screen: MobileLauncher::new(Box::new(Real::new(root.to_path_buf()))),
+        gui,
+        screen,
         pointer: (0.0, 0.0),
         keyboard: false,
+        ime: 0,
+        pad: PadState::default(),
+        pad_used: None,
+        last_tick: Instant::now(),
         settings,
         play: false,
+        started,
+        shown: false,
         error: None,
     };
     super::event_loop::new_event_loop()?.run_app(&mut host)?;
@@ -67,9 +98,21 @@ impl Host {
             .map_or([1280, 720], |r| [r.config.width, r.config.height])
     }
 
-    /// `f` over a Ui of the window's size, the cursor where the pointer is.
+    /// A batch of the window's size; while the keyboard is up, the screens lay out above it.
+    fn batch(&self) -> HudBatch {
+        let size = self.size();
+        let mut batch = HudBatch::new(size, self.settings.gui_scale_inputs());
+        if self.ime > 0 {
+            batch.height = (size[1].saturating_sub(self.ime) as f32 / batch.scale)
+                .floor()
+                .max(1.0);
+        }
+        batch
+    }
+
+    /// `f` over a Ui of the visible area, the cursor where the pointer is.
     fn with_ui<R>(&mut self, f: impl FnOnce(&mut MobileLauncher, &mut Ui) -> R) -> R {
-        let mut batch = HudBatch::new(self.size(), self.settings.gui_scale_inputs());
+        let mut batch = self.batch();
         let cursor = (
             self.pointer.0 as f32 / batch.scale,
             self.pointer.1 as f32 / batch.scale,
@@ -84,7 +127,7 @@ impl Host {
         if self.renderer.is_none() {
             return;
         }
-        let mut batch = HudBatch::new(self.size(), self.settings.gui_scale_inputs());
+        let mut batch = self.batch();
         {
             let cursor = (
                 self.pointer.0 as f32 / batch.scale,
@@ -94,11 +137,32 @@ impl Host {
             self.screen.draw(&mut ui);
             ui.finish();
         }
+        if self.pad_used.is_some() {
+            // The controller's pointer: a white square in a dark frame.
+            let (x, y) = (
+                self.pointer.0 as f32 / batch.scale,
+                self.pointer.1 as f32 / batch.scale,
+            );
+            for (r, color) in [(4.0, 0xFF08_020F), (2.5, 0xFFFF_FFFF)] {
+                batch.fill_quad(
+                    &self.gui.atlas,
+                    [[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r]],
+                    color,
+                );
+            }
+        }
         let Some(renderer) = &mut self.renderer else {
             return;
         };
         match renderer.render(&loading_frame(&batch)) {
-            Ok(true) => {}
+            Ok(true) => {
+                if !std::mem::replace(&mut self.shown, true) {
+                    eprintln!(
+                        "Meridian: launcher shown after {} ms",
+                        self.started.elapsed().as_millis()
+                    );
+                }
+            }
             // Not shown (the first frame often isn't, nor one in the background): the glyphs
             // it rasterized never reached the atlas, so draw them again next frame.
             Ok(false) => horizon_client::ui_theme::reset_atlas(),
@@ -110,14 +174,15 @@ impl Host {
         match self.with_ui(|screen, ui| screen.click(ui)) {
             Some(Action::Play) => self.hand_off(event_loop),
             Some(Action::OpenUrl(url)) => {
-                if !horizon_client_render::android_runtime::open_link(&url) {
+                if !android_runtime::open_link(&url) {
                     eprintln!("Meridian: no browser opened the sign-in page");
                 }
             }
             Some(Action::Quit) => event_loop.exit(),
             None => {}
         }
-        self.sync_keyboard();
+        // A tap on a field brings the keyboard back even after Back put it away.
+        self.sync_keyboard(true);
     }
 
     /// The selected profile with the account's session or offline name, for the next process.
@@ -149,14 +214,44 @@ impl Host {
         }
     }
 
-    /// The phone's keyboard up while a text field has the focus, away otherwise.
-    fn sync_keyboard(&mut self) {
+    /// The phone's keyboard up while a text field has the focus (again on a tap, after Back put
+    /// it away), away once none has.
+    fn sync_keyboard(&mut self, tapped: bool) {
         let wanted = self.screen.wants_text();
-        if wanted != self.keyboard
-            && let Some(window) = &self.window
-        {
+        let Some(window) = &self.window else { return };
+        if wanted && (tapped || !self.keyboard) || !wanted && self.keyboard {
             window.set_ime_allowed(wanted);
             self.keyboard = wanted;
+        }
+    }
+
+    /// A controller moves the pointer (left stick, D-pad) and its A button taps where it is.
+    fn pad_input(&mut self, event_loop: &ActiveEventLoop, seconds: f64) {
+        let pad = android_runtime::pad_state();
+        let tilt = |value: f32| if value.abs() < PAD_DEADZONE { 0.0 } else { f64::from(value) };
+        let axis = |minus: Button, plus: Button, stick: f32| {
+            f64::from(i8::from(pad.held(plus)) - i8::from(pad.held(minus))) + tilt(stick)
+        };
+        let dx = axis(Button::DPadLeft, Button::DPadRight, pad.left[0]).clamp(-1.0, 1.0);
+        let dy = axis(Button::DPadUp, Button::DPadDown, pad.left[1]).clamp(-1.0, 1.0);
+        let released = self.pad.held(Button::South) && !pad.held(Button::South);
+        let pressed = pad.buttons & !self.pad.buttons != 0;
+        self.pad = pad;
+        if dx == 0.0 && dy == 0.0 && !pressed && !released {
+            return;
+        }
+        let [w, h] = self.size();
+        if self.pad_used.is_none() {
+            // The pointer starts in the middle the first time a controller moves it.
+            self.pointer = (f64::from(w) / 2.0, f64::from(h) / 2.0);
+        }
+        self.pad_used = Some(Instant::now());
+        self.pointer = (
+            (self.pointer.0 + dx * PAD_SPEED * seconds).clamp(0.0, f64::from(w)),
+            (self.pointer.1 + dy * PAD_SPEED * seconds).clamp(0.0, f64::from(h)),
+        );
+        if released {
+            self.click(event_loop);
         }
     }
 }
@@ -172,6 +267,7 @@ impl ApplicationHandler for Host {
             }
             return;
         }
+        eprintln!("Meridian: launcher window after {} ms", self.started.elapsed().as_millis());
         let made = event_loop
             .create_window(Window::default_attributes().with_title("Meridian"))
             .map_err(Into::into)
@@ -188,6 +284,7 @@ impl ApplicationHandler for Host {
                 )?;
                 Ok((window, renderer))
             });
+        eprintln!("Meridian: launcher renderer after {} ms", self.started.elapsed().as_millis());
         match made {
             Ok((window, renderer)) => {
                 window.request_redraw();
@@ -230,6 +327,7 @@ impl ApplicationHandler for Host {
             WindowEvent::Touch(Touch {
                 phase, location, ..
             }) => {
+                self.pad_used = None;
                 self.pointer = (location.x, location.y);
                 if phase == TouchPhase::Ended {
                     self.click(event_loop);
@@ -247,19 +345,27 @@ impl ApplicationHandler for Host {
                         }
                     }
                 }
-                self.sync_keyboard();
+                self.sync_keyboard(false);
             }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Sign-in and downloads move on without input: redraw ten times a second.
+        let now = Instant::now();
+        let seconds = now.duration_since(self.last_tick).as_secs_f64().min(0.1);
+        self.last_tick = now;
+        self.ime = android_runtime::ime_height();
+        self.pad_input(event_loop, seconds);
+        // Sign-in and downloads move on without input: redraw ten times a second, and every
+        // frame while a controller moves the pointer.
         if let Some(window) = &self.window {
             window.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(100),
-        ));
+        let pad_moving = self
+            .pad_used
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
+        let next = if pad_moving { 16 } else { 100 };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(next)));
     }
 }

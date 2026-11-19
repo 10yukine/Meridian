@@ -325,6 +325,11 @@ impl MobileLauncher {
         }
     }
 
+    /// A line for the player on the screen's status note (the last game closed unexpectedly).
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.status_note = Some(text.into());
+    }
+
     /// Whether a text field has the focus: the phone's keyboard shows for it.
     pub fn wants_text(&mut self) -> bool {
         self.active_text_mut().is_some()

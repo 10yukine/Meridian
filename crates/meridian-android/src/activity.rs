@@ -43,6 +43,12 @@ pub(crate) fn open_link(url: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// `MeridianActivity.imeHeight`: how far the on-screen keyboard covers the window, in pixels.
+pub(crate) fn ime_height() -> u32 {
+    with_activity(|env, activity| env.call_method(activity, "imeHeight", "()I", &[])?.i())
+        .map_or(0, |pixels| pixels.max(0) as u32)
+}
+
 /// `MeridianActivity.restart`: the app starts again in a fresh process once this one ends.
 pub(crate) fn restart() {
     with_activity(|env, activity| env.call_method(activity, "restart", "()V", &[]).map(drop));

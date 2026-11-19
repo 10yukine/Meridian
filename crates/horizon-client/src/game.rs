@@ -8796,6 +8796,9 @@ impl Game<'_> {
         let glowing = std::mem::take(self.glowing_vertices.get_mut());
         let shadow_only = std::mem::take(self.shadow_only_vertices.get_mut());
         let skin = std::mem::take(self.skin_frame.get_mut());
+        // Meridian: the chat above the phone's keyboard.
+        #[cfg(target_os = "android")]
+        self.lift_over_keyboard(&mut hud);
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),

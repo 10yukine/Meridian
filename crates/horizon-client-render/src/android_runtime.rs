@@ -230,5 +230,19 @@ pub fn open_link(url: &str) -> bool {
     OPEN_LINK.get().is_some_and(|platform| platform(url))
 }
 
+/// Meridian: how the platform reads the on-screen keyboard's height (`MeridianActivity.imeHeight`).
+static IME_HEIGHT: OnceLock<fn() -> u32> = OnceLock::new();
+
+/// Sets the platform's keyboard height; the first one set stays.
+pub fn set_ime_height(height: fn() -> u32) {
+    let _ = IME_HEIGHT.set(height);
+}
+
+/// How far the on-screen keyboard covers the window, in pixels: 0 when it's away. The window
+/// doesn't shrink for it (fullscreen), so text fields lift above it themselves.
+pub fn ime_height() -> u32 {
+    IME_HEIGHT.get().map_or(0, |platform| platform())
+}
+
 #[cfg(test)]
 mod tests;

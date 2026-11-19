@@ -9,6 +9,7 @@ use horizon_client::launcher_backend::{
     profile_dir,
 };
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use winit::platform::android::activity::AndroidApp;
 
 mod activity;
@@ -35,8 +36,25 @@ static MAIN_STACK_AT_LOAD: extern "C" fn() = {
     set_main_stack
 };
 
+/// The game runs in this process: an exit before it returns is a crash (the crash handler and the
+/// game's errors end the process with `std::process::exit`).
+static GAME_RUNNING: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+}
+
+/// Back to the launcher when the game ends the process itself (a crash); the launcher says so
+/// (`launch::closed_unexpectedly`).
+extern "C" fn back_to_launcher() {
+    if GAME_RUNNING.load(Relaxed) {
+        activity::restart();
+    }
+}
+
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
+    eprintln!("Meridian: android_main");
     let Some(home) = app.internal_data_path() else {
         eprintln!("Meridian: Android gave the app no internal data folder");
         return;
@@ -61,6 +79,7 @@ fn android_main(app: AndroidApp) {
     winit::platform::android::set_input_hook(input::hook);
     horizon_client_render::android_runtime::set_pointer_capture(activity::capture_pointer);
     horizon_client_render::android_runtime::set_open_link(activity::open_link);
+    horizon_client_render::android_runtime::set_ime_height(activity::ime_height);
     // The launcher and the game each run in a process of their own (winit makes one event loop
     // per process); `launch.json` says which this one is (docs/launcher-spec.md, "Hand-off").
     match launch::take(&home) {
@@ -71,7 +90,13 @@ fn android_main(app: AndroidApp) {
         },
         Some(launch) => {
             if enter(&home, &launch) {
+                let _ = launch::game_started(&home);
+                GAME_RUNNING.store(true, Relaxed);
+                // SAFETY: registers a plain function, which libc calls as the process exits.
+                unsafe { atexit(back_to_launcher) };
                 horizon_game::main();
+                GAME_RUNNING.store(false, Relaxed);
+                launch::game_ended(&home);
             }
             // Back to the launcher once the game ends.
             activity::restart();
@@ -89,6 +114,10 @@ fn enter(home: &Path, launch: &Launch) -> bool {
     {
         eprintln!("Meridian: cannot use profile {}: {error}", launch.profile);
         return false;
+    }
+    // A new profile plays the way Vanilla does (options, graphics, touch layout).
+    if let Err(error) = launch::inherit_settings(home, &dir) {
+        eprintln!("Meridian: profile {} keeps the default settings: {error}", launch.profile);
     }
     // SAFETY: no thread of ours reads the environment yet: the game has not started.
     unsafe {
