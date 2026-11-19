@@ -18,6 +18,7 @@ use std::time::Duration;
 const CANCELLED: &str = "Download cancelled. Retry to continue.";
 const OBJECTS: &str = "https://resources.download.minecraft.net";
 
+#[derive(Clone)]
 struct File {
     url: String,
     sha1: String,
@@ -36,6 +37,7 @@ pub(crate) fn download_game(
     fetch: Fetch,
     cancel: &AtomicBool,
     log: &dyn Fn(String),
+    sized: &dyn Fn(u64),
 ) -> Result<Assets, String> {
     let v = &pins.version;
     let versions = dir.join("versions").join(v);
@@ -98,11 +100,6 @@ pub(crate) fn download_game(
                 .join(relative(&text(logging, "id")?)?),
         });
     }
-    log(format!(
-        "Downloading Minecraft {v} from Mojang: the game and {libraries} libraries"
-    ));
-    // The JARs are buffered for verification. Keep the larger transfers at their old limit.
-    fetch_all(&game, jobs.min(8), fetch, cancel, log)?;
     let index = &manifest["assetIndex"];
     let index = File {
         url: text(index, "url")?,
@@ -112,6 +109,12 @@ pub(crate) fn download_game(
             .join("assets/indexes")
             .join(relative(&format!("{}.json", text(index, "id")?))?),
     };
+    log(format!(
+        "Downloading Minecraft {v} from Mojang: the game and {libraries} libraries"
+    ));
+    sized(pending(&mut game) + pending(&mut vec![index.clone()]));
+    // The JARs are buffered for verification. Keep the larger transfers at their old limit.
+    fetch_all(&game, jobs.min(8), fetch, cancel, log)?;
     fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)?;
     Ok(Assets(objects(&read_json(&index.path)?, dir)?))
 }
@@ -219,6 +222,13 @@ fn objects(index: &Value, dir: &Path) -> Result<Vec<File>, String> {
         .collect()
 }
 
+/// Keeps the files still to fetch (missing or not the listed sha1) and returns their size: the
+/// download's total, so its progress is right on a first run and on a resumed one alike.
+fn pending(files: &mut Vec<File>) -> u64 {
+    files.retain(|f| sha1_file(&f.path).as_ref() != Some(&f.sha1));
+    files.iter().filter_map(|f| f.size).sum()
+}
+
 /// One file from Mojang, refused unless it has the size and sha1 Mojang lists.
 fn fetch_file(fetch: Fetch, file: &File) -> Result<Vec<u8>, String> {
     let body = fetch(&file.url)?;
@@ -294,7 +304,7 @@ fn fetch_each(
             waited += 1;
             if waited % 10 == 0 {
                 log(format!(
-                    "{} of {} files verified",
+                    "{} of {} files ready",
                     done.load(Relaxed),
                     files.len()
                 ));
@@ -316,6 +326,29 @@ fn fetch_each(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_download_total_counts_only_what_is_still_missing() {
+        let dir = std::env::temp_dir().join(format!("meridian-pending-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, body: &[u8], size| File {
+            url: String::new(),
+            sha1: sha1_hex(body),
+            size: Some(size),
+            path: dir.join(name),
+        };
+        fs::write(dir.join("kept.jar"), b"intact").unwrap();
+        fs::write(dir.join("broken.jar"), b"half").unwrap();
+        let mut files = vec![
+            file("kept.jar", b"intact", 6),
+            file("broken.jar", b"the whole file", 14),
+            file("missing.jar", b"never fetched", 13),
+        ];
+        assert_eq!(pending(&mut files), 27);
+        let left: Vec<_> = files.iter().map(|f| f.path.file_name().unwrap()).collect();
+        assert_eq!(left, ["broken.jar", "missing.jar"]);
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn asset_downloads_match_preparation_and_deduplicate_hashes() {

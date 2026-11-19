@@ -503,6 +503,13 @@ fn stage(state: &Mutex<Setup>, stage: Stage, note: Option<String>) {
     });
 }
 
+/// The running stage's total once it is known: bytes while downloading.
+fn sized(state: &Mutex<Setup>, total: u64) {
+    if let Setup::Running(progress) = &mut *state.lock().unwrap() {
+        progress.total = total;
+    }
+}
+
 fn cancelled(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Relaxed) {
         Err("Setup cancelled. Retry to continue.".into())
@@ -583,6 +590,7 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
             Stage::Download,
             Some("Downloading Android Java 25".into()),
         );
+        sized(state, android::LENGTH as u64);
         let jdk = android::install(root, &agent, cancel, meter())?;
         stage(
             state,
@@ -616,6 +624,7 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
                 progress.note = Some(note);
             }
         },
+        &|total| sized(state, total),
     )?;
     cancelled(cancel)?;
     stage(

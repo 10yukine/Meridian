@@ -219,27 +219,36 @@ impl Host {
         {
             return;
         }
-        let resources = launch::resources_dir(&self.root);
+        let root = self.root.clone();
+        let resources = launch::resources_dir(&root);
         let job = std::thread::Builder::new()
             .name("Meridian game files".into())
             .spawn(move || {
-                match controls_art::fetch(&resources) {
-                    Ok(count) => eprintln!("Meridian: control artwork: {count} files"),
+                let art = match controls_art::fetch(&resources) {
+                    Ok(count) => {
+                        eprintln!("Meridian: control artwork: {count} files");
+                        true
+                    }
                     Err(error) => {
                         eprintln!("Meridian: control artwork: {error}");
-                        return;
+                        false
+                    }
+                };
+                horizon_threads::idle_current();
+                // The data file only once the art is settled: replacing art invalidates it.
+                if art {
+                    let started = Instant::now();
+                    match controls_art::write_prepared_cache(&resources) {
+                        Ok(true) => eprintln!(
+                            "Meridian: launcher wrote horizon-data.bin in {} ms",
+                            started.elapsed().as_millis()
+                        ),
+                        Ok(false) => {}
+                        Err(error) => eprintln!("Meridian: launcher cache not written: {error}"),
                     }
                 }
-                horizon_threads::idle_current();
-                let started = Instant::now();
-                match controls_art::write_prepared_cache(&resources) {
-                    Ok(true) => eprintln!(
-                        "Meridian: launcher wrote horizon-data.bin in {} ms",
-                        started.elapsed().as_millis()
-                    ),
-                    Ok(false) => {}
-                    Err(error) => eprintln!("Meridian: launcher cache not written: {error}"),
-                }
+                // ~340 MB that only preparing used, rebuilt locally if it runs again.
+                launch::drop_prepare_scratch(&root);
             });
         self.game_files = match job {
             Ok(job) => GameFiles::Writing(job),

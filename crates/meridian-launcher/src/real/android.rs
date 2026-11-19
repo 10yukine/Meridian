@@ -11,7 +11,7 @@ use std::{
 
 const URL: &str = "https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre25/jre25-android-arm64.tar.xz";
 const DIGEST: &str = "d3eb7afe2240c26728a1bb440502c5f18ac3883e932d202dd7f0c9bcbbce4c37";
-const LENGTH: usize = 38_031_580;
+pub(super) const LENGTH: usize = 38_031_580;
 
 fn native_dir() -> Result<PathBuf, String> {
     let mut info = std::mem::MaybeUninit::<libc::Dl_info>::uninit();

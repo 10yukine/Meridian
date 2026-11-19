@@ -31,6 +31,27 @@ pub fn resources_dir(root: &Path) -> PathBuf {
     horizon_prepare::resources_dir(root, "26.3", None)
 }
 
+/// Removes what only preparing used and the next preparation rebuilds without a download: the
+/// data generator's output (its reports sit beside the resources) and, for every Minecraft
+/// version, the preparer's copies of the jars and libraries (imported again from the download
+/// cache). About 340 MB for 26.3. Worlds, accounts, settings and the prepared resources stay.
+pub fn drop_prepare_scratch(root: &Path) {
+    let local = root.join(".local");
+    let mut scratch = vec![local.join("datagen")];
+    if let Ok(versions) = fs::read_dir(local.join("minecraft")) {
+        for version in versions.flatten() {
+            scratch.extend(["jars", "libraries"].map(|dir| version.path().join(dir)));
+        }
+    }
+    for dir in scratch {
+        if let Err(e) = fs::remove_dir_all(&dir)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!("Meridian: {} not removed: {e}", dir.display());
+        }
+    }
+}
+
 /// Writes the hand-off for the next process: the session first, then the file that names it.
 pub fn write(root: &Path, launch: &Launch, session: Option<&GameSession>) -> io::Result<()> {
     remove(&session_file(root))?;
@@ -161,6 +182,42 @@ mod tests {
             assert!(!root.join(FILE).exists(), "{profile}");
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepare_scratch_goes_and_everything_the_player_needs_stays() {
+        let root = scratch();
+        let file = |path: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        };
+        let gone = [
+            ".local/datagen/out/reports/items.json",
+            ".local/minecraft/26.3/jars/client.jar",
+            ".local/minecraft/26.3/libraries/a/b.jar",
+            ".local/minecraft/26.4/jars/server.jar",
+        ];
+        let kept = [
+            ".local/minecraft/26.3/prepared.json",
+            ".local/horizon-client/26.3/horizon-resources.json",
+            ".local/launcher-downloads/versions/26.3/26.3.jar",
+            ".local/java25/lib/modules",
+            "saves/New World/level.dat",
+            "profiles/modded/saves/World/level.dat",
+            "launcher-account.json",
+            "options.txt",
+        ];
+        gone.iter().chain(&kept).for_each(|path| file(path));
+        drop_prepare_scratch(&root);
+        drop_prepare_scratch(&root); // nothing left to remove: no error
+        for path in gone {
+            assert!(!root.join(path).exists(), "{path}");
+        }
+        for path in kept {
+            assert!(root.join(path).is_file(), "{path}");
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
