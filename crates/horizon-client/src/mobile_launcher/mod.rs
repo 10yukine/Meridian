@@ -1421,6 +1421,12 @@ impl MobileLauncher {
                 "Skins",
                 self.route == Route::Skins,
             ),
+            (
+                ButtonId::OpenSettings,
+                RailIcon::Settings,
+                "Settings",
+                self.route == Route::Settings,
+            ),
         ];
         for (id, icon, label, active) in upper_items {
             draw_rail_item(
@@ -1428,21 +1434,6 @@ impl MobileLauncher {
             );
             sy += item_h + gap;
         }
-
-        // Bottom of left rail: Settings anchored cleanly above the bottom dock
-        let settings_y = (h - item_h - if short_h { 8.0 } else { 14.0 }).max(sy + 4.0);
-        draw_rail_item(
-            ui,
-            hits,
-            ButtonId::OpenSettings,
-            item_x,
-            settings_y,
-            item_w,
-            item_h,
-            self.route == Route::Settings,
-            RailIcon::Settings,
-            "Settings",
-        );
     }
 
     #[allow(clippy::too_many_arguments)]

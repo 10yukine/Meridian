@@ -336,65 +336,99 @@ pub(super) fn draw_north_star_badge(p: &mut Ui, x: f32, y: f32, size: f32) {
     draw_meridian_north_star(p, x + pad, y + pad, size - pad * 2.0);
 }
 
-pub(super) fn draw_icon_home(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let s = sz / 18.0;
-    let x = cx - sz * 0.5;
-    let y = cy - sz * 0.5;
-    // Pitched roof steps
-    p.rounded(x + 7.5 * s, y + 1.5 * s, 3.0 * s, 2.0 * s, 0.8, col);
-    p.rounded(x + 4.5 * s, y + 3.5 * s, 9.0 * s, 2.0 * s, 0.8, col);
-    p.rounded(x + 1.5 * s, y + 5.5 * s, 15.0 * s, 2.2 * s, 0.8, col);
-    // Walls & doorway frame
-    p.rounded(x + 3.0 * s, y + 7.5 * s, 2.4 * s, 8.5 * s, 0.8, col);
-    p.rounded(x + 12.6 * s, y + 7.5 * s, 2.4 * s, 8.5 * s, 0.8, col);
-    p.rounded(x + 3.0 * s, y + 14.0 * s, 4.4 * s, 2.0 * s, 0.6, col);
-    p.rounded(x + 10.6 * s, y + 14.0 * s, 4.4 * s, 2.0 * s, 0.6, col);
-    p.rounded(x + 7.2 * s, y + 10.6 * s, 3.6 * s, 1.8 * s, 0.6, col);
+/// The rail icons' line, `t` thick from `a` to `b` (UI units), with round ends and joins.
+fn stroke(p: &mut Ui, a: [f32; 2], b: [f32; 2], t: f32, col: u32) {
+    let k = p.density / p.batch.scale;
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = dx.hypot(dy).max(f32::EPSILON);
+    let (nx, ny) = (-dy / len * t * 0.5, dx / len * t * 0.5);
+    p.batch.fill_quad(
+        p.atlas,
+        [
+            [(a[0] + nx) * k, (a[1] + ny) * k],
+            [(b[0] + nx) * k, (b[1] + ny) * k],
+            [(b[0] - nx) * k, (b[1] - ny) * k],
+            [(a[0] - nx) * k, (a[1] - ny) * k],
+        ],
+        col,
+    );
+    for [x, y] in [a, b] {
+        p.rounded(x - t * 0.5, y - t * 0.5, t, t, t * 0.5, col);
+    }
 }
 
-pub(super) fn draw_icon_mods(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+/// An outline on the icons' 18-unit grid, centred on `(cx, cy)`: one stroke weight for all.
+fn icon_path(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32, points: &[[f32; 2]], closed: bool) {
     let s = sz / 18.0;
-    let x = cx - sz * 0.5;
-    let y = cy - sz * 0.5;
-    // Modular 2x2 cube grid with detached upper-right add-on block
-    p.border(x + 2.0 * s, y + 2.5 * s, 6.2 * s, 6.2 * s, 1.8, col);
-    p.rounded(x + 10.5 * s, y + 1.5 * s, 5.8 * s, 5.8 * s, 1.6, col);
-    p.border(x + 2.0 * s, y + 10.2 * s, 6.2 * s, 6.2 * s, 1.8, col);
-    p.border(x + 9.8 * s, y + 10.2 * s, 6.2 * s, 6.2 * s, 1.8, col);
+    let at = |[x, y]: [f32; 2]| [cx + (x - 9.0) * s, cy + (y - 9.0) * s];
+    let ends = closed.then(|| [points[points.len() - 1], points[0]]);
+    for pair in points.windows(2).map(|w| [w[0], w[1]]).chain(ends) {
+        stroke(p, at(pair[0]), at(pair[1]), 1.7 * s, col);
+    }
+}
+
+/// Points on a circle around `c` from `from` to `to` degrees (y down: 270 is up).
+fn arc(c: [f32; 2], r: f32, from: f32, to: f32) -> impl Iterator<Item = [f32; 2]> {
+    let steps = ((to - from).abs() / 22.5).ceil().max(1.0) as usize;
+    (0..=steps).map(move |i| {
+        let a = (from + (to - from) * i as f32 / steps as f32).to_radians();
+        [c[0] + r * a.cos(), c[1] + r * a.sin()]
+    })
+}
+
+pub(super) fn draw_icon_home(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let roof = [[2.0, 8.5], [9.0, 2.5], [16.0, 8.5]];
+    icon_path(p, cx, cy, sz, col, &roof, false);
+    let walls = [[4.0, 7.0], [4.0, 15.5], [14.0, 15.5], [14.0, 7.0]];
+    icon_path(p, cx, cy, sz, col, &walls, false);
+    let door = [[7.3, 15.5], [7.3, 11.0], [10.7, 11.0], [10.7, 15.5]];
+    icon_path(p, cx, cy, sz, col, &door, false);
+}
+
+/// A puzzle piece: a square with a knob on its top and right sides.
+pub(super) fn draw_icon_mods(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let mut piece = vec![[3.0, 15.0], [3.0, 5.0], [6.3, 5.0]];
+    piece.extend(arc([8.0, 3.77], 2.1, 144.0, 396.0));
+    piece.extend([[9.7, 5.0], [13.0, 5.0], [13.0, 8.3]]);
+    piece.extend(arc([14.23, 10.0], 2.1, 234.0, 486.0));
+    piece.extend([[13.0, 11.7], [13.0, 15.0]]);
+    // Centred: the knobs reach past the square up and to the right.
+    let piece: Vec<_> = piece
+        .into_iter()
+        .map(|[x, y]| [x - 0.65, y + 0.65])
+        .collect();
+    icon_path(p, cx, cy, sz, col, &piece, true);
 }
 
 pub(super) fn draw_icon_skins(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let s = sz / 18.0;
-    let x = cx - sz * 0.5;
-    let y = cy - sz * 0.5;
-    // Crisp Minecraft player tunic silhouette (shoulders + sleeves + torso)
-    p.rounded(x + 1.5 * s, y + 3.0 * s, 4.5 * s, 4.6 * s, 1.2, col);
-    p.rounded(x + 12.0 * s, y + 3.0 * s, 4.5 * s, 4.6 * s, 1.2, col);
-    p.rounded(x + 4.8 * s, y + 3.0 * s, 8.4 * s, 2.2 * s, 0.8, col);
-    p.border(x + 4.8 * s, y + 4.6 * s, 8.4 * s, 11.4 * s, 1.8, col);
-    // Collar dip highlight
-    p.rounded(
-        x + 7.2 * s,
-        y + 2.6 * s,
-        3.6 * s,
-        2.2 * s,
-        1.0,
-        palette::rail(),
-    );
+    let shirt = [
+        [6.5, 2.5],
+        [2.0, 4.8],
+        [3.0, 8.6],
+        [5.0, 8.0],
+        [5.0, 15.5],
+        [13.0, 15.5],
+        [13.0, 8.0],
+        [15.0, 8.6],
+        [16.0, 4.8],
+        [11.5, 2.5],
+        [9.0, 4.0],
+    ];
+    icon_path(p, cx, cy, sz, col, &shirt, true);
 }
 
+/// A gear: a ring with eight teeth around a hub.
 pub(super) fn draw_icon_settings(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let ring: Vec<_> = arc([9.0, 9.0], 5.0, 0.0, 360.0).collect();
+    icon_path(p, cx, cy, sz, col, &ring, false);
+    let hub: Vec<_> = arc([9.0, 9.0], 1.9, 0.0, 360.0).collect();
+    icon_path(p, cx, cy, sz, col, &hub, false);
     let s = sz / 18.0;
-    let x = cx - sz * 0.5;
-    let y = cy - sz * 0.5;
-    // Outer ring & center hub
-    p.border(x + 3.5 * s, y + 3.5 * s, 11.0 * s, 11.0 * s, 5.5 * s, col);
-    p.rounded(x + 7.0 * s, y + 7.0 * s, 4.0 * s, 4.0 * s, 2.0 * s, col);
-    // 4 cardinal teeth
-    p.rounded(x + 7.6 * s, y + 1.0 * s, 2.8 * s, 3.0 * s, 0.8, col);
-    p.rounded(x + 7.6 * s, y + 14.0 * s, 2.8 * s, 3.0 * s, 0.8, col);
-    p.rounded(x + 1.0 * s, y + 7.6 * s, 3.0 * s, 2.8 * s, 0.8, col);
-    p.rounded(x + 14.0 * s, y + 7.6 * s, 3.0 * s, 2.8 * s, 0.8, col);
+    for tooth in 0..8 {
+        let a = (tooth as f32 * 45.0).to_radians();
+        let at = |r: f32| [cx + r * a.cos() * s, cy + r * a.sin() * s];
+        stroke(p, at(5.0), at(7.2), 2.4 * s, col);
+    }
 }
 
 pub(super) fn draw_icon_play(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
