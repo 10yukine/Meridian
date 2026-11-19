@@ -195,7 +195,18 @@ pub struct Settings {
     pub button_scale: f32,
     /// The touch marker's diameter in GUI pixels (16-64).
     pub circle_size: f32,
+    /// Meridian: the inventory button is a cell at the hotbar's end, as Bedrock's "…" is,
+    /// wherever the hotbar sits; moving it in the editor gives it its own place.
+    pub inventory_on_hotbar: bool,
+    /// Meridian: the version of the factory layout a saved file was made with ([`LAYOUT_VERSION`]);
+    /// a file from an older one takes the current factory layout on load.
+    #[serde(default)]
+    pub layout_version: u32,
 }
+
+/// Meridian's factory layout. 2: Bedrock's (its two-column action cluster, its D-pad, the top
+/// row as its icons, the inventory on the hotbar).
+pub const LAYOUT_VERSION: u32 = 2;
 
 // Starling's default D-pad already supplies the movement, sneak and jump slots.
 // Space the crosshair action squares out so they also fit narrower surfaces.
@@ -214,29 +225,37 @@ const DPAD_ACTION_POSITIONS: [(Control, Placement, Placement); 2] = [
 
 impl Default for Settings {
     fn default() -> Self {
+        // Bedrock's layout (Meridian): the joystick on the left, and on the right its two columns,
+        // jump over sneak over use beside sprint over attack; the top row is perspective, chat,
+        // pause and the touch settings, as Bedrock's emote, chat and pause icons.
         let row = [
-            Placement::new(0.13, 0.76, 0.32),   // Move
-            Placement::new(0.72, 0.78, 0.105),  // Sprint
-            Placement::new(0.92, 0.78, 0.16),   // Jump
-            Placement::new(0.81, 0.86, 0.115),  // Sneak
-            Placement::new(0.80, 0.64, 0.16),   // Attack
-            Placement::new(0.92, 0.52, 0.16),   // Use
-            Placement::new(0.46, 0.055, 0.075), // Chat
-            Placement::new(0.50, 0.055, 0.075), // Pause
-            Placement::new(0.54, 0.055, 0.075), // Settings
-            Placement::new(0.73, 0.95, 0.075),  // Inventory
-            Placement::new(0.42, 0.055, 0.075), // Debug
-            Placement::new(0.58, 0.055, 0.075), // Perspective
-            Placement::new(0.80, 0.96, 0.075),  // Offhand
-            Placement::new(0.92, 0.36, 0.12),   // Shield
+            Placement::new(0.15, 0.58, 0.33),    // Move
+            Placement::new(0.81, 0.52, 0.14),    // Sprint
+            Placement::new(0.925, 0.42, 0.14),   // Jump
+            Placement::new(0.925, 0.62, 0.14),   // Sneak
+            Placement::new(0.81, 0.72, 0.14),    // Attack
+            Placement::new(0.925, 0.82, 0.14),   // Use
+            Placement::new(0.48, 0.055, 0.075),  // Chat
+            Placement::new(0.52, 0.055, 0.075),  // Pause
+            Placement::new(0.56, 0.055, 0.075),  // Settings
+            Placement::new(0.73, 0.95, 0.075),   // Inventory, unless on the hotbar
+            Placement::new(0.40, 0.055, 0.075),  // Debug
+            Placement::new(0.44, 0.055, 0.075),  // Perspective
+            Placement::new(0.80, 0.96, 0.075),   // Offhand
+            Placement::new(0.81, 0.32, 0.12),    // Shield
         ];
         let mut layouts = [row; 3];
-        // The D-pad sits where the joystick does; sneak becomes its centre.
-        layouts[Mode::Dpad.index()][Control::Sneak as usize] = Placement::new(0.13, 0.76, 0.10);
-        layouts[Mode::Dpad.index()][Control::Jump as usize] = Placement::new(0.90, 0.78, 0.14);
+        // Bedrock's D-pad: large, where the joystick is, with sneak as its centre; jump alone on
+        // the right.
+        layouts[Mode::Dpad.index()][Control::Move as usize] = Placement::new(0.13, 0.74, 0.45);
+        layouts[Mode::Dpad.index()][Control::Sneak as usize] = Placement::new(0.13, 0.74, 0.15);
+        layouts[Mode::Dpad.index()][Control::Jump as usize] = Placement::new(0.90, 0.77, 0.165);
         for (control, _, placement) in DPAD_ACTION_POSITIONS {
             layouts[Mode::Dpad.index()][control as usize] = placement;
         }
+        // Bedrock has no debug button: F3 stays a choice in the editor.
+        let mut button_visibility = [FOLLOW_SCHEME; CONTROLS];
+        button_visibility[Control::Debug as usize] = HIDDEN;
         Self {
             mode: Mode::Crosshair,
             split_controls: false,
@@ -245,8 +264,9 @@ impl Default for Settings {
             sprint_button: true,
             sprint_with_joystick: false,
             offhand_button: false,
+            // Only in the tap scheme (with no use button) and while holding a shield.
             shield_button: true,
-            button_visibility: [FOLLOW_SCHEME; CONTROLS],
+            button_visibility,
             layouts,
             sensitivity: 1.0,
             sensitivity_horizontal: 1.0,
@@ -260,6 +280,8 @@ impl Default for Settings {
             dynamic_area_y: 1.0,
             button_scale: 1.0,
             circle_size: 32.0,
+            inventory_on_hotbar: true,
+            layout_version: LAYOUT_VERSION,
         }
     }
 }
@@ -271,6 +293,18 @@ impl Settings {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        // A layout made before Bedrock's (Meridian) takes it: the placements, which buttons show
+        // and the inventory on the hotbar. The player's other choices stay.
+        // ponytail: a layout the player arranged before version 2 is replaced too; keep moved
+        // controls if players ask for it.
+        if settings.layout_version < LAYOUT_VERSION {
+            let factory = Self::default();
+            settings.layouts = factory.layouts;
+            settings.button_visibility = factory.button_visibility;
+            settings.shield_button = factory.shield_button;
+            settings.inventory_on_hotbar = true;
+            settings.layout_version = LAYOUT_VERSION;
+        }
         // Update the old factory geometry on load, even if other buttons were edited.
         // A moved or resized action keeps its saved geometry and opacity.
         for (control, old, new) in DPAD_ACTION_POSITIONS {

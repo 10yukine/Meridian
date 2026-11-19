@@ -3,9 +3,11 @@
 // Starling contributors. Copyright (c) 2026 Ludovic Marie and the Horizon contributors, under the
 // same MIT license as Horizon (LICENSE at the repository root).
 
-//! Drawing the touch controls on the HUD, in GUI pixels. Buttons use the
-//! resource pack's own button sprite (`widget/button`, highlighted while held)
-//! with a short label. Movement uses Meridian's geometric tiles.
+//! Drawing the touch controls on the HUD, in GUI pixels. With Bedrock's control artwork downloaded
+//! (`meridian_launcher::controls_art`) the gameplay controls take the MCPE look, the default; the
+//! sprite choice is adapted from Starling's `crates/horizon-client-render/src/android_controls.rs`
+//! at 5432370d5736. Otherwise buttons use the resource pack's own button sprite (`widget/button`,
+//! highlighted while held) with a short label, and movement Meridian's geometric tiles.
 use super::{Control, Mode, Placement, Role, TouchControls, layout};
 use crate::gamepad::{Button, PadState};
 use crate::hud::{HudAtlas, HudBatch, rgba};
@@ -13,6 +15,12 @@ use crate::lang;
 
 const BUTTON: &str = "gui/sprites/widget/button";
 const BUTTON_HELD: &str = "gui/sprites/widget/button_highlighted";
+/// A sprite of Bedrock's control artwork: present, the controls take the MCPE look.
+const MCPE: &str = "gui/bedrock/ui/jump";
+
+fn mcpe(a: &HudAtlas) -> bool {
+    a.sprites.contains_key(MCPE)
+}
 
 impl TouchControls {
     /// Draws every visible control, then the tap marker in the tap schemes.
@@ -35,6 +43,13 @@ impl TouchControls {
                     .fingers
                     .values()
                     .any(|(_, point)| layout::contains(rect, *point));
+            if let Some(name) = self.mcpe_sprite(control).filter(|_| mcpe(a)) {
+                mcpe_sprite(b, a, name, pressed, bounds, color);
+                continue;
+            }
+            if mcpe(a) && mcpe_icon(b, a, control, bounds, pressed, color) {
+                continue;
+            }
             button(b, a, bounds, &self.label(control), pressed, color);
         }
         if let Some(point) = self.pointer() {
@@ -60,6 +75,27 @@ impl TouchControls {
             Button::LeftTrigger => state.triggers[0] > 0.0,
             Button::RightTrigger => state.triggers[1] > 0.0,
             _ => state.held(button),
+        })
+    }
+
+    /// The control's Bedrock sprite (the MCPE look), where Bedrock has one: the gameplay
+    /// controls. The others keep their labelled buttons.
+    fn mcpe_sprite(&self, control: Control) -> Option<&'static str> {
+        let dpad = self.settings.mode == Mode::Dpad;
+        Some(match control {
+            Control::Sprint => "ui/sprint",
+            Control::Attack => "ui/attack",
+            Control::Use => "ui/interact",
+            Control::Jump if self.swimming => "controls/waterascend",
+            Control::Sneak if self.swimming => "controls/waterdescend",
+            Control::Jump if self.vertical_movement => "controls/flyingascend",
+            Control::Sneak if self.vertical_movement => "controls/flyingdescend",
+            Control::Sneak if self.mounted => "controls/dismount",
+            Control::Jump if dpad => "controls/jump_dpad",
+            Control::Sneak if dpad => "controls/sneak_dpad",
+            Control::Jump => "ui/jump",
+            Control::Sneak => "ui/sneak",
+            _ => return None,
         })
     }
 
@@ -131,6 +167,10 @@ pub(super) fn draw_movement(
     held: bool,
     color: u32,
 ) {
+    if mcpe(a) {
+        mcpe_movement(b, a, [x, y, size], mode, axis, color);
+        return;
+    }
     let opacity = color.to_le_bytes()[3];
     if mode == Mode::Dpad {
         let cell = size / 3.0;
@@ -148,6 +188,139 @@ pub(super) fn draw_movement(
     let r = size * 0.065;
     let [x, y] = knob;
     b.fill_quad(a, [[x, y - r], [x + r, y], [x, y + r], [x - r, y]], color);
+}
+
+/// Bedrock's movement: its D-pad keys (the diagonals while a row's arrow is held, as Bedrock
+/// shows them) or its joystick's frame and knob.
+fn mcpe_movement(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y, size]: [f32; 3],
+    mode: Mode,
+    axis: [f32; 2],
+    color: u32,
+) {
+    if mode == Mode::Dpad {
+        let cell = size / 3.0;
+        for ([dx, dy], label, pressed) in dpad(axis) {
+            let name = match label {
+                "^" => "controls/up",
+                "<" => "controls/left",
+                ">" => "controls/right",
+                _ => "controls/down",
+            };
+            mcpe_sprite(b, a, name, pressed, [x + cell * dx, y + cell * dy, cell, cell], color);
+        }
+        if axis[1].abs() > 0.2 {
+            let (row, prefix) = if axis[1] > 0.0 { (0.0, "up") } else { (2.0, "down") };
+            for (column, side, pressed) in
+                [(0.0, "left", axis[0] < -0.2), (2.0, "right", axis[0] > 0.2)]
+            {
+                let name = format!("controls/{prefix}_{side}");
+                let cell_at = [x + cell * column, y + cell * row, cell, cell];
+                mcpe_sprite(b, a, &name, pressed, cell_at, color);
+            }
+        }
+        return;
+    }
+    mcpe_sprite(b, a, "ui/joystick_frame", false, [x, y, size, size], color);
+    let k = size * 0.34;
+    let [kx, ky] = knob([x + size / 2.0, y + size / 2.0], axis, size);
+    mcpe_sprite(b, a, "ui/joystick_knob", false, [kx - k / 2.0, ky - k / 2.0, k, k], color);
+}
+
+/// Bedrock's icon buttons (Meridian): the top row as Bedrock's framed icons in its `gui.png`
+/// (the figure, as its emote button, for the camera's perspective), the touch settings as a gear
+/// in the same frame, and the inventory as Bedrock's hotbar cell with "…". False for a control
+/// Bedrock has no icon for.
+fn mcpe_icon(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    control: Control,
+    bounds: [f32; 4],
+    pressed: bool,
+    color: u32,
+) -> bool {
+    let color = if pressed { dimmed(color) } else { color };
+    let [x, y, w, h] = bounds;
+    match control {
+        Control::Perspective => gui_region(b, a, [236.0, 46.0, 18.0, 18.0], bounds, color),
+        Control::Chat => gui_region(b, a, [200.0, 82.0, 18.0, 18.0], bounds, color),
+        Control::Pause => gui_region(b, a, [200.0, 64.0, 18.0, 18.0], bounds, color),
+        Control::Debug => gui_region(b, a, [236.0, 82.0, 18.0, 18.0], bounds, color),
+        Control::Settings => {
+            if !gui_region(b, a, [200.0, 64.0, 18.0, 18.0], bounds, color) {
+                return false;
+            }
+            // The pause frame's face over its "≡", then the gear on it.
+            let [_, _, _, opacity] = color.to_le_bytes();
+            let face = if pressed { 90 } else { 128 };
+            let texel = w / 18.0;
+            b.fill(a, x + 2.0 * texel, y + 2.0 * texel, 14.0 * texel, 12.0 * texel, rgba(face, face, face, opacity));
+            mcpe_sprite(b, a, "ui/gear", false, [x + 3.0 * texel, y + 2.0 * texel, 12.0 * texel, 12.0 * texel], color);
+            true
+        }
+        Control::Inventory => {
+            if !gui_region(b, a, [160.0, 0.0, 22.0, 22.0], bounds, color) {
+                return false;
+            }
+            mcpe_sprite(b, a, "ui/more-dots", false, [x + w * 0.2, y + h * 0.3, w * 0.6, h * 0.4], color);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Part of Bedrock's `gui.png` (texels `[x, y, w, h]`) drawn into `bounds`; false without it.
+fn gui_region(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [sx, sy, sw, sh]: [f32; 4],
+    [x, y, w, h]: [f32; 4],
+    color: u32,
+) -> bool {
+    let Some(mut r) = a.sprites.get("gui/bedrock/gui").copied() else {
+        return false;
+    };
+    let (u, v) = (r.u0, r.v0);
+    let (du, dv) = ((r.u1 - u) / r.w as f32, (r.v1 - v) / r.h as f32);
+    // A quarter texel in from each edge: the icons sit edge to edge in the sheet.
+    r.u0 = u + (sx + 0.25) * du;
+    r.u1 = u + (sx + sw - 0.25) * du;
+    r.v0 = v + (sy + 0.25) * dv;
+    r.v1 = v + (sy + sh - 0.25) * dv;
+    b.rect_uv(x, y, w, h, r, color);
+    true
+}
+
+/// A held icon, darker.
+fn dimmed(color: u32) -> u32 {
+    let [r, g, blue, opacity] = color.to_le_bytes();
+    let dim = |c: u8| (u16::from(c) * 7 / 10) as u8;
+    rgba(dim(r), dim(g), dim(blue), opacity)
+}
+
+/// A Bedrock sprite fitted into `bounds`, its pressed look while held where it has one.
+fn mcpe_sprite(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    name: &str,
+    pressed: bool,
+    [x, y, w, h]: [f32; 4],
+    color: u32,
+) {
+    let held = format!("gui/bedrock/{name}_pressed");
+    let sprite = if pressed && a.sprites.contains_key(&held) {
+        held
+    } else {
+        format!("gui/bedrock/{name}")
+    };
+    let Some(r) = a.sprites.get(&sprite).copied() else {
+        return;
+    };
+    let scale = (w / r.w as f32).min(h / r.h as f32);
+    let (sw, sh) = (r.w as f32 * scale, r.h as f32 * scale);
+    b.sprite_scaled(a, &sprite, x + (w - sw) / 2.0, y + (h - sh) / 2.0, sw, sh, color);
 }
 
 /// A frosted square with stepped corners and a short highlight on its top edge.

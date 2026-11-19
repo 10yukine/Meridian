@@ -116,6 +116,8 @@ pub struct TouchControls {
     last_sneak_tap: Option<Instant>,
     sprint_latched: bool,
     aspect: f32,
+    /// Meridian: the HUD's size in GUI pixels (0 until known), for the inventory's hotbar cell.
+    hud: [f32; 2],
     editor: Option<editor::Editor>,
 }
 
@@ -128,6 +130,24 @@ impl TouchControls {
     /// The surface size in pixels; controls stay square on any shape.
     pub fn viewport(&mut self, width: u32, height: u32) {
         self.aspect = width.max(1) as f32 / height.max(1) as f32;
+    }
+
+    /// Meridian: the HUD's size in GUI pixels (`HudBatch::width`, `height`), where the hotbar
+    /// is drawn: the inventory button sits at its end.
+    pub fn hud_size(&mut self, width: f32, height: f32) {
+        self.hud = [width, height];
+    }
+
+    /// Meridian: the inventory's cell at the hotbar's right end (182 by 22 GUI pixels, centred
+    /// at the bottom), as Bedrock's "…": None until the HUD's size is known.
+    fn hotbar_cell(&self) -> Option<Placement> {
+        let [width, height] = self.hud;
+        (width > 0.0 && height > 0.0).then(|| Placement {
+            center: [(width / 2.0 + 91.0 + 11.0) / width, (height - 11.0) / height],
+            size: 22.0 / height,
+            opacity: self.settings.layouts[self.settings.mode.index()][Control::Inventory as usize]
+                .opacity,
+        })
     }
 
     fn aspect(&self) -> f32 {
@@ -253,6 +273,12 @@ impl TouchControls {
     /// Where a control is on this surface: the saved placement, scaled by
     /// `button_scale` and kept on screen.
     fn placement(&self, c: Control) -> Placement {
+        if c == Control::Inventory
+            && self.settings.inventory_on_hotbar
+            && let Some(cell) = self.hotbar_cell()
+        {
+            return cell;
+        }
         let aspect = self.aspect();
         let mut p = self.settings.placement(c);
         let factory_swap = c == Control::Offhand
@@ -269,11 +295,11 @@ impl TouchControls {
                 }
             };
             let top = match c {
-                Control::Debug => Some((0.42, 0.18)),
-                Control::Chat => Some((0.46, 0.34)),
-                Control::Pause => Some((0.50, 0.50)),
-                Control::Settings => Some((0.54, 0.66)),
-                Control::Perspective => Some((0.58, 0.82)),
+                Control::Debug => Some((0.40, 0.18)),
+                Control::Perspective => Some((0.44, 0.34)),
+                Control::Chat => Some((0.48, 0.50)),
+                Control::Pause => Some((0.52, 0.66)),
+                Control::Settings => Some((0.56, 0.82)),
                 _ => None,
             };
             if let Some((old, new)) = top

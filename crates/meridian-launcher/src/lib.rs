@@ -774,6 +774,7 @@ mod tests {
     }
 }
 mod account;
+pub mod controls_art;
 mod ely;
 pub mod launch;
 mod mojang;

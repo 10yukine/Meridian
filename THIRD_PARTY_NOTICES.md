@@ -447,6 +447,14 @@ Starling's `packaging/android/java/io/github/juanluci/starling/StarlingActivity.
 Starling's `LauncherActivity.java`, at
 [5432370d5736](https://github.com/starling-client/starling/tree/5432370d573642041585c69b40fb045b27133488).
 
+`crates/meridian-launcher/src/controls_art.rs` and `crates/meridian-launcher/assets/bedrock-controls.json`
+are adapted from Starling's `crates/horizon-client/src/android_control_assets.rs` and
+`packaging/android/bedrock-controls.json`, and the MCPE sprite choice in
+`crates/horizon-client-render/src/touch/draw.rs` from its `android_controls.rs`, at the same
+commit. The control artwork itself is Mojang's
+([bedrock-samples](https://github.com/Mojang/bedrock-samples)): the app downloads it on the phone
+at a pinned revision and checks each file's SHA-256; Meridian never ships it.
+
 `crates/meridian-launcher/src/ely.rs` and the Ely.by routing in
 `crates/horizon-client-render/src/auth.rs` are adapted from Starling's
 `crates/starling-account/src/ely.rs` and `crates/horizon-client-render/src/auth.rs`

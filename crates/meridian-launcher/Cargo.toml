@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 getrandom = "0.3"
 png = "0.18"
+horizon-core = { path = "../horizon-core" }
 horizon-mod-package = { path = "../horizon-mod-package", features = ["index"] }
 horizon-prepare = { path = "../horizon-prepare" }
 serde = { version = "1", features = ["derive"] }

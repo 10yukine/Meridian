@@ -172,6 +172,10 @@ impl TouchControls {
                     if self.settings.left_handed {
                         place.center[0] = 1.0 - place.center[0];
                     }
+                    // Meridian: moved, the inventory leaves the hotbar for its own place.
+                    if control == Control::Inventory {
+                        self.settings.inventory_on_hotbar = false;
+                    }
                 }
                 Gesture::Button(action)
                     if phase == TouchPhase::Ended && editor.action_at(point) == Some(action) =>
@@ -253,6 +257,7 @@ impl TouchControls {
                 let mode = self.settings.mode.index();
                 let mut row = Settings::default().layouts[mode];
                 if action == Action::Compact {
+                    // Bedrock's layout (Meridian), smaller where it is.
                     for control in [
                         Control::Move,
                         Control::Attack,
@@ -263,16 +268,16 @@ impl TouchControls {
                     ] {
                         row[control as usize].size *= 0.80;
                     }
-                    row[Control::Jump as usize].center = [0.90, 0.83];
-                    row[Control::Use as usize].center = [0.90, 0.62];
                 }
                 self.settings.layouts[mode] = row;
+                self.settings.inventory_on_hotbar = true;
                 editor.hub = false;
                 editor.selected = None;
             }
             Action::Reset => {
                 let mode = self.settings.mode.index();
                 self.settings.layouts[mode] = Settings::default().layouts[mode];
+                self.settings.inventory_on_hotbar = true;
             }
             Action::Smaller | Action::Larger | Action::Fainter | Action::Brighter => {
                 if let Some(control) = editor.selected {

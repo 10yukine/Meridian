@@ -6,7 +6,7 @@
 //! that process plays.
 use super::*;
 use horizon_client::launcher_backend::{
-    Account, Real,
+    Account, Real, Setup, controls_art,
     launch::{self, Launch},
 };
 use horizon_client::mobile_launcher::{Action, MobileLauncher};
@@ -40,6 +40,8 @@ struct Host {
     settings: Settings,
     /// Play was pressed and the hand-off written.
     play: bool,
+    /// The controls' Bedrock artwork was asked for (once the game files are there).
+    art: bool,
     started: Instant,
     shown: bool,
     error: Option<Box<dyn std::error::Error>>,
@@ -87,6 +89,7 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
         last_tick: Instant::now(),
         settings,
         play: false,
+        art: false,
         started,
         shown: false,
         error: None,
@@ -361,6 +364,18 @@ impl ApplicationHandler for Host {
         self.last_tick = now;
         self.ime = android_runtime::ime_height();
         self.pad_input(event_loop, seconds);
+        // The touch controls' MCPE look (the default), fetched once the game files are there:
+        // about 75 KB from Mojang, checked, so it's ready before Play.
+        if !self.art && matches!(self.screen.backend().setup(), Setup::Ready) {
+            self.art = true;
+            let resources = launch::resources_dir(&self.root);
+            let _ = std::thread::Builder::new()
+                .name("controls-art".into())
+                .spawn(move || match controls_art::fetch(&resources) {
+                    Ok(count) => eprintln!("Meridian: control artwork: {count} files"),
+                    Err(error) => eprintln!("Meridian: control artwork: {error}"),
+                });
+        }
         // Sign-in and downloads move on without input: redraw ten times a second, and every
         // frame while a controller moves the pointer.
         if let Some(window) = &self.window {

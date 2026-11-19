@@ -151,10 +151,10 @@ fn portrait_spreads_the_factory_top_row_but_not_moved_buttons() {
     t.viewport(480, 854);
     let top = [
         Control::Debug,
+        Control::Perspective,
         Control::Chat,
         Control::Pause,
         Control::Settings,
-        Control::Perspective,
     ];
     let rects: Vec<_> = top
         .iter()
@@ -173,6 +173,7 @@ fn shortcut_only_overlay_keeps_menus_without_movement() {
         auxiliary_only: true,
         ..TouchControls::default()
     };
+    t.settings.button_visibility[Control::Debug as usize] = layout::SHOWN;
     assert!(!t.visible(Control::Move) && !t.visible(Control::Jump));
     assert!(t.visible(Control::Debug));
     let at = t.placement(Control::Debug).center;
@@ -187,8 +188,10 @@ fn shortcut_only_overlay_keeps_menus_without_movement() {
 #[test]
 fn shortcuts_take_their_finger_and_leave_movement_alone() {
     let mut t = TouchControls::default();
-    t.update(1, [0.13, 0.76], true, false);
-    t.update(1, [0.13, 0.68], false, false);
+    t.settings.button_visibility[Control::Debug as usize] = layout::SHOWN;
+    let [x, y] = t.settings.placement(Control::Move).center;
+    t.update(1, [x, y], true, false);
+    t.update(1, [x, y - 0.08], false, false);
     let moving = t.poll_state().left;
     assert_ne!(moving, [0.0; 2]);
     for (id, control) in [
@@ -218,11 +221,12 @@ fn contextual_use_button_is_opt_in_and_stays_until_release() {
     assert!(!t.visible(Control::Use));
     t.settings.contextual_interact = true;
     assert!(t.visible(Control::Use));
-    t.update(1, [0.92, 0.52], true, false);
+    let at = t.settings.placement(Control::Use).center;
+    t.update(1, at, true, false);
     t.context_use = false;
     assert!(t.visible(Control::Use));
     assert_eq!(t.poll_state().triggers[0], 1.0);
-    t.update(1, [0.92, 0.52], false, true);
+    t.update(1, at, false, true);
     assert!(!t.visible(Control::Use));
     t.settings.mode = Mode::Crosshair;
     assert!(t.visible(Control::Use));
@@ -231,32 +235,35 @@ fn contextual_use_button_is_opt_in_and_stays_until_release() {
 #[test]
 fn quick_taps_survive_one_poll_and_shared_buttons_release_together() {
     let mut t = TouchControls::default();
-    t.update(1, [0.92, 0.78], true, false);
-    t.update(1, [0.92, 0.78], false, true);
+    let jump = t.settings.placement(Control::Jump).center;
+    let attack = t.settings.placement(Control::Attack).center;
+    t.update(1, jump, true, false);
+    t.update(1, jump, false, true);
     assert!(t.poll_state().held(Button::South));
     assert!(!t.poll_state().held(Button::South));
-    t.update(2, [0.80, 0.64], true, false);
-    t.update(3, [0.80, 0.64], true, false);
-    t.update(2, [0.80, 0.64], false, true);
+    t.update(2, attack, true, false);
+    t.update(3, attack, true, false);
+    t.update(2, attack, false, true);
     assert_eq!(t.state().triggers[1], 1.0);
-    t.update(3, [0.80, 0.64], false, true);
+    t.update(3, attack, false, true);
     assert_eq!(t.state().triggers[1], 0.0);
 }
 
 #[test]
 fn joystick_camera_and_jump_have_their_own_fingers() {
     let mut t = TouchControls::default();
-    t.update(1, [0.13, 0.76], true, false);
-    t.update(1, [0.20, 0.64], false, false);
+    let [x, y] = t.settings.placement(Control::Move).center;
+    t.update(1, [x, y], true, false);
+    t.update(1, [x + 0.07, y - 0.12], false, false);
     t.update(2, [0.6, 0.4], true, false);
     let d = t.update(2, [0.65, 0.45], false, false);
     assert!((d[0] - 0.05).abs() < 0.0001);
-    t.update(3, [0.92, 0.78], true, false);
+    t.update(3, t.settings.placement(Control::Jump).center, true, false);
     assert!(t.state().held(Button::South));
     assert!(t.state().left[0] > 0.6);
     // A second finger on the joystick neither moves nor steals it.
-    t.update(4, [0.09, 0.76], true, false);
-    t.update(4, [0.02, 0.70], false, false);
+    t.update(4, [x - 0.04, y], true, false);
+    t.update(4, [x - 0.11, y - 0.06], false, false);
     assert!(t.state().left[0] > 0.6);
     t.clear();
     assert_eq!(t.poll_state(), PadState::default());
@@ -267,13 +274,14 @@ fn joystick_camera_and_jump_have_their_own_fingers() {
 fn joystick_sprint_starts_past_the_rim_and_stops_inside() {
     let mut t = TouchControls::default();
     t.settings.sprint_with_joystick = true;
-    t.update(1, [0.13, 0.76], true, false);
-    t.update(1, [0.13, 0.62], false, false);
+    let [x, y] = t.settings.placement(Control::Move).center;
+    t.update(1, [x, y], true, false);
+    t.update(1, [x, y - 0.14], false, false);
     assert!(!t.state().held(Button::LeftStick));
-    t.update(1, [0.13, 0.58], false, false);
+    t.update(1, [x, y - 0.18], false, false);
     assert!(t.state().held(Button::LeftStick));
     assert!((t.state().left[1] - 1.0).abs() < 1e-6);
-    t.update(1, [0.13, 0.62], false, false);
+    t.update(1, [x, y - 0.14], false, false);
     assert!(!t.state().held(Button::LeftStick));
 }
 
