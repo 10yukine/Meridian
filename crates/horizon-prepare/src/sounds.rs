@@ -219,6 +219,11 @@ const KINDS: [Kind; 5] = [
     ("languages", is_language, "Language", &LANGUAGES),
 ];
 
+/// Whether the full preparation pipeline reads this asset index entry.
+pub fn includes_index_asset(name: &str) -> bool {
+    KINDS.iter().any(|(_, wanted, _, _)| wanted(name))
+}
+
 /// `horizon-prepare <kind>`: copies what `kind` names (`sounds`, `panorama`, `fonts`, `packs` or
 /// `languages`) into the resources at `output` (default: `root`'s `.local/horizon-client/<version>`),
 /// from the asset store of `minecraft` or the one `inputs` names.
@@ -315,6 +320,19 @@ impl Assets {
     ) -> Result<PathBuf, String> {
         copy_indexed(self, wanted_asset, label, required, log)
     }
+
+    pub(crate) fn copy_all(&mut self, log: Log) -> Result<(), String> {
+        for (_, wanted, label, required) in KINDS {
+            let started = std::time::Instant::now();
+            self.copy(wanted, label, required, log)?;
+            log(&format!(
+                "Imported {} assets{}",
+                label.to_lowercase(),
+                crate::took(started)
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn copy_indexed(
@@ -341,9 +359,7 @@ fn copy_indexed(
             return Err(format!("{name} is missing from the asset index"));
         }
     }
-    let mut total: u64 = 0;
-    let mut copies = Vec::with_capacity(wanted.len());
-    for (name, info) in &wanted {
+    let copies = crate::pool::map(&wanted, |(name, info)| {
         let hash = info
             .get("hash")
             .and_then(Value::as_str)
@@ -379,14 +395,15 @@ fn copy_indexed(
                 error
             }
         })?;
-        copies.push((import, destination));
-        total += size;
-    }
+        Ok((import, destination, size))
+    })?;
     // Check the entire set before replacing any placeholders: a missing late face
     // must not leave a mixture of real textures and gray faces in either entry point.
-    for (import, destination) in copies {
+    let mut total: u64 = 0;
+    for (import, destination, size) in copies {
         import.commit()?;
         assets.verified.insert(destination);
+        total += size;
     }
     log(&format!(
         "{label} assets ready: {} files, {:.1} MB",

@@ -1096,6 +1096,20 @@ pub fn import(
     server_jar: Option<&Path>,
     log: Log,
 ) -> Result<(), String> {
+    import_checked(root, lock, minecraft, inputs, server_jar, true, log).map(|_| ())
+}
+
+/// Every destination has already been verified by the import. The mobile launcher doesn't
+/// need the development inventories that enumerate the classes and methods in the jars.
+pub(crate) fn import_checked(
+    root: &Path,
+    lock: &Lock,
+    minecraft: Option<&Path>,
+    inputs: &Inputs,
+    server_jar: Option<&Path>,
+    inventories: bool,
+    log: Log,
+) -> Result<(Artifacts, Vec<PathBuf>), String> {
     let files = game_files(minecraft, &lock.version).with(inputs, &lock.version);
     let manifest = import_manifest(lock, &files)?;
     let client = import_copy(
@@ -1165,8 +1179,19 @@ pub fn import(
         &server_libraries,
         files.prism.is_some(),
         server_from_client,
+        inventories,
         log,
-    )
+    )?;
+    Ok((
+        Artifacts {
+            manifest,
+            jars: HashMap::from([("client", client), ("server", server)]),
+            libraries: server_libraries,
+            manifest_from_prism: files.prism.is_some(),
+            server_from_client,
+        },
+        client_libraries,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1179,23 +1204,26 @@ fn write_import_metadata(
     server_libraries: &[PathBuf],
     manifest_from_prism: bool,
     server_from_client: bool,
+    inventories: bool,
     log: Log,
 ) -> Result<(), String> {
-    let sides = [("client", client), ("server", server)];
-    let inventories = crate::pool::map(&sides, |(_, jar)| crate::inventory::inventory(jar))?;
-    for ((side, _), data) in sides.into_iter().zip(inventories) {
-        let count = |key| data.get(key).cloned().unwrap_or(Value::Null);
-        write_json(
-            &lock
-                .directory
-                .join(format!("reports/{side}-inventory.json")),
-            &data,
-        )?;
-        log(&format!(
-            "{side}: {} classes, {} methods",
-            pyjson::dumps(&count("class_count"), &pyjson::DEFAULT),
-            pyjson::dumps(&count("method_count"), &pyjson::DEFAULT)
-        ));
+    if inventories {
+        let sides = [("client", client), ("server", server)];
+        let reports = crate::pool::map(&sides, |(_, jar)| crate::inventory::inventory(jar))?;
+        for ((side, _), data) in sides.into_iter().zip(reports) {
+            let count = |key| data.get(key).cloned().unwrap_or(Value::Null);
+            write_json(
+                &lock
+                    .directory
+                    .join(format!("reports/{side}-inventory.json")),
+                &data,
+            )?;
+            log(&format!(
+                "{side}: {} classes, {} methods",
+                pyjson::dumps(&count("class_count"), &pyjson::DEFAULT),
+                pyjson::dumps(&count("method_count"), &pyjson::DEFAULT)
+            ));
+        }
     }
     let paths = |list: &[PathBuf]| -> Result<Value, String> {
         Ok(Value::Array(
@@ -1255,12 +1283,13 @@ pub struct Artifacts {
 
 /// Reuses checked imports from this root or another installed version beside it.
 pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
-    Ok(reuse_verified(root, log)?.is_some())
+    Ok(reuse_verified(root, true, log)?.is_some())
 }
 
 /// Keep this preparation's verified artifacts and client libraries for the exporters.
 pub(crate) fn reuse_verified(
     root: &Path,
+    inventories: bool,
     log: Log,
 ) -> Result<Option<(Artifacts, Vec<PathBuf>)>, String> {
     let root = fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
@@ -1277,13 +1306,11 @@ pub(crate) fn reuse_verified(
         Ok((found, client))
     };
     if let Ok((found, client_libraries)) = checked(lock.directory.clone()) {
-        if [
-            "prepared.json",
-            "reports/client-inventory.json",
-            "reports/server-inventory.json",
-        ]
-        .iter()
-        .any(|path| !lock.directory.join(path).is_file())
+        let exists = |path| lock.directory.join(path).is_file();
+        if !exists("prepared.json")
+            || inventories
+                && !(exists("reports/client-inventory.json")
+                    && exists("reports/server-inventory.json"))
         {
             write_import_metadata(
                 &root,
@@ -1294,6 +1321,7 @@ pub(crate) fn reuse_verified(
                 &found.libraries,
                 found.manifest_from_prism,
                 found.server_from_client,
+                inventories,
                 log,
             )?;
         }
@@ -1346,6 +1374,7 @@ pub(crate) fn reuse_verified(
             &found.libraries,
             found.manifest_from_prism,
             found.server_from_client,
+            inventories,
             log,
         )?;
         log(&format!(
@@ -1575,6 +1604,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn launcher_reuse_preserves_verified_artifacts_without_scanning_classes() {
+        let fixture = Imports::new();
+        let (artifacts, client) = reuse_verified(&fixture.target, false, &|_| {})
+            .unwrap()
+            .unwrap();
+        let lock = Lock::read(&fixture.target).unwrap();
+        assert_eq!(client.len(), 1);
+        assert_eq!(artifacts.libraries.len(), 1);
+        assert!(lock.directory.join("prepared.json").is_file());
+        assert!(!lock
+            .directory
+            .join("reports/client-inventory.json")
+            .exists());
+        assert!(!lock
+            .directory
+            .join("reports/server-inventory.json")
+            .exists());
+
+        // Desktop research tools can still generate inventories from these imports.
+        assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
+        assert!(lock
+            .directory
+            .join("reports/client-inventory.json")
+            .is_file());
+        assert!(lock
+            .directory
+            .join("reports/server-inventory.json")
+            .is_file());
     }
 
     #[test]

@@ -7,7 +7,9 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Cargo can reuse this executable in another worktree sharing the target directory.
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo manifest directory");
+    let dir = Path::new(&manifest_dir);
     let mut files = Vec::new();
     for name in ["Cargo.toml", "build.rs"] {
         println!("cargo:rerun-if-changed={name}");
