@@ -50,6 +50,9 @@ const STAGES: u32 = 19;
 /// jar, so the client jar is the server side; the sides still compile and run separately).
 const SERVER_SIDE: usize = 0;
 const CLIENT_SIDE: usize = 1;
+/// The `worker` of an exporter that gets a JVM of its own: it changes vanilla's registries
+/// (data components, not just tags), so a worker's next task would see them.
+const OWN_JVM: usize = 3;
 
 /// The manifest's `schema`: the prepared files' layout, which the launcher compares.
 pub const SCHEMA: i64 = 7;
@@ -531,11 +534,7 @@ impl Run<'_> {
         } else {
             "server"
         });
-        if !matches!(
-            main,
-            "VanillaCommandParseOracle" | "VanillaCreativeTabsExporter"
-        ) && std::env::var_os("HORIZON_PREPARE_ISOLATED").is_none()
-        {
+        if worker != OWN_JVM && std::env::var_os("HORIZON_PREPARE_ISOLATED").is_none() {
             let name = ["server", "client", "server-blocks"][worker];
             let mut worker = self.workers[worker].lock().unwrap();
             if worker.is_none() {
@@ -832,10 +831,10 @@ type Entries = Vec<(&'static str, Value)>;
 
 /// The exporters, the data generator and the asset copy, on four lanes (five with the split
 /// below) that run at once unless `pool::jobs` is 1:
-/// the server exporter JVM's steps in a fixed order (they share its state), the client
-/// exporter JVM's then the command registries' JVM, the data generator's then the creative
-/// inventory's, and the copying, which needs no Java. At most three JVMs run at a time, four
-/// with the split below.
+/// the server exporter JVM's steps in a fixed order (they share its state), the creative
+/// inventory last, the client exporter JVM's then the command registries' JVM (with the split
+/// below, the second server JVM's last task instead), the data generator's, and the copying,
+/// which needs no Java. At most three JVMs run at a time, four with the split below.
 /// From this many processors (`pool::jobs`) the generator's block behaviour gets its own
 /// server JVM.
 /// It pays a second Bootstrap and ~400 MB, which only pays off when the other lanes leave cores
@@ -939,6 +938,34 @@ fn steps(
         Ok(hashes)
     };
     let single = &single;
+
+    // Vanilla's built-in registries for in-game command parsing (mob effects, data component
+    // types, dialogs, block entity and tag members). Like the creative inventory it installs data
+    // components: a worker's last task, or a JVM of its own.
+    let command_registries = |worker: usize| -> Result<(), String> {
+        let command_registries = root.join("command-registries.json");
+        run.stage();
+        if !(run.previous("command_registries_exporters_sha256") == Some(&command_sources)
+            && reusable_export(&command_registries)
+            && run.same("server_sha256"))
+        {
+            let export = run.local.join("command-registries");
+            run.export_on(
+                SERVER_SIDE,
+                worker,
+                "command registries",
+                server_cp,
+                &export.join("classes"),
+                &["VanillaCommandParseOracle"],
+                "1G",
+                &["registries".into(), arg(&export)],
+                &root.join("command-registries-export.log"),
+            )?;
+            copy(&export.join("registries.json"), &command_registries)?;
+        }
+        Ok(())
+    };
+    let command_registries = &command_registries;
 
     // The server exporter JVM, in the order these steps always ran.
     let server: pool::Lane<Entries> = Box::new(|| {
@@ -1140,8 +1167,25 @@ fn steps(
         if !split_blocks {
             worldgen_blocks(run, 0)?;
         }
+        // The creative inventory (creative-inventory.json): every tab built by vanilla's
+        // CreativeModeTabs over the vanilla data pack's registries, with the search
+        // tab's tooltip lines and tags. It installs data components, so it is this JVM's last
+        // task: a JVM of its own would pay another Bootstrap (~50 s on a phone).
+        run.stage();
+        let creative = single(
+            "the creative inventory",
+            "creative-inventory.json",
+            &["VanillaCreativeTabsExporter.java", "ParityData.java"],
+            "creative_exporters_sha256",
+            "server_sha256",
+            "creative-inventory/classes",
+            "2G",
+            &[],
+            "creative-export.log",
+        )?;
         run.close_worker(0);
         Ok(vec![
+            ("creative_exporters_sha256", creative),
             ("gameplay_exporters_sha256", gameplay),
             ("entity_types_exporters_sha256", entity_types),
             ("behaviour_exporters_sha256", behaviour),
@@ -1149,7 +1193,7 @@ fn steps(
         ])
     });
 
-    // The client exporter JVM, then the command registries' own.
+    // The client exporter JVM, then (without the split) the command registries' own.
     let client: pool::Lane<Entries> = Box::new(|| {
         // Block state to model bindings, from the client.
         let model_states = root.join("model-states.json");
@@ -1197,27 +1241,8 @@ fn steps(
             "mob-data-export.log",
         )?;
         run.close_worker(1);
-
-        // Vanilla's built-in registries for in-game command parsing (mob effects,
-        // data component types, dialogs, block entity and tag members).
-        let command_registries = root.join("command-registries.json");
-        run.stage();
-        if !(run.previous("command_registries_exporters_sha256") == Some(&command_sources)
-            && reusable_export(&command_registries)
-            && run.same("server_sha256"))
-        {
-            let export = run.local.join("command-registries");
-            run.export(
-                SERVER_SIDE,
-                "command registries",
-                server_cp,
-                &export.join("classes"),
-                &["VanillaCommandParseOracle"],
-                "1G",
-                &["registries".into(), arg(&export)],
-                &root.join("command-registries-export.log"),
-            )?;
-            copy(&export.join("registries.json"), &command_registries)?;
+        if !split_blocks {
+            command_registries(OWN_JVM)?;
         }
         Ok(vec![
             ("entity_model_exporters_sha256", entity_models),
@@ -1225,7 +1250,7 @@ fn steps(
         ])
     });
 
-    // The data generator's JVM, then the creative inventory's.
+    // The data generator's JVM.
     let reports: pool::Lane<Entries> = Box::new(|| {
         run.stage();
         if datagen_reports_missing(root) || !run.same("server_sha256") {
@@ -1276,22 +1301,7 @@ fn steps(
             }
         }
 
-        // The creative inventory (creative-inventory.json): every tab built by vanilla's
-        // CreativeModeTabs over the vanilla data pack's registries, with the search
-        // tab's tooltip lines and tags.
-        run.stage();
-        let creative = single(
-            "the creative inventory",
-            "creative-inventory.json",
-            &["VanillaCreativeTabsExporter.java", "ParityData.java"],
-            "creative_exporters_sha256",
-            "server_sha256",
-            "creative-inventory/classes",
-            "2G",
-            &[],
-            "creative-export.log",
-        )?;
-        Ok(vec![("creative_exporters_sha256", creative)])
+        Ok(Vec::new())
     });
 
     // The playable client needs every client asset (textures, models, fonts, GUI)
@@ -1334,6 +1344,7 @@ fn steps(
         // time) runs on a second server JVM beside the first; it pays its own Bootstrap.
         lanes.push(Box::new(|| {
             worldgen_blocks(run, 2)?;
+            command_registries(2)?;
             run.close_worker(2);
             Ok(Vec::new())
         }));

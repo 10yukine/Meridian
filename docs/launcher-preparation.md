@@ -32,19 +32,24 @@ before replying; failures stop preparation. Collision exports share the first ge
 registry and collision files, encoded block states and shape grids within the server worker.
 Ordinary parity oracle processes keep their existing behavior.
 
-Command-registry and creative-tab exporters remain separate processes: they install data
-components as well as tags. The data generator also remains separate. Inspection of pinned
-`net.minecraft.data.Main.main` showed that it calls `Util.shutdownExecutors` after running
-its providers. Calling it inside a worker would shut down shared executors; incorporating
-its providers directly needs a separate comparison of registry and executor lifetimes.
-Fresh release preparation therefore starts five exporter/data-generator JVMs, down from 18
-(six with 6 processors or more, below), and invokes no compiler. `HORIZON_PREPARE_ISOLATED=1`
-retains separate exporter JVMs for output comparisons and diagnosis.
+Command-registry and creative-tab exporters install data components as well as tags, so each
+runs as the last task of a server worker, where no task after it sees them: the creative tabs on
+the first, the command registries on the second (with the split below; without it, in a JVM of
+its own). Their outputs match isolated runs (`tools/check_prepare_exporters.py`'s comparison:
+identical apart from the known noisy files). Each JVM not started saves its Bootstrap: about
+50 s on a phone (Galaxy A14), 10 s on a desktop. The data generator remains separate. Inspection
+of pinned `net.minecraft.data.Main.main` showed that it calls `Util.shutdownExecutors` after
+running its providers. Calling it inside a worker would shut down shared executors;
+incorporating its providers directly needs a separate comparison of registry and executor
+lifetimes. Fresh release preparation therefore starts four exporter/data-generator JVMs, down
+from 18 (four with 6 processors or more too, below), and invokes no compiler.
+`HORIZON_PREPARE_ISOLATED=1` retains separate exporter JVMs for output comparisons and diagnosis.
 
 Those JVMs run on four lanes at once, so at most three run at a time (five lanes and four JVMs
-with the split below): the server worker's steps in their fixed order; the client worker's,
-then the command registries'; the data generator, then the creative tabs'; and the Rust-only
-copying (client assets and data, the world generator's bundle), spread over several threads.
+with the split below): the server worker's steps in their fixed order, then the creative tabs;
+the client worker's, then (without the split) the command registries'; the data generator; and
+the Rust-only copying (client assets and data, the world generator's bundle), spread over
+several threads.
 The world generator's tables, which need the block facts and the reports, and the manifest
 come after every lane. A worker stops when its lane is done. The two sides compile at once
 too. Imports and checks hash the pinned files on several threads; every file is still checked
@@ -53,8 +58,8 @@ in full.
 `HORIZON_PREPARE_JOBS` is how many threads each copying, hashing or compiling step spreads
 over: the logical processors by default, at most 8. `1` also runs the lanes one after another
 (for a machine short on memory); any other number runs them all at once. From 6, the world
-generator's block behaviour and structure blocks, a quarter of the server lane, run on a fifth
-lane in a second server JVM: it costs a second Bootstrap and ~400 MB, and only pays off when
+generator's block behaviour and structure blocks, a quarter of the server lane, then the command
+registries, run on a fifth lane in a second server JVM: it costs a second Bootstrap and ~400 MB, and only pays off when
 the other lanes would leave processors idle. On a 6-core laptop they finished ~20 s before the
 server lane; the split itself is not yet timed on such a machine (on 3 cores it is slower,
 44.9 s against 40.5 s, so it stays off there). The release check prepares both ways.
