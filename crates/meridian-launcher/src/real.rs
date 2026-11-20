@@ -663,7 +663,13 @@ impl Backend for Real {
     }
 
     fn game_log(&self, profile: &str) -> Vec<String> {
-        let path = profile_dir(&self.root, profile).join("logs/latest.log");
+        // Every profile's game logs into the shared home: the log there is the last played
+        // one's (Vanilla's, from before the launcher kept which that was).
+        let played = launch::last_played(&self.root).unwrap_or_else(|| VANILLA.to_owned());
+        if played != profile {
+            return Vec::new();
+        }
+        let path = self.root.join("logs/latest.log");
         let Ok(meta) = fs::metadata(&path) else {
             return Vec::new();
         };
@@ -724,6 +730,30 @@ mod log_tests {
                 .all(|line| line.ends_with("] line") && line.starts_with('['))
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn the_game_log_is_the_last_played_profiles() {
+        let root = std::env::temp_dir().join(format!("meridian-played-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("logs")).unwrap();
+        fs::write(root.join("logs/latest.log"), "[1] played\n").unwrap();
+        let backend = Real::with_store(root.clone(), None);
+        // Before any Play: Vanilla's, whose folder the home is.
+        assert_eq!(backend.game_log(VANILLA), ["[1] played"]);
+        assert!(backend.game_log("pack").is_empty());
+        // A modded profile played: the shared log is its own now.
+        let launch = launch::Launch {
+            profile: "pack".into(),
+            name: Some("Steve".into()),
+            session: false,
+        };
+        launch::write(&root, &launch, None).unwrap();
+        fs::write(root.join("logs/latest.log"), "[2] modded run\n").unwrap();
+        assert_eq!(backend.game_log("pack"), ["[2] modded run"]);
+        assert!(backend.game_log(VANILLA).is_empty());
+        drop(backend);
+        let _ = fs::remove_dir_all(root);
     }
 }
 

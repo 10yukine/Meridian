@@ -8,6 +8,7 @@ use std::{
 
 const FILE: &str = "launch.json";
 const SESSION: &str = "launch-session.json";
+const LAST_PLAYED: &str = "last-played.txt";
 
 /// What the launcher asks the next process to play.
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -18,6 +19,13 @@ pub struct Launch {
     pub name: Option<String>,
     /// An online account: its session waits in [`session_file`].
     pub session: bool,
+}
+
+/// The profile the last game ran with. Every profile's game logs into the shared home
+/// (`logs/latest.log`, upstream's layout), so that log is this profile's. None before any.
+pub fn last_played(root: &Path) -> Option<String> {
+    let id = fs::read_to_string(root.join(LAST_PLAYED)).ok()?;
+    Some(id.trim().to_owned()).filter(|id| !id.is_empty())
 }
 
 /// The online account's session for the game (`--session-file`): mode 0600, read once and
@@ -113,6 +121,7 @@ pub fn write(root: &Path, launch: &Launch, session: Option<&GameSession>) -> io:
             session.as_json().as_bytes(),
         )?;
     }
+    fs::write(root.join(LAST_PLAYED), &launch.profile)?;
     fs::write(root.join(FILE), serde_json::to_vec(launch)?)
 }
 
