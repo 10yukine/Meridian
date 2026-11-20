@@ -116,7 +116,24 @@ pub(crate) fn download_game(
     // The JARs are buffered for verification. Keep the larger transfers at their old limit.
     fetch_all(&game, jobs.min(8), fetch, cancel, log)?;
     fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)?;
-    Ok(Assets(objects(&read_json(&index.path)?, dir)?))
+    Ok(Assets(objects(&read_json(&index.path)?, dir, false)?))
+}
+
+/// The assets the game starts without ([`horizon_prepare::later_asset`]) still to download, from
+/// the version file and asset index [`download_game`] kept.
+pub(crate) fn later_assets(version: &str, dir: &Path) -> Result<Assets, String> {
+    let manifest = read_json(
+        &dir.join("versions")
+            .join(version)
+            .join(format!("{version}.json")),
+    )?;
+    let id = text(&manifest["assetIndex"], "id")?;
+    let index = dir
+        .join("assets/indexes")
+        .join(relative(&format!("{id}.json"))?);
+    let mut files = objects(&read_json(&index)?, dir, true)?;
+    pending(&mut files);
+    Ok(Assets(files))
 }
 
 pub(crate) struct Assets(Vec<File>);
@@ -191,14 +208,17 @@ pub(crate) fn native_classifier(library: &Value, os: &str) -> Option<String> {
         .map(|key| key.replace("${arch}", arch))
 }
 
-/// The objects preparation uses, once per hash even if several names refer to it.
-fn objects(index: &Value, dir: &Path) -> Result<Vec<File>, String> {
+/// The objects preparation uses, once per hash even if several names refer to it: those the game
+/// starts with, or (`later`) those it can do without at first.
+fn objects(index: &Value, dir: &Path, later: bool) -> Result<Vec<File>, String> {
     let objects = index["objects"]
         .as_object()
         .ok_or("The asset index has no objects")?;
     let mut wanted = std::collections::BTreeMap::new();
     for (name, object) in objects {
-        if horizon_prepare::includes_index_asset(name) {
+        if horizon_prepare::includes_index_asset(name)
+            && horizon_prepare::later_asset(name) == later
+        {
             let hash = text(object, "hash")?;
             wanted
                 .entry(hash)
@@ -355,18 +375,24 @@ mod tests {
         let sound = "a".repeat(40);
         let extra = "b".repeat(40);
         let font = "c".repeat(40);
+        let music = "d".repeat(40);
         let index = serde_json::json!({
             "objects": {
                 "minecraft/sounds/example.ogg": {"hash": sound, "size": 11},
                 "minecraft/sounds/shared.ogg": {"hash": sound, "size": 11},
                 "minecraft/font/unifont.zip": {"hash": font, "size": 12},
-                "realms/sounds/unread.ogg": {"hash": extra, "size": 13}
+                "realms/sounds/unread.ogg": {"hash": extra, "size": 13},
+                "minecraft/sounds/music/game/calm1.ogg": {"hash": music, "size": 14}
             }
         });
-        let files = objects(&index, Path::new("cache")).unwrap();
+        let files = objects(&index, Path::new("cache"), false).unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].sha1, sound);
         assert_eq!(files[0].size, Some(11));
         assert_eq!(files[1].sha1, font);
+        // Music waits for after the first start.
+        let later = objects(&index, Path::new("cache"), true).unwrap();
+        assert_eq!(later.len(), 1);
+        assert_eq!(later[0].sha1, music);
     }
 }

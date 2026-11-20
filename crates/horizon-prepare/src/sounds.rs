@@ -224,6 +224,15 @@ pub fn includes_index_asset(name: &str) -> bool {
     KINDS.iter().any(|(_, wanted, _, _)| wanted(name))
 }
 
+/// An asset the game starts without and uses once it is there: music, records and the languages
+/// besides English (about 380 of a version's 485 MB). A launcher may download these after the
+/// first start (Meridian does); until then the import leaves out the ones its store lacks.
+pub fn later_asset(name: &str) -> bool {
+    name.starts_with("minecraft/sounds/music/")
+        || name.starts_with("minecraft/sounds/records/")
+        || (name.starts_with("minecraft/lang/") && name != "minecraft/lang/en_us.json")
+}
+
 /// `horizon-prepare <kind>`: copies what `kind` names (`sounds`, `panorama`, `fonts`, `packs` or
 /// `languages`) into the resources at `output` (default: `root`'s `.local/horizon-client/<version>`),
 /// from the asset store of `minecraft` or the one `inputs` names.
@@ -372,6 +381,9 @@ fn copy_indexed(
         let relative = artifacts::safe_relative(name)
             .ok_or_else(|| format!("Unsafe asset name {name:?} in the asset index"))?;
         let source = object_path(&assets.store, hash)?;
+        if later_asset(name) && !source.is_file() {
+            return Ok(None);
+        }
         let destination = assets.target.join("assets").join(relative);
         let import = crate::files::Import::stage(
             &source,
@@ -395,19 +407,19 @@ fn copy_indexed(
                 error
             }
         })?;
-        Ok((import, destination, size))
+        Ok(Some((import, destination, size)))
     })?;
     // Check the entire set before replacing any placeholders: a missing late face
     // must not leave a mixture of real textures and gray faces in either entry point.
-    let mut total: u64 = 0;
-    for (import, destination, size) in copies {
+    let (mut files, mut total) = (0, 0u64);
+    for (import, destination, size) in copies.into_iter().flatten() {
         import.commit()?;
         assets.verified.insert(destination);
+        files += 1;
         total += size;
     }
     log(&format!(
-        "{label} assets ready: {} files, {:.1} MB",
-        wanted.len(),
+        "{label} assets ready: {files} files, {:.1} MB",
         total as f64 / 1e6
     ));
     Ok(assets.target.clone())
@@ -565,6 +577,54 @@ mod tests {
         assert_eq!(*lines.borrow(), ["Sound assets ready: 3 files, 0.0 MB"]);
         // Again: the verified copies are kept.
         f.run().unwrap();
+    }
+
+    #[test]
+    fn music_and_records_not_downloaded_yet_are_left_for_later() {
+        let f = Fixture::with_extras(
+            "later",
+            &PANORAMA,
+            &[
+                ("minecraft/sounds/music/game/calm1.ogg", &b"OggS calm"[..]),
+                ("minecraft/sounds/records/cat.ogg", &b"OggS cat"[..]),
+            ],
+        );
+        let at = |name: &str| f.objects.iter().position(|(n, _)| *n == name).unwrap();
+        for name in [
+            "minecraft/sounds/music/game/calm1.ogg",
+            "minecraft/sounds/records/cat.ogg",
+        ] {
+            fs::remove_file(f.object(at(name))).unwrap();
+        }
+        let target = f.run().unwrap();
+        let sounds = target.join("assets/minecraft/sounds");
+        assert!(sounds.join("dig/stone1.ogg").is_file());
+        assert!(!sounds.join("music/game/calm1.ogg").exists());
+        assert!(!sounds.join("records/cat.ogg").exists());
+        // A sound the game needs from the start is still required.
+        fs::remove_file(f.object(at("minecraft/sounds/dig/stone1.ogg"))).unwrap();
+        fs::remove_file(sounds.join("dig/stone1.ogg")).unwrap();
+        assert!(f.run().unwrap_err().contains("Missing asset object"));
+    }
+
+    #[test]
+    fn later_assets_are_music_records_and_other_languages() {
+        for name in [
+            "minecraft/sounds/music/game/calm1.ogg",
+            "minecraft/sounds/records/cat.ogg",
+            "minecraft/lang/fr_fr.json",
+        ] {
+            assert!(later_asset(name), "{name}");
+        }
+        for name in [
+            "minecraft/sounds.json",
+            "minecraft/sounds/dig/stone1.ogg",
+            "minecraft/lang/en_us.json",
+            "pack.mcmeta",
+            PANORAMA[0],
+        ] {
+            assert!(!later_asset(name), "{name}");
+        }
     }
 
     #[test]

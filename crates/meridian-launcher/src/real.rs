@@ -22,6 +22,8 @@ const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
 const DOWNLOAD_JOBS: usize = 16;
 /// [`Real::reclaimable`] while the install cache is being measured.
 const MEASURING: u64 = u64::MAX;
+/// A [`fetch_later`] is running: one at a time, and the install cache stays until it's done.
+static LATER: AtomicBool = AtomicBool::new(false);
 /// Where the platform's file picker leaves the chosen skin (`MeridianActivity.pickSkin`).
 const PICKED_SKIN: &str = "picked-skin.png";
 /// The game log's end [`Real::game_log`] reads, and the most lines it keeps of it.
@@ -106,6 +108,8 @@ pub struct Real {
     sign_in_cancel: Arc<AtomicBool>,
     setup: Arc<Mutex<Setup>>,
     setup_cancel: Arc<AtomicBool>,
+    /// Stops [`fetch_later`] when the launcher closes; the next start goes on with it.
+    later_cancel: Arc<AtomicBool>,
     base_ready: Arc<AtomicBool>,
     /// The install cache's bytes ([`launch::install_cache_size`]), or [`MEASURING`].
     reclaimable: Arc<AtomicU64>,
@@ -137,6 +141,7 @@ impl Real {
             sign_in_cancel: Arc::default(),
             setup: Arc::new(Mutex::new(if ready { Setup::Ready } else { Setup::Needed })),
             setup_cancel: Arc::default(),
+            later_cancel: Arc::default(),
             base_ready: Arc::new(AtomicBool::new(ready)),
             reclaimable: Arc::new(AtomicU64::new(if ready { MEASURING } else { 0 })),
             skin_upload: Arc::default(),
@@ -146,6 +151,7 @@ impl Real {
         };
         if ready {
             measure_install_cache(&backend.root, &backend.reclaimable);
+            spawn_later(backend.root.clone(), backend.later_cancel.clone());
         }
         let Some(path) = backend.account_file.as_deref() else {
             return backend;
@@ -232,6 +238,7 @@ impl Drop for Real {
     fn drop(&mut self) {
         self.cancel_sign_in();
         self.cancel_setup();
+        self.later_cancel.store(true, Relaxed);
     }
 }
 
@@ -470,6 +477,7 @@ impl Backend for Real {
         let task_id = id.clone();
         let base_ready = self.base_ready.clone();
         let reclaimable = self.reclaimable.clone();
+        let later_cancel = self.later_cancel.clone();
         stage(&setup, Stage::Check, None);
         let worker = std::thread::Builder::new()
             .name("launcher-setup".into())
@@ -478,6 +486,7 @@ impl Backend for Real {
                     if !base_ready.load(Relaxed) {
                         prepare(&root, &setup, &cancel)?;
                         base_ready.store(true, Relaxed);
+                        spawn_later(root.clone(), later_cancel);
                         // Installing filled the cache again.
                         reclaimable.store(launch::install_cache_size(&root), Relaxed);
                     }
@@ -528,6 +537,9 @@ impl Backend for Real {
         // Setup and profile installs share this state: nothing is installing while it's Ready.
         if !matches!(self.setup(), Setup::Ready) {
             return Err("Wait until installing is done.".into());
+        }
+        if LATER.load(Relaxed) {
+            return Err("Music and languages are still downloading. Try again later.".into());
         }
         let bytes = self
             .reclaimable()
@@ -788,6 +800,52 @@ fn fetch(
         progress(got as u64);
     }
 }
+
+/// [`fetch_later`] on a thread of its own, once the game is ready.
+fn spawn_later(root: PathBuf, cancel: Arc<AtomicBool>) {
+    let _ = std::thread::Builder::new()
+        .name("launcher-later-assets".into())
+        .spawn(move || {
+            if LATER.swap(true, Relaxed) {
+                return;
+            }
+            if let Err(error) = fetch_later(&root, &cancel) {
+                eprintln!("Meridian: music and languages: {error}");
+            }
+            LATER.store(false, Relaxed);
+        });
+}
+
+/// The assets the game starts without (music, records, the other languages: about 380 MB of
+/// 485), downloaded after the first start and linked into its resources, so a first start waits
+/// for a fifth of the download. Runs at each start until done; a cut-short run keeps what it got.
+/// ponytail: it needs the install cache's version file and index: freed before it finished (Free
+/// Up Space refuses while it runs), the music comes back only with a repair.
+fn fetch_later(root: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let lock: serde_json::Value = serde_json::from_str(LOCK).map_err(|e| e.to_string())?;
+    let pins = sources::Pins::read(&lock).ok_or("Missing Minecraft version pins.")?;
+    let done = horizon_prepare::resources_dir(root, &pins.version, None).join("later-assets.done");
+    if done.is_file() {
+        return Ok(());
+    }
+    let game = root.join(".local/launcher-downloads");
+    let assets = mojang::later_assets(&pins.version, &game)?;
+    // Fewer at once than the first install: this runs while the player browses the launcher.
+    let agent = ureq::AgentBuilder::new()
+        .max_idle_connections_per_host(LATER_JOBS)
+        .timeout_read(Duration::from_secs(20))
+        .timeout_connect(Duration::from_secs(10))
+        .build();
+    let download = |url: &str| fetch(&agent, url, MAX_DOWNLOAD, cancel, |_| {});
+    assets.download(LATER_JOBS, &download, cancel, &|_| {})?;
+    cancelled(cancel)?;
+    let log = |line: &str| eprintln!("Meridian: music and languages: {line}");
+    horizon_prepare::sounds(root, Some(&game), &log)?;
+    horizon_prepare::languages(root, Some(&game), &log)?;
+    sources::write_file(&done, b"")
+}
+
+const LATER_JOBS: usize = 4;
 
 fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(), String> {
     let lock: serde_json::Value = serde_json::from_str(LOCK).map_err(|e| e.to_string())?;
