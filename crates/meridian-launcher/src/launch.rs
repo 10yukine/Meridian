@@ -230,10 +230,22 @@ pub(crate) fn save_game_args(root: &Path, text: &str) -> Result<(), String> {
 
 const RUNNING: &str = "launch-running";
 
+/// This install of the app: the folder Android unpacked its library to, new with every install
+/// or update (empty off Android).
+fn install() -> String {
+    fs::read_to_string("/proc/self/maps")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .find(|path| path.ends_with("/libmeridian.so"))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// The game is about to run: a marker only its normal end removes, so the launcher can tell
 /// next time that it closed unexpectedly (a crash, or Android ending it in the background).
 pub fn game_started(root: &Path) -> io::Result<()> {
-    fs::write(root.join(RUNNING), b"")
+    fs::write(root.join(RUNNING), install())
 }
 
 /// The game ended normally.
@@ -241,9 +253,14 @@ pub fn game_ended(root: &Path) {
     let _ = remove(&root.join(RUNNING));
 }
 
-/// Whether the last game closed unexpectedly; asking forgets it.
+/// Whether the last game closed unexpectedly; asking forgets it. One that an install or update
+/// ended (`adb install -r` over a running game) ran in another install: not a crash.
 pub fn closed_unexpectedly(root: &Path) -> bool {
-    fs::remove_file(root.join(RUNNING)).is_ok()
+    let path = root.join(RUNNING);
+    let Ok(marker) = fs::read(&path) else {
+        return false;
+    };
+    fs::remove_file(&path).is_ok() && marker == install().as_bytes()
 }
 
 /// The settings a profile's game takes from Vanilla's when it has none of its own yet, so a new
@@ -477,6 +494,10 @@ mod tests {
         game_started(&root).unwrap();
         assert!(closed_unexpectedly(&root));
         assert!(!closed_unexpectedly(&root));
+        // Ended by another install (an update): forgotten, not a crash.
+        fs::write(root.join(RUNNING), "/data/app/~~old==/lib/arm64/libmeridian.so").unwrap();
+        assert!(!closed_unexpectedly(&root));
+        assert!(!root.join(RUNNING).exists());
         fs::remove_dir_all(root).unwrap();
     }
 }
