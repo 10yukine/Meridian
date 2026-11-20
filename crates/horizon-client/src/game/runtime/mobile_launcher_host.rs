@@ -73,6 +73,10 @@ struct Host {
     pad: PadState,
     pad_used: Option<Instant>,
     last_tick: Instant,
+    /// Input (or a change) since the last frame: the next one draws at once.
+    dirty: bool,
+    /// When the next frame is due without input.
+    next_frame: Instant,
     settings: Settings,
     /// Play was pressed and the hand-off written.
     play: bool,
@@ -124,6 +128,8 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
         pad: PadState::default(),
         pad_used: None,
         last_tick: Instant::now(),
+        dirty: true,
+        next_frame: Instant::now(),
         settings,
         play: false,
         game_files: GameFiles::Pending,
@@ -478,6 +484,9 @@ impl ApplicationHandler for Host {
         let Some(window) = self.window.clone().filter(|w| w.id() == id) else {
             return;
         };
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            self.dirty = true;
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -526,8 +535,10 @@ impl ApplicationHandler for Host {
         let now = Instant::now();
         let seconds = now.duration_since(self.last_tick).as_secs_f64().min(0.1);
         self.last_tick = now;
-        self.ime = android_runtime::ime_height();
-        self.screen.poll();
+        let ime = android_runtime::ime_height();
+        self.dirty |= ime != self.ime;
+        self.ime = ime;
+        self.dirty |= self.screen.poll();
         self.pad_input(event_loop, seconds);
         self.prepare_game_files();
         if matches!(&self.game_files, GameFiles::Writing(job) if job.is_finished()) {
@@ -540,15 +551,30 @@ impl ApplicationHandler for Host {
             self.play_requested_at = None;
             self.hand_off(event_loop);
         }
-        // Sign-in and downloads move on without input: redraw ten times a second, and every
-        // frame while a controller moves the pointer.
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        // A frame after input at once; without input, every frame while a controller moves the
+        // pointer, ten a second while an install, a sign-in or the game's files move on, and
+        // one a second otherwise (sizes measured, a head downloaded), so an idle launcher
+        // leaves the phone's CPU alone.
         let pad_moving = self
             .pad_used
             .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
-        let next = if pad_moving { 16 } else { 100 };
-        event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(next)));
+        let working = self.screen.moving()
+            || self.play_requested_at.is_some()
+            || matches!(self.game_files, GameFiles::Writing(_));
+        let next = if pad_moving {
+            16
+        } else if working {
+            100
+        } else {
+            1000
+        };
+        if self.dirty || now >= self.next_frame {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            self.dirty = false;
+            self.next_frame = now + Duration::from_millis(next);
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 }

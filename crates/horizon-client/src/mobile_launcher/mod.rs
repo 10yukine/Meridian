@@ -314,22 +314,42 @@ impl MobileLauncher {
     }
 
     /// Once a frame: takes the skin file the platform's picker handed over.
-    pub fn poll(&mut self) {
+    /// Whether anything changed.
+    pub fn poll(&mut self) -> bool {
+        let mut changed = true;
         match self.backend.take_picked_skin() {
             Some(Ok(pick)) => {
                 self.skin_pick = Some(pick);
                 self.skin_error = None;
             }
             Some(Err(why)) => self.skin_error = Some(why),
-            None => {}
+            None => changed = false,
         }
         if self.skin_uploading && self.backend.skin_upload() != SkinUpload::Uploading {
             self.skin_uploading = false;
+            changed = true;
             // Put on: the account's own head shows it now.
             if self.backend.skin_upload() == SkinUpload::Done {
                 self.skin_pick = None;
             }
         }
+        changed
+    }
+
+    /// Whether the screen changes without input: an install, a sign-in or a skin upload under
+    /// way. The host draws ten frames a second then, and one otherwise.
+    pub fn moving(&self) -> bool {
+        matches!(self.backend.setup(), Setup::Running(_))
+            || matches!(
+                self.backend.sign_in(),
+                SignIn::Starting | SignIn::Code { .. }
+            )
+            || self.skin_uploading
+            || self
+                .backend
+                .profiles()
+                .iter()
+                .any(|p| matches!(p.state, ProfileState::Installing(_)))
     }
 
     /// Play stopped on the game's arguments: Settings shows why, under them.

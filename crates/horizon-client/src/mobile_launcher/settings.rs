@@ -2,8 +2,7 @@
 
 use super::widgets::{
     Canvas, HitRect, Tone, account_provider_tag, account_short, draw_button, draw_input_box,
-    draw_plate, draw_player_head, draw_skin_3d, format_size, palette, truncate_to_fit,
-    wrap_lines,
+    draw_plate, draw_player_head, draw_skin_3d, format_size, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{Account, Setup, SkinUpload};

@@ -32,8 +32,8 @@ impl MobileLauncher {
         } else {
             42.0
         };
-        let card_h = (pad_top + title_block + btn_h + gap + btn_h + gap + more_h + pad_top)
-            .min(avail_h);
+        let card_h =
+            (pad_top + title_block + btn_h + gap + btn_h + gap + more_h + pad_top).min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, palette::border());
 
