@@ -745,11 +745,7 @@ impl MobileLauncher {
                 self.confirm_remove_profile = None;
                 self.profile_rename = None;
                 self.mod_search_focused = false;
-                self.route = if self.route == Route::Settings {
-                    Route::Home
-                } else {
-                    Route::Settings
-                };
+                self.route = Route::Settings;
             }
             ButtonId::OpenAccountSwitcher => {
                 self.profile_popup_open = false;
@@ -996,7 +992,7 @@ impl MobileLauncher {
                 self.mod_search_focused = true;
             }
             ButtonId::SubmitModSearch => {
-                self.mod_search_focused = true;
+                self.mod_search_focused = false;
                 self.mod_registry_page = 0;
                 self.backend.search_mods(self.mod_search_query.trim());
             }

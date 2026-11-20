@@ -721,23 +721,21 @@ pub(super) fn draw_input_box(
         } else {
             value.to_owned()
         };
-        let display = if focused { format!("{shown}|") } else { shown };
-        let fit = truncate_to_fit(
-            p,
-            Face::Mono,
-            ui_theme::sizes().ui,
-            &display,
-            (x + w - 12.0 - tx).max(20.0),
-        );
-        p.text_line(
-            Face::Mono,
-            ui_theme::sizes().ui,
-            h,
-            tx,
-            y,
-            palette::text(),
-            &fit,
-        );
+        let room = (x + w - 12.0 - tx).max(20.0);
+        let size = ui_theme::sizes().ui;
+        let fit = if focused {
+            // Typing: the end, where the caret is, stays in sight.
+            let mut tail: Vec<char> = format!("{shown}|").chars().collect();
+            while tail.len() > 1
+                && p.measure(Face::Regular, size, &tail.iter().collect::<String>()) > room
+            {
+                tail.remove(0);
+            }
+            tail.into_iter().collect()
+        } else {
+            truncate_to_fit(p, Face::Regular, size, &shown, room)
+        };
+        p.text_line(Face::Regular, size, h, tx, y, palette::text(), &fit);
     }
     hits.push(hit);
 }
@@ -985,7 +983,8 @@ pub(super) fn draw_tab_with_tools(
         p.border(x, y, w, h, 10.0, palette::accent_star());
         let room = (name_w - 16.0).max(16.0);
         let size = p.fit(Face::Medium, ui_theme::sizes().ui, label, room);
-        let tw = p.measure(Face::Medium, size, label);
+        let label = truncate_to_fit(p, Face::Medium, size, label, room);
+        let tw = p.measure(Face::Medium, size, &label);
         p.text_line(
             Face::Medium,
             size,
@@ -993,7 +992,7 @@ pub(super) fn draw_tab_with_tools(
             x + ((name_w - tw) * 0.5).round(),
             y,
             palette::text(),
-            label,
+            &label,
         );
         // A hairline between the name and its tools.
         p.rounded(
@@ -1100,9 +1099,10 @@ pub(super) fn draw_button(
         }
         let room = (w - 16.0).max(16.0);
         let font_size = p.fit(Face::Medium, ui_theme::sizes().ui, label, room);
-        let tw = p.measure(Face::Medium, font_size, label);
+        let label = truncate_to_fit(p, Face::Medium, font_size, label, room);
+        let tw = p.measure(Face::Medium, font_size, &label);
         let lx = x + ((w - tw) * 0.5).round();
-        p.text_line(Face::Medium, font_size, h, lx, y, ink, label);
+        p.text_line(Face::Medium, font_size, h, lx, y, ink, &label);
     }
     hits.push(hit);
 }

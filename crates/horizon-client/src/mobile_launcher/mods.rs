@@ -128,12 +128,32 @@ impl MobileLauncher {
                     cy,
                     field_w,
                     top_btn_h,
-                    // The old name until a new one is typed: it stays if none is.
-                    if typed.is_empty() { &prof.name } else { "" },
+                    "",
                     typed,
                     false,
                     true,
                 );
+                // The old name, after the caret, until a new one is typed: it stays if none is.
+                if typed.is_empty()
+                    && let Some(p) = ui.paint()
+                {
+                    let hint = truncate_to_fit(
+                        p,
+                        Face::Regular,
+                        ui_theme::sizes().ui,
+                        &prof.name,
+                        field_w - 36.0,
+                    );
+                    p.text_line(
+                        Face::Regular,
+                        ui_theme::sizes().ui,
+                        top_btn_h,
+                        chip_x + 24.0,
+                        cy,
+                        palette::muted(),
+                        &hint,
+                    );
+                }
                 draw_button(
                     ui,
                     hits,
@@ -405,7 +425,7 @@ impl MobileLauncher {
                     palette::text(),
                     title,
                 );
-                let sub = "Add mods from Horizon's registry ->";
+                let sub = "Add them from Horizon's registry.";
                 let sw = p.measure(Face::Regular, ui_theme::small(), sub);
                 p.text_line(
                     Face::Regular,
