@@ -66,7 +66,10 @@ impl MobileLauncher {
         let tab_ws: Vec<f32> = profiles
             .iter()
             .map(|prof| {
-                (ui.ro().measure(Face::Medium, ui_theme::small(), &prof.name) + 26.0)
+                // At the size the tab draws its name (a long one ends in an ellipsis).
+                (ui.ro()
+                    .measure(Face::Medium, ui_theme::sizes().ui, &prof.name)
+                    + 26.0)
                     .clamp(72.0, 180.0)
             })
             .collect();
@@ -114,8 +117,14 @@ impl MobileLauncher {
                 .profile_rename
                 .as_ref()
                 .filter(|(id, _)| *id == prof.id);
-            let label = prof.name.as_str();
             let cw = tab_ws[i];
+            let label = &truncate_to_fit(
+                ui.ro(),
+                Face::Medium,
+                ui_theme::sizes().ui,
+                &prof.name,
+                cw - 16.0,
+            );
             // The modded profile shown carries its own tools in its cell: rename and delete.
             let tools = prof.id == pid && prof.id != VANILLA;
             // Its name typed in place, and Done: with the keyboard up, this row is what shows.
