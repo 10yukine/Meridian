@@ -31,6 +31,17 @@ fn native_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "Missing native library directory.".into())
 }
 
+/// Whether the runtime is unpacked and is the pinned archive's: `install` then downloads nothing.
+pub(super) fn installed(root: &Path) -> bool {
+    let runtime = root.join(".local/java25");
+    runtime.join("lib/modules").is_file()
+        && runtime.join("lib/libjli.so").is_file()
+        && fs::read_to_string(runtime.join(".archive-sha256"))
+            .as_deref()
+            .ok()
+            == Some(DIGEST)
+}
+
 pub(super) fn install(
     root: &Path,
     agent: &ureq::Agent,
@@ -45,13 +56,7 @@ pub(super) fn install(
     let runtime = root.join(".local/java25");
     let temp = root.join(".local/launcher-tmp");
     fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
-    if !runtime.join("lib/modules").is_file()
-        || !runtime.join("lib/libjli.so").is_file()
-        || fs::read_to_string(runtime.join(".archive-sha256"))
-            .as_deref()
-            .ok()
-            != Some(DIGEST)
-    {
+    if !installed(root) {
         let bytes = fetch(agent, URL, LENGTH as u64, cancel, progress)?;
         if bytes.len() != LENGTH || format!("{:x}", Sha256::digest(&bytes)) != DIGEST {
             return Err("The Android Java runtime checksum did not match.".into());

@@ -534,6 +534,11 @@ fn measure_install_cache(root: &Path, into: &Arc<AtomicU64>) {
 }
 
 fn stage(state: &Mutex<Setup>, stage: Stage, note: Option<String>) {
+    // The device log (logcat stamps it): where setup's time goes.
+    eprintln!(
+        "Meridian: setup {stage:?}: {}",
+        note.as_deref().unwrap_or("")
+    );
     *state.lock().unwrap() = Setup::Running(Progress {
         stage,
         done: 0,
@@ -623,24 +628,6 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
             }
         }
     };
-    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
-    let jdk = {
-        stage(
-            state,
-            Stage::Download,
-            Some("Downloading Android Java 25".into()),
-        );
-        sized(state, android::LENGTH as u64);
-        let jdk = android::install(root, &agent, cancel, meter())?;
-        stage(
-            state,
-            Stage::Download,
-            Some("Downloading Minecraft files".into()),
-        );
-        Some(jdk)
-    };
-    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
-    let jdk = None;
     let game = root.join(".local/launcher-downloads");
     let os = if cfg!(windows) {
         "windows"
@@ -651,21 +638,45 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
     };
     let report = meter();
     let download = |url: &str| fetch(&agent, url, MAX_DOWNLOAD, cancel, report);
-    let assets = mojang::download_game(
-        &pins,
-        &game,
-        os,
-        server_sha1,
-        DOWNLOAD_JOBS,
-        &download,
-        cancel,
-        &|note| {
-            if let Setup::Running(progress) = &mut *state.lock().unwrap() {
-                progress.note = Some(note);
-            }
-        },
-        &|total| sized(state, total),
-    )?;
+    // Android's Java downloads beside the game files: alone, its one file used half the link
+    // (A14: 2.3 MB/s, against 3.4 MB/s for the game files). The bar counts both.
+    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+    let java_bytes = if android::installed(root) {
+        0
+    } else {
+        android::LENGTH as u64
+    };
+    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+    let java_bytes = 0;
+    let (jdk, assets) = std::thread::scope(|scope| {
+        #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+        let java = scope.spawn(|| android::install(root, &agent, cancel, report));
+        #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+        let _ = scope;
+        let assets = mojang::download_game(
+            &pins,
+            &game,
+            os,
+            server_sha1,
+            DOWNLOAD_JOBS,
+            &download,
+            cancel,
+            &|note| {
+                if let Setup::Running(progress) = &mut *state.lock().unwrap() {
+                    progress.note = Some(note);
+                }
+            },
+            &|total| sized(state, java_bytes + total),
+        );
+        #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+        let jdk = Some(
+            java.join()
+                .map_err(|_| "The Java download stopped unexpectedly".to_owned())??,
+        );
+        #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+        let jdk = None;
+        Ok::<_, String>((jdk, assets?))
+    })?;
     cancelled(cancel)?;
     stage(
         state,
@@ -701,6 +712,7 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
         output: None,
     };
     let log = |line: &str| {
+        eprintln!("Meridian: prepare: {line}");
         if let Setup::Running(progress) = &mut *state.lock().unwrap() {
             progress.note = Some(line.into());
         }
