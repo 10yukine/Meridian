@@ -1,8 +1,8 @@
 //! Mod Manager: profile name tabs, per-mod ON/OFF + Remove controls, and Horizon registry browser.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_plate,
-    draw_tab_with_tools, format_size, palette, truncate_to_fit, wrap_lines,
+    Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_tab_with_tools,
+    format_size, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{ModSearch, Profile, VANILLA};
@@ -24,16 +24,15 @@ impl MobileLauncher {
     ) {
         let ultra_v = avail_h < 150.0;
         let compact_v = avail_h < 300.0;
-        draw_plate(ui, x, y, w, avail_h, palette::border());
 
-        let ix = x + 16.0;
-        let iw = w - 32.0;
+        let ix = x;
+        let iw = w;
         let mut cy = y + if ultra_v {
-            6.0
+            0.0
         } else if compact_v {
-            8.0
+            2.0
         } else {
-            14.0
+            4.0
         };
         let top_btn_h = if ultra_v {
             26.0
@@ -318,10 +317,14 @@ impl MobileLauncher {
             cy += 20.0;
         }
 
-        let pane_gap = 12.0;
+        let pane_gap = 16.0;
         let pane_w = ((iw - pane_gap) * 0.5).round();
-        let pane_h = (y + avail_h - 12.0 - cy).max(0.0);
+        let pane_h = (y + avail_h - cy).max(0.0);
         let right_x = ix + pane_w + pane_gap;
+        if let Some(p) = ui.paint() {
+            let rule_x = (ix + pane_w + pane_gap * 0.5).round();
+            p.rounded(rule_x, cy, 1.0, pane_h, 0.0, palette::border_subtle());
+        }
 
         self.draw_profile_mods_pane(ui, hits, ix, cy, pane_w, pane_h, &pid, compact_v);
         self.draw_registry_pane(
@@ -350,13 +353,9 @@ impl MobileLauncher {
         pid: &str,
         compact_v: bool,
     ) {
-        if let Some(p) = ui.paint() {
-            p.rounded(x, y, w, h, 10.0, palette::surface());
-            p.border(x, y, w, h, 10.0, palette::border());
-        }
-        let px = x + 10.0;
-        let pw = w - 20.0;
-        let mut py = y + 8.0;
+        let px = x;
+        let pw = w;
+        let mut py = y;
         let mods = self.backend.mods(pid);
         if let Some(p) = ui.paint() {
             p.text_line(
@@ -421,8 +420,8 @@ impl MobileLauncher {
             return;
         }
 
-        let row_h: f32 = if compact_v { 48.0 } else { 60.0 };
-        let row_gap: f32 = 6.0;
+        let row_h: f32 = if compact_v { 44.0 } else { 48.0 };
+        let row_gap: f32 = 0.0;
         let bottom_limit = y + h - 8.0;
         let total_space = (bottom_limit - py).max(0.0);
         if total_space < row_h {
@@ -448,8 +447,7 @@ impl MobileLauncher {
                 break;
             }
             if let Some(p) = ui.paint() {
-                p.rounded(px, py, pw, row_h, 8.0, palette::card());
-                p.border(px, py, pw, row_h, 8.0, palette::border());
+                p.rounded(px, py + row_h - 1.0, pw, 1.0, 0.0, palette::border_subtle());
                 let max_nw = (pw - rem_w - tog_w - 26.0).max(46.0);
                 let fit_n = truncate_to_fit(p, Face::Medium, 14.0, &pm.info.name, max_nw);
                 p.text_line(
@@ -549,12 +547,8 @@ impl MobileLauncher {
         col_success: u32,
         col_danger: u32,
     ) {
-        if let Some(p) = ui.paint() {
-            p.rounded(x, y, w, h, 10.0, palette::surface());
-            p.border(x, y, w, h, 10.0, palette::border());
-        }
-        let px = x + 10.0;
-        let pw = w - 20.0;
+        let px = x;
+        let pw = w;
         let ultra_pane = h < 84.0;
         let mut py = y + if ultra_pane { 6.0 } else { 8.0 };
 
@@ -661,8 +655,8 @@ impl MobileLauncher {
                     }
                     return;
                 }
-                let row_h: f32 = if compact_v { 42.0 } else { 56.0 };
-                let row_gap: f32 = 6.0;
+                let row_h: f32 = if compact_v { 40.0 } else { 48.0 };
+                let row_gap: f32 = 0.0;
                 let bottom_limit = y + h - 8.0;
                 let total_space = (bottom_limit - py).max(0.0);
                 if total_space < row_h {
@@ -687,8 +681,7 @@ impl MobileLauncher {
                     }
                     let already = installed_ids.contains(&m.id);
                     if let Some(p) = ui.paint() {
-                        p.rounded(px, py, pw, row_h, 8.0, palette::card());
-                        p.border(px, py, pw, row_h, 8.0, palette::border());
+                        p.rounded(px, py + row_h - 1.0, pw, 1.0, 0.0, palette::border_subtle());
                         let max_nw = (pw - 82.0).max(46.0);
                         let fit_n = truncate_to_fit(p, Face::Medium, 14.0, &m.name, max_nw);
                         p.text_line(

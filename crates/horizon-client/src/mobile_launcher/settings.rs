@@ -1,12 +1,12 @@
 //! Skins preview and Launcher Settings views.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, account_label, account_provider_tag, account_short, count_label,
-    draw_button, draw_input_box, draw_plate, draw_player_head, draw_skin_3d, format_size, palette,
-    truncate_to_fit, wrap_lines,
+    Canvas, HitRect, Tone, account_provider_tag, account_short, draw_button, draw_input_box,
+    draw_plate, draw_player_head, draw_skin_3d, format_size, palette, truncate_to_fit,
+    wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{Account, Profile, Setup, SkinUpload};
+use crate::launcher_backend::{Account, Setup, SkinUpload};
 use crate::ui_theme::{self, Face};
 
 impl MobileLauncher {
@@ -26,35 +26,13 @@ impl MobileLauncher {
         col_danger: u32,
     ) {
         let compact_v = avail_h < 300.0;
-        draw_plate(ui, x, y, w, avail_h, palette::border());
 
-        let ix = x + 22.0;
-        let mut cy = y + if compact_v { 12.0 } else { 22.0 };
-
-        if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::SemiBold,
-                if compact_v { 19.0 } else { 22.0 },
-                28.0,
-                ix,
-                cy,
-                palette::text(),
-                "Skin",
-            );
-            p.rounded(
-                x + 1.0,
-                cy + if compact_v { 30.0 } else { 38.0 },
-                w - 2.0,
-                1.0,
-                0.0,
-                palette::border_subtle(),
-            );
-        }
-        cy += if compact_v { 38.0 } else { 52.0 };
+        let ix = x;
+        let cy = y + if compact_v { 4.0 } else { 8.0 };
 
         // The whole figure, head to feet: the chosen file until it is put on, else the account's
         // own (its face alone until that has loaded).
-        let tile_h = (y + avail_h - cy - if compact_v { 10.0 } else { 18.0 }).max(80.0);
+        let tile_h = (y + avail_h - cy - 8.0).max(80.0);
         // Room for the figure turned and tilted: about 34 pixels tall, 18 wide.
         let texel = ((tile_h - 20.0) / 34.0).floor().max(2.0);
         let tile_w = 16.0 * texel + 32.0;
@@ -70,8 +48,6 @@ impl MobileLauncher {
         let tx = ix + tile_w + 24.0;
 
         if let Some(p) = ui.paint() {
-            p.rounded(ix, cy, tile_w, tile_h, 14.0, palette::surface());
-            p.border(ix, cy, tile_w, tile_h, 14.0, palette::border());
             if let Some((skin, slim)) = &skin {
                 draw_skin_3d(
                     p,
@@ -224,9 +200,7 @@ impl MobileLauncher {
         w: f32,
         avail_h: f32,
         onboarding: bool,
-        account: &Option<Account>,
         setup: &Setup,
-        profiles: &[Profile],
         col_success: u32,
         col_danger: u32,
     ) {
@@ -241,14 +215,22 @@ impl MobileLauncher {
         } else {
             y
         };
-        draw_plate(ui, x, cy_top, w, card_h, palette::border());
-
-        let inner_x = x + 22.0;
-        let inner_w = w - 44.0;
-        let mut cy = cy_top + if compact_v { 10.0 } else { 20.0 };
-        let hdr_h = if compact_v { 32.0 } else { 38.0 };
-
+        // Before sign-in there is no rail, so Settings stays one card. After it, the page is the backdrop.
         if onboarding {
+            draw_plate(ui, x, cy_top, w, card_h, palette::border());
+        }
+
+        let inset = if onboarding { 22.0 } else { 0.0 };
+        let inner_x = x + inset;
+        let inner_w = w - inset * 2.0;
+        let mut cy = cy_top
+            + if onboarding {
+                if compact_v { 10.0 } else { 20.0 }
+            } else {
+                0.0
+            };
+        if onboarding {
+            let hdr_h = if compact_v { 32.0 } else { 38.0 };
             draw_button(
                 ui,
                 hits,
@@ -258,42 +240,21 @@ impl MobileLauncher {
                 96.0,
                 hdr_h,
                 Tone::Secondary,
-                "<- Back",
+                "Back",
             );
-        } else {
-            draw_button(
-                ui,
-                hits,
-                ButtonId::Quit,
-                inner_x + inner_w - 136.0,
-                cy,
-                136.0,
-                hdr_h,
-                Tone::Secondary,
-                "Quit Launcher",
-            );
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::SemiBold,
+                    if compact_v { 19.0 } else { 22.0 },
+                    hdr_h,
+                    inner_x + 112.0,
+                    cy,
+                    palette::text(),
+                    "Launcher Settings",
+                );
+            }
+            cy += hdr_h + if compact_v { 10.0 } else { 18.0 };
         }
-        if let Some(p) = ui.paint() {
-            let title_x = if onboarding { inner_x + 112.0 } else { inner_x };
-            p.text_line(
-                Face::SemiBold,
-                if compact_v { 19.0 } else { 22.0 },
-                hdr_h,
-                title_x,
-                cy,
-                palette::text(),
-                "Launcher Settings",
-            );
-            p.rounded(
-                x + 1.0,
-                cy + hdr_h + if compact_v { 4.0 } else { 8.0 },
-                w - 2.0,
-                1.0,
-                0.0,
-                palette::border_subtle(),
-            );
-        }
-        cy += hdr_h + if compact_v { 10.0 } else { 18.0 };
 
         let row_h: f32 = if compact_v { 32.0 } else { 46.0 };
         let row_step: f32 = if compact_v { 36.0 } else { 54.0 };
@@ -305,15 +266,15 @@ impl MobileLauncher {
         // Typing the game's arguments with the keyboard up: that field is all that shows.
         let typing_args = self.game_args_focused && avail_h < 220.0;
 
-        // A cell's plate and name; its control or value goes on its right.
+        // A row's name and the hairline under it. Its control or value goes on its right.
         let plate = |ui: &mut Canvas<'_, '_>, cx: f32, cy: f32, cw: f32, name: &str| {
             if let Some(p) = ui.paint() {
-                p.rounded(cx, cy, cw, row_h, 8.0, palette::surface());
+                p.rounded(cx, cy + row_h - 1.0, cw, 1.0, 0.0, palette::border_subtle());
                 p.text_line(
                     Face::Medium,
                     ui_theme::sizes().ui,
                     row_h,
-                    cx + 14.0,
+                    cx,
                     cy,
                     palette::text(),
                     name,
@@ -328,7 +289,7 @@ impl MobileLauncher {
                     Face::Regular,
                     ui_theme::small(),
                     row_h,
-                    cx + cw - 14.0 - tw,
+                    cx + cw - tw,
                     cy,
                     ink,
                     &fit,
@@ -344,18 +305,11 @@ impl MobileLauncher {
         enum Cell {
             Font,
             FreeSpace,
-            Account,
-            Profiles,
         }
-        let cells: Vec<Cell> = [
-            Some(Cell::Font),
-            free_shown.then_some(Cell::FreeSpace),
-            Some(Cell::Account),
-            Some(Cell::Profiles),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let cells: Vec<Cell> = [Some(Cell::Font), free_shown.then_some(Cell::FreeSpace)]
+            .into_iter()
+            .flatten()
+            .collect();
         let error_h = if self.game_args_error.is_some() {
             14.0
         } else {
@@ -368,7 +322,7 @@ impl MobileLauncher {
         } else {
             cells.len().div_ceil(2)
         } + usize::from(!onboarding)
-            + 2 * usize::from(!onboarding && !typing_args);
+            + 3 * usize::from(!onboarding && !typing_args);
         let mut rows = Rows {
             skip: if typing_args {
                 0
@@ -434,23 +388,6 @@ impl MobileLauncher {
                                 (None, None) => {}
                             }
                         }
-                        Cell::Account => {
-                            plate(ui, cx, ccy, half_w, "Account");
-                            let text = account
-                                .as_ref()
-                                .map_or_else(|| "Not signed in".to_owned(), account_label);
-                            value(ui, cx, ccy, half_w, &text, palette::body());
-                        }
-                        Cell::Profiles => {
-                            plate(ui, cx, ccy, half_w, "Profiles");
-                            let bytes: u64 = profiles.iter().map(|p| p.size).sum();
-                            let text = format!(
-                                "{}, {}",
-                                count_label(profiles.len(), "profile", "profiles"),
-                                format_size(bytes)
-                            );
-                            value(ui, cx, ccy, half_w, &text, palette::body());
-                        }
                     }
                 }
             }
@@ -460,7 +397,7 @@ impl MobileLauncher {
         if !onboarding && let Some(cy) = rows.next(row_step + error_h, row_h + error_h) {
             let name = "Game Arguments";
             plate(ui, inner_x, cy, inner_w, name);
-            let name_w = ui.ro().measure(Face::Medium, ui_theme::sizes().ui, name) + 30.0;
+            let name_w = ui.ro().measure(Face::Medium, ui_theme::sizes().ui, name) + 16.0;
             let saved = self.backend.game_args();
             let text = if self.game_args_focused {
                 self.game_args_draft.as_str()
@@ -527,7 +464,7 @@ impl MobileLauncher {
                     "Source Code",
                 );
                 if let Some(p) = ui.paint() {
-                    let name_w = p.measure(Face::Medium, ui_theme::sizes().ui, "About") + 30.0;
+                    let name_w = p.measure(Face::Medium, ui_theme::sizes().ui, "About") + 16.0;
                     let about = concat!(
                         "Meridian ",
                         env!("CARGO_PKG_VERSION"),
@@ -554,10 +491,23 @@ impl MobileLauncher {
                     Face::Regular,
                     ui_theme::small(),
                     18.0,
-                    inner_x + 14.0,
+                    inner_x,
                     cy - 2.0,
                     palette::muted(),
                     &fit,
+                );
+            }
+            if let Some(cy) = rows.next(row_step, row_h) {
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::Quit,
+                    inner_x + inner_w - 136.0,
+                    cy,
+                    136.0,
+                    row_h,
+                    Tone::Secondary,
+                    "Quit Launcher",
                 );
             }
         }

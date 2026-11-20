@@ -365,7 +365,7 @@ fn settings_navigation_preserves_running_setup_progress() {
     assert_eq!(launcher.route, Route::Settings);
     assert!(matches!(launcher.backend.setup(), Setup::Running(_)));
 
-    click_button(&mut launcher, size, ButtonId::TopProgressBanner);
+    click_button(&mut launcher, size, ButtonId::ViewInstallScreen);
     assert_eq!(launcher.route, Route::Install);
     assert!(matches!(launcher.backend.setup(), Setup::Running(_)));
 }
@@ -1333,27 +1333,25 @@ fn shown(l: &MobileLauncher, size: [u32; 2]) -> Vec<ButtonId> {
 }
 
 #[test]
-fn a_drag_scrolls_settings_rows_that_dont_fit_and_the_game_log_back() {
+fn settings_fits_on_a_short_page_and_a_drag_scrolls_the_game_log_back() {
     let mut l = MobileLauncher::new(Box::new(StubBackend {
         accounts: vec![Account::Offline {
             name: "Steve".into(),
         }],
         active: Some(0),
         setup: Setup::Ready,
-        log: (0..60).map(|i| format!("[{i}] [main/INFO]: line {i}")).collect(),
+        log: (0..60)
+            .map(|i| format!("[{i}] [main/INFO]: line {i}"))
+            .collect(),
         ..StubBackend::default()
     }));
-    // Too short for About: a drag up brings it in, a drag down the first row back.
+    // Settings fits here once the page box, the title and the account/profile rows are gone.
     let size = [914, 300];
     click_button(&mut l, size, ButtonId::OpenSettings);
-    assert!(!shown(&l, size).contains(&ButtonId::OpenLicenses));
-    l.scroll(0.0, -1000.0);
-    let scrolled = shown(&l, size);
-    assert!(scrolled.contains(&ButtonId::OpenLicenses), "{scrolled:?}");
-    assert!(!scrolled.contains(&ButtonId::ToggleLauncherFont));
-    assert_hits_fit_without_overlap(&l, size, "settings-scrolled");
-    l.scroll(0.0, 1000.0);
-    assert!(shown(&l, size).contains(&ButtonId::ToggleLauncherFont));
+    let fitted = shown(&l, size);
+    assert!(fitted.contains(&ButtonId::OpenLicenses), "{fitted:?}");
+    assert!(fitted.contains(&ButtonId::ToggleLauncherFont));
+    assert_hits_fit_without_overlap(&l, size, "settings-fits");
 
     // Home starts at the log's end; a drag down goes back, as far as its first line.
     let size = [914, 411];

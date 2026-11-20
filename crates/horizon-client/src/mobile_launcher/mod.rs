@@ -30,7 +30,7 @@ use widgets::{
     Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, draw_backdrop,
     draw_button, draw_icon_chevron, draw_north_star_badge, draw_play_button, draw_player_head,
     draw_rail_item, effective_profile_state, palette, profile_stats_line, stage_fraction,
-    stage_name, stage_pill_text, truncate_to_fit,
+    stage_name, truncate_to_fit,
 };
 
 /// About's links: the source, and the licenses of what Meridian is built from.
@@ -85,7 +85,6 @@ enum SignInProvider {
 enum ButtonId {
     // Persistent shell (top, sidebar, bottom)
     GoHome,
-    TopProgressBanner,
     OpenMods,
     OpenSkins,
     OpenSettings,
@@ -383,7 +382,11 @@ impl MobileLauncher {
             self.profile_scroll = (self.profile_scroll as f32 - rows).clamp(0.0, max) as usize;
         } else {
             // The game log counts back from its end: a drag down shows earlier lines there too.
-            let rows = if self.route == Route::Home { rows } else { -rows };
+            let rows = if self.route == Route::Home {
+                rows
+            } else {
+                -rows
+            };
             let at = (self.page_offset() as f32 + rows).clamp(0.0, max);
             self.page_scroll = (self.route, at as usize);
         }
@@ -683,7 +686,7 @@ impl MobileLauncher {
                     ui_theme::set_pixel_font(next);
                 }
             }
-            ButtonId::TopProgressBanner | ButtonId::ViewInstallScreen => {
+            ButtonId::ViewInstallScreen => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
                 self.profile_rename = None;
@@ -1148,9 +1151,7 @@ impl MobileLauncher {
                     card_w,
                     content_h,
                     true,
-                    &account,
                     &setup,
-                    &profiles,
                     col_success,
                     col_danger,
                 );
@@ -1205,7 +1206,8 @@ impl MobileLauncher {
             return hits;
         }
 
-        // ---- Signed-in Shell: Left Sidebar (above top bar, under bottom bar) + Top Bar + Full-Width Bottom Dock ----
+        // Signed-in shell: rail (logo on top), page beside it, dock across the bottom.
+        // The wordmark bar is gone. About already shows the version, and the rail logo names the app.
         // While the keyboard is up for a field, the form gets the room above it: no dock rising
         // behind it with the account switcher. The rail stays, so the page keeps its place.
         // ponytail: "keyboard up" is the keyboard-lifted height (kb_h); a tablet's keyboard leaves
@@ -1248,16 +1250,6 @@ impl MobileLauncher {
             } else {
                 &mut hits
             };
-            self.draw_workspace_header(
-                ui,
-                chrome_hits,
-                rail_w,
-                ui_w,
-                pad,
-                top_h,
-                &setup,
-                &profiles,
-            );
             self.draw_rail(ui, chrome_hits, rail_w, rail_h, top_h, short_h);
         }
         let (prof_x, prof_w) = if typing {
@@ -1287,9 +1279,9 @@ impl MobileLauncher {
             12.0
         };
         let main_x = rail_w + pad;
-        let main_y = top_h + v_margin;
+        let main_y = v_margin;
         let main_w = (ui_w - rail_w - pad * 2.0).max(280.0);
-        let main_h = (rail_h - top_h - v_margin * 2.0).max(0.0);
+        let main_h = (rail_h - v_margin * 2.0).max(0.0);
         let modal_w = main_w.min(if wide_w { 720.0 } else { 600.0 });
         let modal_x = main_x + ((main_w - modal_w) * 0.5).round();
 
@@ -1370,9 +1362,7 @@ impl MobileLauncher {
                 main_w,
                 main_h,
                 false,
-                &account,
                 &setup,
-                &profiles,
                 col_success,
                 col_danger,
             ),
@@ -1410,7 +1400,10 @@ impl MobileLauncher {
                 self.draw_free_space_confirm(ui, &mut hits, pop_x, 0.0, pop_w, ui_h);
             } else if let Some((ref id, ref name)) = self.confirm_remove_profile {
                 // As counted now, not when the bin was tapped.
-                let worlds = profiles.iter().find(|p| &p.id == id).map_or(0, |p| p.worlds);
+                let worlds = profiles
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .map_or(0, |p| p.worlds);
                 self.draw_remove_confirm(
                     ui, &mut hits, pop_x, 0.0, pop_w, ui_h, name, worlds, col_danger,
                 );
@@ -1422,7 +1415,7 @@ impl MobileLauncher {
                 ui,
                 &mut hits,
                 ui_w,
-                top_h,
+                v_margin,
                 ui_h - bottom_h,
                 prof_x,
                 prof_w,
@@ -1490,103 +1483,6 @@ impl MobileLauncher {
             },
             "Settings",
         );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_workspace_header(
-        &self,
-        ui: &mut Canvas<'_, '_>,
-        hits: &mut Vec<HitRect>,
-        rail_w: f32,
-        ui_w: f32,
-        pad: f32,
-        top_h: f32,
-        setup: &Setup,
-        profiles: &[Profile],
-    ) {
-        let tight_top = top_h < 40.0;
-        let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
-        let ver_pill_h = (top_h - if tight_top { 10.0 } else { 18.0 }).clamp(22.0, 28.0);
-        let ver_pill_y = ((top_h - ver_pill_h) * 0.5).round();
-        let ver_pill_w = ui.ro().measure(Face::Regular, ui_theme::small(), ver) + 22.0;
-        let ver_pill_x = ui_w - pad - ver_pill_w;
-        let title_sz = if tight_top {
-            15.5
-        } else if top_h < 50.0 {
-            17.5
-        } else {
-            19.5
-        };
-
-        if let Some(p) = ui.paint() {
-            // Top bar spans only to the right of the left rail so the left rail sits above it.
-            p.rounded(rail_w, 0.0, ui_w - rail_w, top_h, 0.0, palette::rail());
-            p.rounded(
-                rail_w,
-                top_h - 1.0,
-                ui_w - rail_w,
-                1.0,
-                0.0,
-                palette::border_subtle(),
-            );
-            p.text_line(
-                Face::SemiBold,
-                title_sz,
-                top_h,
-                rail_w + pad,
-                0.0,
-                palette::text(),
-                "Meridian Launcher",
-            );
-
-            // Top right: the version, plain.
-            p.text_line(
-                Face::Regular,
-                ui_theme::small(),
-                ver_pill_h,
-                ver_pill_x + 22.0,
-                ver_pill_y,
-                palette::muted(),
-                ver,
-            );
-        }
-
-        // Background progress pill to the left of the version badge while an install runs off-screen.
-        let bg_progress = if self.route != Route::Install {
-            match setup {
-                Setup::Running(p) => Some(stage_pill_text(p)),
-                _ => profiles.iter().find_map(|p| match &p.state {
-                    ProfileState::Installing(prog) => {
-                        let pct = (stage_fraction(prog) * 100.0).round() as u32;
-                        Some(format!("{} {pct}%", p.name))
-                    }
-                    _ => None,
-                }),
-            }
-        } else {
-            None
-        };
-        if let Some(summary) = bg_progress {
-            let btn_h = (top_h - if tight_top { 6.0 } else { 14.0 }).clamp(26.0, 36.0);
-            let btn_y = ((top_h - btn_h) * 0.5).round();
-            let wordmark_w = ui
-                .ro()
-                .measure(Face::SemiBold, title_sz, "Meridian Launcher");
-            let max_pill_w = (ver_pill_x - 10.0 - (rail_w + pad + wordmark_w + 16.0)).max(110.0);
-            let pill_w =
-                (ui.ro().measure(Face::Mono, ui_theme::small(), &summary) + 24.0).min(max_pill_w);
-            draw_button(
-                ui,
-                hits,
-                ButtonId::TopProgressBanner,
-                ver_pill_x - 10.0 - pill_w,
-                btn_y,
-                pill_w,
-                btn_h,
-                Tone::Banner,
-                &summary,
-            );
-        }
     }
 
     fn draw_rail(
