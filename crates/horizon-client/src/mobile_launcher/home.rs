@@ -1,13 +1,13 @@
-//! Home (the selected profile), floating Profile Switcher popup,
-//! New Profile form, and Rename/Remove profile modals.
+//! Home (the selected profile and its game log), floating Profile Switcher popup, and the
+//! Remove profile modal.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, count_label, draw_button, draw_check_row, draw_input_box, draw_plate,
-    effective_profile_state, format_size, palette, profile_badge_parts, profile_stats_line,
-    stage_fraction, truncate_to_fit, wrap_lines,
+    Canvas, HitRect, Tone, count_label, draw_button, draw_plate, effective_profile_state,
+    log_levels, palette, profile_badge_parts, profile_stats_line, stage_fraction, truncate_to_fit,
+    wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{ModSearch, Profile, ProfileState, Setup, VANILLA, profile_id};
+use crate::launcher_backend::{Profile, ProfileState, Setup, VANILLA};
 use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
@@ -31,7 +31,6 @@ impl MobileLauncher {
             .iter()
             .find(|p| p.id == selected_id)
             .or_else(|| profiles.first());
-        let sel_is_custom = selected.is_some_and(|p| p.id != VANILLA);
         let sel_name = selected.map_or("Vanilla", |p| p.name.as_str());
         let sel_state = selected.map_or(ProfileState::Available, |p| {
             effective_profile_state(p, setup)
@@ -126,81 +125,41 @@ impl MobileLauncher {
                         palette::accent(),
                     );
                 }
-            } else if !compact_v {
-                let (detail, detail_col) = if let Some(note) = &self.status_note {
-                    (note.as_str(), palette::accent_star())
-                } else {
-                    let desc = selected.map_or("", |prof| prof.description.as_str());
-                    (desc, palette::body())
-                };
-                let fit_desc = truncate_to_fit(p, Face::Regular, ui_theme::sizes().ui, detail, iw);
+            } else if !compact_v && let Some(note) = &self.status_note {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::sizes().ui, note, iw);
                 p.text_line(
                     Face::Regular,
                     ui_theme::sizes().ui,
                     20.0,
                     ix,
                     sub_y + 24.0,
-                    detail_col,
-                    &fit_desc,
+                    palette::accent_star(),
+                    &fit,
                 );
             }
         }
+        let title_h = if compact_v { 22.0 } else { 30.0 };
+        let below_stats = y + pad_y + title_h + if compact_v { 20.0 } else { 26.0 };
+        let log_y = below_stats
+            + if matches!(sel_state, ProfileState::Installing(_)) {
+                if compact_v { 10.0 } else { 18.0 }
+            } else if !compact_v && self.status_note.is_some() {
+                30.0
+            } else {
+                6.0
+            };
 
-        // Bottom action strip inside the selected profile hero card
+        // The install's progress, while it runs.
         let btn_h: f32 = if compact_v { 30.0 } else { 36.0 };
         let btn_y = y + hero_h - btn_h - if compact_v { 8.0 } else { 16.0 };
-        let mut bx_left = ix;
-        let mods_w = if compact_v { 76.0 } else { 88.0 };
-        draw_button(
-            ui,
-            hits,
-            ButtonId::OpenModsForSelected,
-            bx_left,
-            btn_y,
-            mods_w,
-            btn_h,
-            Tone::Secondary,
-            "Mods",
-        );
-        bx_left += mods_w + 8.0;
-
-        if sel_is_custom {
-            let ren_w = if compact_v { 78.0 } else { 88.0 };
-            draw_button(
-                ui,
-                hits,
-                ButtonId::OpenRenameSelected,
-                bx_left,
-                btn_y,
-                ren_w,
-                btn_h,
-                Tone::Secondary,
-                "Rename",
-            );
-            bx_left += ren_w + 8.0;
-
-            let del_w = if compact_v { 72.0 } else { 82.0 };
-            draw_button(
-                ui,
-                hits,
-                ButtonId::AskRemoveSelected,
-                bx_left,
-                btn_y,
-                del_w,
-                btn_h,
-                Tone::Danger,
-                "Delete",
-            );
-            bx_left += del_w + 8.0;
-        }
-
-        if matches!(setup, Setup::Running(_)) {
+        let installing = matches!(setup, Setup::Running(_));
+        if installing {
             let prog_w = if compact_v { 116.0 } else { 132.0 };
             draw_button(
                 ui,
                 hits,
                 ButtonId::ViewInstallScreen,
-                bx_left,
+                ix,
                 btn_y,
                 prog_w,
                 btn_h,
@@ -208,19 +167,140 @@ impl MobileLauncher {
                 "View progress",
             );
         }
-
-        let new_w = if compact_v { 124.0 } else { 142.0 };
-        draw_button(
+        let log_end = if installing {
+            btn_y - 10.0
+        } else {
+            y + hero_h - pad_y
+        };
+        let profile = selected.map_or(VANILLA, |p| p.id.as_str());
+        self.draw_game_log(
             ui,
             hits,
-            ButtonId::OpenNewProfile,
-            ix + iw - new_w,
-            btn_y,
-            new_w,
-            btn_h,
-            Tone::Secondary,
-            "New Profile",
+            ix,
+            log_y,
+            iw,
+            log_end - log_y,
+            profile,
+            col_danger,
         );
+    }
+
+    /// The profile's game log as the game last wrote it: its last lines that fit, from the level
+    /// chosen up, and Copy.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_game_log(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        profile: &str,
+        col_danger: u32,
+    ) {
+        let head_h = 30.0;
+        if h < head_h + 48.0 {
+            return;
+        }
+        let col_warn = color::hex(crate::menu_style::get().settings.warn, 255);
+        let lines = self.backend.game_log(profile);
+        let label_w = ui
+            .ro()
+            .measure(Face::SemiBold, ui_theme::small(), "Game log")
+            + 16.0;
+        if let Some(p) = ui.paint() {
+            p.text_line(
+                Face::SemiBold,
+                ui_theme::small(),
+                head_h,
+                x,
+                y,
+                palette::text(),
+                "Game log",
+            );
+        }
+        let mut cx = x + label_w;
+        for (level, name) in [(0, "All"), (1, "Warnings"), (2, "Errors")] {
+            let cw = ui.ro().measure(Face::Medium, ui_theme::small(), name) + 22.0;
+            draw_button(
+                ui,
+                hits,
+                ButtonId::LogLevel(level),
+                cx,
+                y,
+                cw,
+                head_h,
+                if self.log_level == level {
+                    Tone::Banner
+                } else {
+                    Tone::Ghost
+                },
+                name,
+            );
+            cx += cw + 6.0;
+        }
+        if !lines.is_empty() {
+            draw_button(
+                ui,
+                hits,
+                ButtonId::CopyLog,
+                x + w - 88.0,
+                y,
+                88.0,
+                head_h,
+                Tone::Secondary,
+                if self.log_copied { "Copied" } else { "Copy" },
+            );
+        }
+        let box_y = y + head_h + 8.0;
+        let box_h = h - head_h - 8.0;
+        let Some(p) = ui.paint() else {
+            return;
+        };
+        p.rounded(x, box_y, w, box_h, 10.0, palette::bg_outer());
+        p.border(x, box_y, w, box_h, 10.0, palette::border_subtle());
+        let shown: Vec<(&String, u8)> = lines
+            .iter()
+            .zip(log_levels(&lines))
+            .filter(|(_, level)| *level >= self.log_level)
+            .collect();
+        if shown.is_empty() {
+            let empty = if lines.is_empty() {
+                "The game's log shows here once you play."
+            } else {
+                "Nothing at this level."
+            };
+            p.text_line(
+                Face::Regular,
+                ui_theme::small(),
+                20.0,
+                x + 12.0,
+                box_y + 10.0,
+                palette::muted(),
+                empty,
+            );
+            return;
+        }
+        let (size, line_h) = (11.0, 16.0);
+        let rows = ((box_h - 16.0) / line_h).floor().max(0.0) as usize;
+        for (i, (line, level)) in shown[shown.len().saturating_sub(rows)..].iter().enumerate() {
+            let ink = match level {
+                2 => col_danger,
+                1 => col_warn,
+                _ => palette::body(),
+            };
+            let fit = truncate_to_fit(p, Face::Mono, size, line, w - 24.0);
+            p.text_line(
+                Face::Mono,
+                size,
+                line_h,
+                x + 12.0,
+                box_y + 8.0 + i as f32 * line_h,
+                ink,
+                &fit,
+            );
+        }
     }
 
     /// Upward profile dropdown anchored directly above the bottom Profile Bar, matching its width,
@@ -532,352 +612,6 @@ impl MobileLauncher {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn draw_new_profile(
-        &self,
-        ui: &mut Canvas<'_, '_>,
-        hits: &mut Vec<HitRect>,
-        x: f32,
-        y: f32,
-        w: f32,
-        avail_h: f32,
-        profiles: &[Profile],
-        col_danger: u32,
-    ) {
-        let ultra_v = avail_h < 150.0;
-        let compact_v = avail_h < 350.0;
-        let create_in_header = avail_h < 245.0;
-        draw_plate(ui, x, y, w, avail_h, palette::border());
-
-        let ix = x + 18.0;
-        let iw = w - 36.0;
-        let pad_y: f32 = if ultra_v {
-            6.0
-        } else if compact_v {
-            8.0
-        } else {
-            16.0
-        };
-        let mut cy = y + pad_y;
-        let hdr_h: f32 = if ultra_v {
-            30.0
-        } else if compact_v {
-            32.0
-        } else {
-            38.0
-        };
-
-        draw_button(
-            ui,
-            hits,
-            ButtonId::CancelNewProfile,
-            ix,
-            cy,
-            92.0,
-            hdr_h,
-            Tone::Secondary,
-            "<- Cancel",
-        );
-        if create_in_header {
-            let create_w = 148.0_f32.min(iw * 0.40);
-            draw_button(
-                ui,
-                hits,
-                ButtonId::CreateProfile,
-                ix + iw - create_w,
-                cy,
-                create_w,
-                hdr_h,
-                Tone::Primary,
-                "Create Profile",
-            );
-        }
-        if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::SemiBold,
-                if compact_v { 18.0 } else { 22.0 },
-                hdr_h,
-                ix + 106.0,
-                cy,
-                palette::text(),
-                "New Profile",
-            );
-        }
-        cy += hdr_h + if compact_v { 6.0 } else { 14.0 };
-
-        let two_col = w >= 580.0;
-        let col_gap = 16.0;
-        let left_w = if two_col {
-            ((iw - col_gap) * 0.5).round()
-        } else {
-            iw
-        };
-        let right_x = if two_col { ix + left_w + col_gap } else { ix };
-        let right_w = if two_col { iw - left_w - col_gap } else { iw };
-
-        // Both columns share one grid: a section label, then rows of one height.
-        let row_h: f32 = if ultra_v {
-            30.0
-        } else if compact_v {
-            34.0
-        } else {
-            40.0
-        };
-        let row_gap: f32 = 6.0;
-        let label_h: f32 = 20.0;
-        let section = |ui: &mut Canvas<'_, '_>, x: f32, y: f32, text: &str| {
-            if let Some(p) = ui.paint() {
-                p.text_line(
-                    Face::Medium,
-                    ui_theme::small(),
-                    18.0,
-                    x,
-                    y,
-                    palette::body(),
-                    text,
-                );
-            }
-        };
-
-        let mut ly = cy;
-        section(ui, ix, ly, "Profile name");
-        ly += label_h;
-        draw_input_box(
-            ui,
-            hits,
-            ButtonId::FocusNewProfileName,
-            ix,
-            ly,
-            left_w,
-            row_h,
-            "",
-            &self.new_profile_name,
-            false,
-            self.new_profile_name_focused,
-        );
-        ly += row_h + if compact_v { 4.0 } else { 6.0 };
-
-        let taken: Vec<String> = profiles.iter().map(|p| p.id.clone()).collect();
-        let preview_slug = if self.new_profile_name.trim().is_empty() {
-            "profile".to_owned()
-        } else {
-            profile_id(&self.new_profile_name, &taken)
-        };
-        // On tight keyboard-lifted layouts, swap the folder preview line for the validation error
-        // when one is active so the preset chips and confirm button never lose space.
-        let inline_err_on_slug = create_in_header && self.new_profile_error.is_some();
-        if let Some(p) = ui.paint() {
-            let (meta_text, meta_col) = if let Some(err) = &self.new_profile_error
-                && inline_err_on_slug
-            {
-                (err.clone(), col_danger)
-            } else {
-                (format!("Folder: profiles/{preview_slug}"), palette::muted())
-            };
-            let fit_meta = truncate_to_fit(p, Face::Mono, ui_theme::small(), &meta_text, left_w);
-            p.text_line(
-                Face::Mono,
-                ui_theme::small(),
-                16.0,
-                ix,
-                ly,
-                meta_col,
-                &fit_meta,
-            );
-        }
-        ly += if compact_v { 18.0 } else { 22.0 };
-
-        let bottom_limit = y + avail_h - pad_y;
-        let show_preset_label = !create_in_header || (bottom_limit - ly) >= label_h + row_h;
-        if show_preset_label {
-            section(ui, ix, ly, "Start from a preset (optional)");
-            ly += label_h;
-        }
-
-        let presets = self.backend.presets();
-        let chip_h = row_h;
-        let chip_cols = (presets.len() + 1).max(1);
-        let chip_w = (left_w - (chip_cols as f32 - 1.0) * 6.0) / chip_cols as f32;
-        if ly + chip_h <= bottom_limit {
-            draw_button(
-                ui,
-                hits,
-                ButtonId::SelectPresetNone,
-                ix,
-                ly,
-                chip_w,
-                chip_h,
-                if self.new_profile_preset.is_none() {
-                    Tone::Banner
-                } else {
-                    Tone::Secondary
-                },
-                "Empty",
-            );
-            for (i, preset) in presets.iter().enumerate() {
-                let cx = ix + (i + 1) as f32 * (chip_w + 6.0);
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::SelectPreset(i),
-                    cx,
-                    ly,
-                    chip_w,
-                    chip_h,
-                    if self.new_profile_preset.as_deref() == Some(&preset.id) {
-                        Tone::Banner
-                    } else {
-                        Tone::Secondary
-                    },
-                    &preset.name,
-                );
-            }
-            ly += chip_h + 8.0;
-        }
-
-        if !inline_err_on_slug && let Some(err) = &self.new_profile_error {
-            if let Some(p) = ui.paint() {
-                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, left_w);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    16.0,
-                    ix,
-                    ly,
-                    col_danger,
-                    &fit,
-                );
-            }
-            ly += 18.0;
-        }
-
-        if !create_in_header {
-            let max_create_h = (bottom_limit - ly).max(34.0);
-            let create_h = (if compact_v { 40.0_f32 } else { 48.0 }).min(max_create_h);
-            let create_y = ly.min((bottom_limit - create_h).max(ly));
-            draw_button(
-                ui,
-                hits,
-                ButtonId::CreateProfile,
-                ix,
-                create_y,
-                left_w,
-                create_h,
-                Tone::Primary,
-                "Create Profile",
-            );
-        }
-
-        if !two_col {
-            return;
-        }
-        let mut ry = cy;
-        let picked = match self.new_profile_mods.len() {
-            0 => "Extra mods (optional)".to_owned(),
-            n => format!("Extra mods ({n} selected)"),
-        };
-        section(ui, right_x, ry, &picked);
-        ry += label_h;
-
-        match self.backend.mod_search() {
-            ModSearch::Idle | ModSearch::Searching => {
-                if let Some(p) = ui.paint() {
-                    p.text_line(
-                        Face::Regular,
-                        ui_theme::small(),
-                        22.0,
-                        right_x,
-                        ry,
-                        palette::muted(),
-                        "Loading Horizon registry...",
-                    );
-                }
-            }
-            ModSearch::Failed(err) => {
-                if let Some(p) = ui.paint() {
-                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), &err, right_w);
-                    p.text_line(
-                        Face::Regular,
-                        ui_theme::small(),
-                        22.0,
-                        right_x,
-                        ry,
-                        col_danger,
-                        &fit,
-                    );
-                }
-            }
-            ModSearch::Done(list) => {
-                let total_space = (bottom_limit - ry).max(0.0);
-                if total_space < row_h {
-                    return;
-                }
-                let fit_all = ((total_space + row_gap) / (row_h + row_gap))
-                    .floor()
-                    .max(1.0) as usize;
-                let needs_pager = list.len() > fit_all && total_space >= row_h + 34.0;
-                let pager_h: f32 = if needs_pager { 34.0 } else { 0.0 };
-                let list_space = (total_space - pager_h).max(row_h);
-                let per_page = ((list_space + row_gap) / (row_h + row_gap))
-                    .floor()
-                    .max(1.0) as usize;
-                let total_pages = list.len().max(1).div_ceil(per_page);
-                let page = self.new_profile_mods_page.min(total_pages - 1);
-                let start = page * per_page;
-                let end = (start + per_page).min(list.len());
-                let rows_limit = bottom_limit - pager_h;
-
-                for (i, m) in list.iter().enumerate().skip(start).take(end - start) {
-                    if ry + row_h > rows_limit + 0.5 {
-                        break;
-                    }
-                    draw_check_row(
-                        ui,
-                        hits,
-                        ButtonId::ToggleNewProfileMod(i),
-                        right_x,
-                        ry,
-                        right_w,
-                        row_h,
-                        self.new_profile_mods.contains(&m.id),
-                        &m.name,
-                        &format_size(m.size),
-                    );
-                    ry += row_h + row_gap;
-                }
-                if needs_pager && bottom_limit - 28.0 >= rows_limit {
-                    let py = bottom_limit - 28.0;
-                    if page > 0 {
-                        draw_button(
-                            ui,
-                            hits,
-                            ButtonId::NewProfilePrevMods,
-                            right_x,
-                            py,
-                            74.0,
-                            28.0,
-                            Tone::Secondary,
-                            "Prev",
-                        );
-                    }
-                    if page + 1 < total_pages {
-                        draw_button(
-                            ui,
-                            hits,
-                            ButtonId::NewProfileNextMods,
-                            right_x + right_w - 74.0,
-                            py,
-                            74.0,
-                            28.0,
-                            Tone::Secondary,
-                            "Next",
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_remove_confirm(
         &self,
         ui: &mut Canvas<'_, '_>,
@@ -958,276 +692,6 @@ impl MobileLauncher {
             btn_h,
             Tone::Danger,
             "Delete Profile & Worlds",
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn draw_rename_modal(
-        &self,
-        ui: &mut Canvas<'_, '_>,
-        hits: &mut Vec<HitRect>,
-        x: f32,
-        y: f32,
-        w: f32,
-        avail_h: f32,
-        id: &str,
-        draft: &str,
-        err: Option<&str>,
-        col_danger: u32,
-    ) {
-        let ultra_v = avail_h < 145.0;
-        let inner_x_ultra = x + 16.0;
-        let inner_w_ultra = (w - 32.0).max(200.0);
-        // Ultra-tight keyboard-up layout (e.g. 914x200): title + Cancel on top, input + Save side-by-side.
-        if ultra_v && inner_w_ultra >= 360.0 {
-            let pad_y: f32 = 6.0;
-            let hdr_h: f32 = 30.0;
-            let row_h: f32 = 34.0;
-            let err_h: f32 = if err.is_some() { 18.0 } else { 0.0 };
-            let needed_h = pad_y * 2.0 + hdr_h + 6.0 + row_h + err_h;
-            let card_h = needed_h.min(avail_h);
-            let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
-            draw_plate(ui, x, cy_top, w, card_h, palette::accent_star());
-
-            let mut cy = cy_top + pad_y;
-            let cancel_w = 86.0;
-            draw_button(
-                ui,
-                hits,
-                ButtonId::CancelRenameProfile,
-                inner_x_ultra + inner_w_ultra - cancel_w,
-                cy,
-                cancel_w,
-                hdr_h,
-                Tone::Secondary,
-                "Cancel",
-            );
-            if let Some(p) = ui.paint() {
-                p.text_line(
-                    Face::SemiBold,
-                    17.0,
-                    hdr_h,
-                    inner_x_ultra,
-                    cy,
-                    palette::text(),
-                    "Rename Profile",
-                );
-                let tw = p.measure(Face::SemiBold, 17.0, "Rename Profile");
-                let folder = format!("profiles/{id}");
-                let froom = (inner_w_ultra - cancel_w - tw - 22.0).max(40.0);
-                let fit_f = truncate_to_fit(p, Face::Mono, ui_theme::small(), &folder, froom);
-                p.text_line(
-                    Face::Mono,
-                    ui_theme::small(),
-                    hdr_h,
-                    inner_x_ultra + tw + 12.0,
-                    cy,
-                    palette::muted(),
-                    &fit_f,
-                );
-            }
-            cy += hdr_h + 6.0;
-
-            let save_w = 126.0_f32.min(inner_w_ultra * 0.34);
-            let eff_row_h = row_h.min((cy_top + card_h - cy - err_h - pad_y).max(30.0));
-            draw_input_box(
-                ui,
-                hits,
-                ButtonId::FocusRenameInput,
-                inner_x_ultra,
-                cy,
-                inner_w_ultra - save_w - 8.0,
-                eff_row_h,
-                "Display Name",
-                draft,
-                false,
-                true,
-            );
-            draw_button(
-                ui,
-                hits,
-                ButtonId::SaveRenameProfile,
-                inner_x_ultra + inner_w_ultra - save_w,
-                cy,
-                save_w,
-                eff_row_h,
-                Tone::Primary,
-                "Save Name",
-            );
-            cy += eff_row_h + 2.0;
-            if let Some(e) = err
-                && let Some(p) = ui.paint()
-            {
-                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), e, inner_w_ultra);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    16.0,
-                    inner_x_ultra,
-                    cy,
-                    col_danger,
-                    &fit,
-                );
-            }
-            return;
-        }
-
-        let tight_v = avail_h < 200.0;
-        let compact_v = avail_h < 290.0;
-        let pad_y: f32 = if tight_v {
-            8.0
-        } else if compact_v {
-            12.0
-        } else {
-            20.0
-        };
-        let hdr_step: f32 = if tight_v {
-            28.0
-        } else if compact_v {
-            48.0
-        } else {
-            56.0
-        };
-        let input_h: f32 = if tight_v {
-            36.0
-        } else if compact_v {
-            40.0
-        } else {
-            44.0
-        };
-        let input_gap: f32 = if tight_v { 6.0 } else { 8.0 };
-        let err_step: f32 = if err.is_some() {
-            if tight_v { 18.0 } else { 22.0 }
-        } else {
-            0.0
-        };
-        let btn_h: f32 = if tight_v {
-            36.0
-        } else if compact_v {
-            42.0
-        } else {
-            46.0
-        };
-        let needed_h = pad_y * 2.0 + hdr_step + input_h + input_gap + err_step + btn_h;
-        let card_h = needed_h
-            .max(if compact_v { 180.0 } else { 232.0 })
-            .min(avail_h);
-        let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
-        draw_plate(ui, x, cy_top, w, card_h, palette::accent_star());
-
-        let inner_x = x + if tight_v { 18.0 } else { 24.0 };
-        let inner_w = (w - if tight_v { 36.0 } else { 48.0 }).max(200.0);
-        let mut cy = cy_top + pad_y;
-        if let Some(p) = ui.paint() {
-            let folder = format!("Folder stays profiles/{id}");
-            if tight_v {
-                p.text_line(
-                    Face::SemiBold,
-                    18.0,
-                    24.0,
-                    inner_x,
-                    cy,
-                    palette::text(),
-                    "Rename Profile",
-                );
-                let title_w = p.measure(Face::SemiBold, 18.0, "Rename Profile");
-                let folder_room = (inner_w - title_w - 14.0).max(60.0);
-                let fit_folder =
-                    truncate_to_fit(p, Face::Mono, ui_theme::small(), &folder, folder_room);
-                let fw = p.measure(Face::Mono, ui_theme::small(), &fit_folder);
-                p.text_line(
-                    Face::Mono,
-                    ui_theme::small(),
-                    24.0,
-                    inner_x + inner_w - fw,
-                    cy,
-                    palette::muted(),
-                    &fit_folder,
-                );
-            } else {
-                p.text_line(
-                    Face::SemiBold,
-                    if compact_v {
-                        19.0
-                    } else {
-                        ui_theme::sizes().title
-                    },
-                    26.0,
-                    inner_x,
-                    cy,
-                    palette::text(),
-                    "Rename Profile",
-                );
-                let fit_folder =
-                    truncate_to_fit(p, Face::Mono, ui_theme::small(), &folder, inner_w);
-                p.text_line(
-                    Face::Mono,
-                    ui_theme::small(),
-                    18.0,
-                    inner_x,
-                    cy + 28.0,
-                    palette::muted(),
-                    &fit_folder,
-                );
-            }
-        }
-        cy += hdr_step;
-
-        draw_input_box(
-            ui,
-            hits,
-            ButtonId::FocusRenameInput,
-            inner_x,
-            cy,
-            inner_w,
-            input_h,
-            "Display Name",
-            draft,
-            false,
-            true,
-        );
-        cy += input_h + input_gap;
-
-        if let Some(e) = err {
-            if let Some(p) = ui.paint() {
-                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), e, inner_w);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    18.0,
-                    inner_x,
-                    cy,
-                    col_danger,
-                    &fit,
-                );
-            }
-            cy += err_step;
-        }
-
-        let eff_btn_h = btn_h.min((cy_top + card_h - cy - pad_y).max(32.0));
-        let btn_y = (cy_top + card_h - eff_btn_h - pad_y).max(cy);
-        let half_w = (inner_w - 12.0) * 0.5;
-        draw_button(
-            ui,
-            hits,
-            ButtonId::SaveRenameProfile,
-            inner_x,
-            btn_y,
-            half_w,
-            eff_btn_h,
-            Tone::Primary,
-            "Save Name",
-        );
-        draw_button(
-            ui,
-            hits,
-            ButtonId::CancelRenameProfile,
-            inner_x + half_w + 12.0,
-            btn_y,
-            half_w,
-            eff_btn_h,
-            Tone::Secondary,
-            "Cancel",
         );
     }
 }

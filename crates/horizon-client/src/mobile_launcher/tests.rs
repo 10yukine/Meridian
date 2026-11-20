@@ -1,4 +1,4 @@
-use super::widgets::{Canvas, count_label, profile_stats_line};
+use super::widgets::{Canvas, count_label, log_levels, profile_stats_line};
 use super::{Action, AuthForm, ButtonId, MobileLauncher, Route};
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
@@ -30,6 +30,8 @@ struct StubBackend {
     /// The install cache [`Backend::free_space`] frees.
     reclaim: u64,
     skins: Arc<Mutex<SkinStub>>,
+    /// The selected profile's game log.
+    log: Vec<String>,
 }
 
 impl Default for StubBackend {
@@ -77,6 +79,7 @@ impl Default for StubBackend {
             ]),
             reclaim: 0,
             skins: Arc::default(),
+            log: Vec::new(),
         }
     }
 }
@@ -184,6 +187,9 @@ impl Backend for StubBackend {
     }
     fn skin_upload(&self) -> SkinUpload {
         self.skins.lock().unwrap().status.clone()
+    }
+    fn game_log(&self, _profile: &str) -> Vec<String> {
+        self.log.clone()
     }
     fn profiles(&self) -> Vec<Profile> {
         self.profiles.clone()
@@ -435,15 +441,16 @@ fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
     // Open Mods once on Vanilla, then create a custom profile and confirm rail Mods switches to it.
     click_button(&mut launcher, size, ButtonId::OpenMods);
     assert_eq!(launcher.route, Route::Mods);
-    click_button(&mut launcher, size, ButtonId::GoHome);
 
     // Create profile with mixed-case display name distinct from its slug id
     click_button(&mut launcher, size, ButtonId::OpenNewProfile);
-    launcher.typed("My Pack");
-    click_button(&mut launcher, size, ButtonId::SelectPreset(0));
-    click_button(&mut launcher, size, ButtonId::CreateProfile);
-    assert_eq!(launcher.backend().selected_profile(), "my-pack");
+    launcher.typed("My Pack\n");
+    assert_eq!(launcher.backend().selected_profile(), "profile-1");
     assert_eq!(launcher.backend().profiles()[1].name, "My Pack");
+    // A new profile starts empty: its mods come from the registry beside it (Add).
+    for id in ["faster-chunks", "zoom"] {
+        launcher.backend.add_mod("profile-1", id).unwrap();
+    }
 
     // Switch back to Vanilla and back to My Pack via the floating Profile Switcher popup.
     click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
@@ -454,25 +461,22 @@ fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
     click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
     click_button(&mut launcher, size, ButtonId::SelectProfile(1));
     assert!(!launcher.profile_popup_open);
-    assert_eq!(launcher.backend().selected_profile(), "my-pack");
+    assert_eq!(launcher.backend().selected_profile(), "profile-1");
 
     click_button(&mut launcher, size, ButtonId::OpenMods);
     assert_eq!(launcher.route, Route::Mods);
     click_button(&mut launcher, size, ButtonId::ToggleProfileMod(0));
-    assert!(!launcher.backend().mods("my-pack")[0].enabled);
+    assert!(!launcher.backend().mods("profile-1")[0].enabled);
     click_button(&mut launcher, size, ButtonId::RemoveProfileMod(0));
-    assert_eq!(launcher.backend().mods("my-pack").len(), 1);
+    assert_eq!(launcher.backend().mods("profile-1").len(), 1);
 
-    click_button(&mut launcher, size, ButtonId::GoHome);
-    click_button(&mut launcher, size, ButtonId::OpenRenameSelected);
-    for _ in 0..7 {
-        launcher.backspace();
-    }
+    // The pencil on its tab: a new name typed over, Done keeps it.
+    click_button(&mut launcher, size, ButtonId::RenameTabProfile);
     launcher.typed("Survival Plus");
     click_button(&mut launcher, size, ButtonId::SaveRenameProfile);
     assert_eq!(launcher.backend().profiles()[1].name, "Survival Plus");
 
-    click_button(&mut launcher, size, ButtonId::AskRemoveSelected);
+    click_button(&mut launcher, size, ButtonId::DeleteTabProfile);
     assert!(launcher.confirm_remove_profile.is_some());
     click_button(&mut launcher, size, ButtonId::ConfirmRemoveProfile);
     assert_eq!(launcher.backend().selected_profile(), VANILLA);
@@ -588,12 +592,11 @@ fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
         assert!(!ready.profile_popup_open);
         assert_hits_fit_without_overlap(&ready, size, "account-switcher");
 
-        click_button(&mut ready, size, ButtonId::GoHome);
-        click_button(&mut ready, size, ButtonId::OpenNewProfile);
-        assert_hits_fit_without_overlap(&ready, size, "new-profile");
-
         click_button(&mut ready, size, ButtonId::OpenMods);
         assert_hits_fit_without_overlap(&ready, size, "mod-manager");
+        click_button(&mut ready, size, ButtonId::RenameTabProfile);
+        assert_hits_fit_without_overlap(&ready, size, "rename-profile");
+        click_button(&mut ready, size, ButtonId::SaveRenameProfile);
 
         click_button(&mut ready, size, ButtonId::ModManagerPickProfile(0));
         assert_hits_fit_without_overlap(&ready, size, "mod-manager-vanilla");
@@ -604,13 +607,11 @@ fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
         click_button(&mut ready, size, ButtonId::OpenSettings);
         assert_hits_fit_without_overlap(&ready, size, "settings");
 
-        click_button(&mut ready, size, ButtonId::GoHome);
-        click_button(&mut ready, size, ButtonId::OpenRenameSelected);
-        assert_hits_fit_without_overlap(&ready, size, "rename-profile");
-
-        click_button(&mut ready, size, ButtonId::CancelRenameProfile);
-        click_button(&mut ready, size, ButtonId::AskRemoveSelected);
+        click_button(&mut ready, size, ButtonId::OpenMods);
+        click_button(&mut ready, size, ButtonId::ModManagerPickProfile(1));
+        click_button(&mut ready, size, ButtonId::DeleteTabProfile);
         assert_hits_fit_without_overlap(&ready, size, "confirm-remove-profile");
+        click_button(&mut ready, size, ButtonId::CancelRemoveProfile);
 
         let mut installing = MobileLauncher::new(Box::new(StubBackend {
             accounts: vec![Account::Offline {
@@ -770,59 +771,32 @@ fn text_entry_screens_fit_above_phone_keyboard() {
             Some("The game closed unexpectedly last time.")
         );
 
+        click_button(&mut signed_in, size, ButtonId::OpenMods);
         click_button(&mut signed_in, size, ButtonId::OpenNewProfile);
         assert_text_entry_visible(
             &mut signed_in,
             size,
             "kb-new-profile",
-            &[
-                ButtonId::FocusNewProfileName,
-                ButtonId::CreateProfile,
-                ButtonId::CancelNewProfile,
-            ],
+            &[ButtonId::FocusRenameInput, ButtonId::SaveRenameProfile],
         );
-        signed_in.new_profile_error = Some("Enter 1 to 32 characters.".into());
+        signed_in.mods_error = Some("Enter 1 to 32 characters.".into());
         assert_text_entry_visible(
             &mut signed_in,
             size,
             "kb-new-profile-error",
-            &[
-                ButtonId::FocusNewProfileName,
-                ButtonId::CreateProfile,
-                ButtonId::CancelNewProfile,
-            ],
+            &[ButtonId::FocusRenameInput, ButtonId::SaveRenameProfile],
         );
-
-        // 4. Rename Profile modal (clean + error)
-        click_button(&mut signed_in, size, ButtonId::CancelNewProfile);
-        click_button(&mut signed_in, size, ButtonId::OpenRenameSelected);
+        click_button(&mut signed_in, size, ButtonId::SaveRenameProfile);
+        click_button(&mut signed_in, size, ButtonId::RenameTabProfile);
         assert_text_entry_visible(
             &mut signed_in,
             size,
             "kb-rename",
-            &[
-                ButtonId::FocusRenameInput,
-                ButtonId::SaveRenameProfile,
-                ButtonId::CancelRenameProfile,
-            ],
-        );
-        if let Some((_, _, ref mut err)) = signed_in.rename_modal {
-            *err = Some("A profile with that name already exists.".into());
-        }
-        assert_text_entry_visible(
-            &mut signed_in,
-            size,
-            "kb-rename-error",
-            &[
-                ButtonId::FocusRenameInput,
-                ButtonId::SaveRenameProfile,
-                ButtonId::CancelRenameProfile,
-            ],
+            &[ButtonId::FocusRenameInput, ButtonId::SaveRenameProfile],
         );
 
         // 5. Mod Manager search input focused
-        click_button(&mut signed_in, size, ButtonId::CancelRenameProfile);
-        click_button(&mut signed_in, size, ButtonId::OpenMods);
+        click_button(&mut signed_in, size, ButtonId::SaveRenameProfile);
         click_button(&mut signed_in, size, ButtonId::FocusModSearch);
         assert_text_entry_visible(
             &mut signed_in,
@@ -834,7 +808,7 @@ fn text_entry_screens_fit_above_phone_keyboard() {
 }
 
 #[test]
-fn new_profile_keeps_the_keyboard_for_its_name_and_returns_where_it_was_opened() {
+fn new_profile_is_made_at_once_and_named_in_place_on_its_tab() {
     let shows = |l: &MobileLauncher, size: [u32; 2], id: ButtonId| {
         with_ui(size, (0.0, 0.0), |ui| {
             l.layout(&mut Canvas::Hit(ui)).iter().any(|h| h.id == id)
@@ -852,32 +826,29 @@ fn new_profile_keeps_the_keyboard_for_its_name_and_returns_where_it_was_opened()
     }));
     click_button(&mut l, phone, ButtonId::OpenMods);
     click_button(&mut l, phone, ButtonId::OpenNewProfile);
-    assert!(l.wants_text(), "opening New Profile focuses its name");
-    // Typing the name: the form has the room above the keyboard, no dock rising behind it.
-    assert!(!shows(&l, keyboard, ButtonId::OpenAccountSwitcher));
-    assert!(shows(&l, keyboard, ButtonId::CreateProfile));
-
-    // Picking a mod puts the keyboard away (it used to bring it back on every tap).
-    click_button(&mut l, phone, ButtonId::ToggleNewProfileMod(0));
-    assert!(!l.wants_text());
-    assert_eq!(l.new_profile_mods, ["faster-chunks"]);
-    assert!(shows(&l, phone, ButtonId::OpenAccountSwitcher));
-    click_button(&mut l, phone, ButtonId::FocusNewProfileName);
+    // Made and shown at once, its name ready to type: only that row above the keyboard.
+    assert_eq!(l.backend().profiles()[1].name, "Profile 1");
+    assert_eq!(l.mods_profile_id.as_deref(), Some("profile-1"));
     assert!(l.wants_text());
+    assert!(shows(&l, keyboard, ButtonId::FocusRenameInput));
+    assert!(!shows(&l, keyboard, ButtonId::OpenAccountSwitcher));
 
-    // Opened from Mods: Cancel goes back to Mods, and Create shows the new profile there.
-    click_button(&mut l, phone, ButtonId::CancelNewProfile);
-    assert_eq!(l.route, Route::Mods);
+    // Tapping away keeps the default name; the next one is "Profile 2".
+    click_button(&mut l, phone, ButtonId::ModManagerPickProfile(0));
+    assert!(!l.wants_text());
+    assert_eq!(l.backend().profiles()[1].name, "Profile 1");
     click_button(&mut l, phone, ButtonId::OpenNewProfile);
-    l.typed("Pack");
-    click_button(&mut l, phone, ButtonId::CreateProfile);
-    assert_eq!(l.route, Route::Mods);
-    assert_eq!(l.mods_profile_id.as_deref(), Some("pack"));
-    // From Home, back to Home.
-    click_button(&mut l, phone, ButtonId::GoHome);
-    click_button(&mut l, phone, ButtonId::OpenNewProfile);
-    click_button(&mut l, phone, ButtonId::CancelNewProfile);
-    assert_eq!(l.route, Route::Home);
+    assert_eq!(l.backend().profiles()[2].name, "Profile 2");
+
+    // Typing a name and Enter renames it in place.
+    l.typed("Pack\n");
+    assert_eq!(l.backend().profiles()[2].name, "Pack");
+    assert!(!l.wants_text());
+    // The pencil and the bin belong to the modded tab shown, never to Vanilla.
+    assert!(shows(&l, phone, ButtonId::RenameTabProfile));
+    click_button(&mut l, phone, ButtonId::ModManagerPickProfile(0));
+    assert!(!shows(&l, phone, ButtonId::RenameTabProfile));
+    assert!(!shows(&l, phone, ButtonId::DeleteTabProfile));
 }
 
 #[test]
@@ -1142,17 +1113,12 @@ fn skins_put_on_a_chosen_png_and_send_ely_to_its_website() {
     l.poll();
     assert!(!ids(&l).contains(&ButtonId::UseSkin));
 
-    let pick = |slim| PickedSkin {
+    skins.lock().unwrap().picked = Some(Ok(PickedSkin {
         png: b"skin.png".to_vec(),
         face: [7; 8 * 8 * 4],
-        slim,
-    };
-    skins.lock().unwrap().picked = Some(Ok(pick(true)));
+    }));
     l.poll();
-    // The arms start as the file's own.
-    assert!(l.skin_slim);
-    skins.lock().unwrap().picked = Some(Ok(pick(false)));
-    l.poll();
+    // Classic until the player picks Slim.
     assert!(!l.skin_slim);
     for size in [[914, 411], [856, 384], [2400, 1080]] {
         assert_hits_fit_without_overlap(&l, size, "skin-chosen");
@@ -1189,5 +1155,58 @@ fn skins_put_on_a_chosen_png_and_send_ely_to_its_website() {
     assert!(
         ids(&l).contains(&ButtonId::PickSkin),
         "offline: kept on this phone"
+    );
+}
+
+#[test]
+fn log_lines_take_their_entrys_level() {
+    let lines: Vec<String> = [
+        "[08:53:52] [unnamed/INFO]: Horizon 0.1.0",
+        "[08:53:52] [Narrator/ERROR]: Error while loading the narrator",
+        "    at a stack frame",
+        "[08:53:52] [unnamed/WARN]: Missing downlevel flags",
+        "The underlying API does not support enough features",
+        "[08:53:53] [Render thread/FATAL]: Out of memory",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    assert_eq!(log_levels(&lines), [0, 2, 2, 1, 1, 2]);
+}
+
+#[test]
+fn home_shows_the_game_log_and_copies_the_level_chosen() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        log: [
+            "[1] [main/INFO]: started",
+            "[2] [main/ERROR]: broke",
+            "    at here",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        ..StubBackend::default()
+    }));
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "home-log");
+    }
+    let size = [914, 411];
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::CopyLog),
+        Some(Action::CopyText(
+            "[1] [main/INFO]: started\n[2] [main/ERROR]: broke\n    at here".into()
+        ))
+    );
+    assert!(l.log_copied);
+    click_button(&mut l, size, ButtonId::LogLevel(2));
+    assert!(!l.log_copied, "another tap: Copy again");
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::CopyLog),
+        Some(Action::CopyText(
+            "[2] [main/ERROR]: broke\n    at here".into()
+        ))
     );
 }

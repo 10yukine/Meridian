@@ -1,7 +1,7 @@
 use super::*;
 use std::{
     fs,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -24,6 +24,12 @@ const DOWNLOAD_JOBS: usize = 16;
 const MEASURING: u64 = u64::MAX;
 /// Where the platform's file picker leaves the chosen skin (`MeridianActivity.pickSkin`).
 const PICKED_SKIN: &str = "picked-skin.png";
+/// The game log's end [`Real::game_log`] reads, and the most lines it keeps of it.
+const LOG_TAIL: u64 = 128 * 1024;
+const LOG_LINES: usize = 400;
+
+/// The game log [`Real::game_log`] last read: its path, length and change time, and its lines.
+type LogTail = (PathBuf, u64, Option<std::time::SystemTime>, Vec<String>);
 
 enum Session {
     Microsoft(account::Account, account::Secrets),
@@ -104,6 +110,7 @@ pub struct Real {
     /// The install cache's bytes ([`launch::install_cache_size`]), or [`MEASURING`].
     reclaimable: Arc<AtomicU64>,
     skin_upload: Arc<Mutex<SkinUpload>>,
+    log_tail: Mutex<Option<LogTail>>,
     heads: heads::Cache,
     profiles: profiles::Store,
 }
@@ -133,6 +140,7 @@ impl Real {
             base_ready: Arc::new(AtomicBool::new(ready)),
             reclaimable: Arc::new(AtomicU64::new(if ready { MEASURING } else { 0 })),
             skin_upload: Arc::default(),
+            log_tail: Mutex::default(),
             heads: heads::Cache::default(),
             profiles,
         };
@@ -533,8 +541,8 @@ impl Backend for Real {
             .read_to_end(&mut png);
         let _ = fs::remove_file(&path);
         Some(match read {
-            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::skin(&png)
-                .map(|(face, slim)| PickedSkin { png, face, slim })
+            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::face(&png)
+                .map(|face| PickedSkin { png, face })
                 .ok_or_else(|| "Choose a 64x64 PNG skin.".to_owned()),
             Ok(_) => Err("That file is too big for a skin.".into()),
             Err(e) => Err(format!("Could not read the file: {e}")),
@@ -601,6 +609,70 @@ impl Backend for Real {
 
     fn skin_upload(&self) -> SkinUpload {
         self.skin_upload.lock().unwrap().clone()
+    }
+
+    fn game_log(&self, profile: &str) -> Vec<String> {
+        let path = profile_dir(&self.root, profile).join("logs/latest.log");
+        let Ok(meta) = fs::metadata(&path) else {
+            return Vec::new();
+        };
+        let (len, modified) = (meta.len(), meta.modified().ok());
+        // Read again only when the game wrote to it (the screen asks ten times a second).
+        let mut kept = self.log_tail.lock().unwrap();
+        if let Some((p, l, m, lines)) = &*kept
+            && (p, *l, *m) == (&path, len, modified)
+        {
+            return lines.clone();
+        }
+        let lines = read_log_tail(&path, len).unwrap_or_default();
+        *kept = Some((path, len, modified, lines.clone()));
+        lines
+    }
+}
+
+/// The last [`LOG_LINES`] lines of the `len`-byte log at `path`, from its last [`LOG_TAIL`]
+/// bytes (the first, cut line of those dropped).
+fn read_log_tail(path: &Path, len: u64) -> std::io::Result<Vec<String>> {
+    let mut file = fs::File::open(path)?;
+    let start = len.saturating_sub(LOG_TAIL);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(LOG_TAIL).read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<String> = text
+        .lines()
+        .skip(usize::from(start > 0))
+        .map(str::to_owned)
+        .collect();
+    lines.drain(..lines.len().saturating_sub(LOG_LINES));
+    Ok(lines)
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    #[test]
+    fn the_log_tail_keeps_whole_last_lines() {
+        let path = std::env::temp_dir().join(format!("meridian-log-{}.log", std::process::id()));
+        let short = "[1] a\n[2] b\n";
+        fs::write(&path, short).unwrap();
+        assert_eq!(
+            read_log_tail(&path, short.len() as u64).unwrap(),
+            ["[1] a", "[2] b"]
+        );
+        // A long log: its end only, starting at a whole line.
+        let text: String = (0..20_000).map(|i| format!("[{i:05}] line\n")).collect();
+        fs::write(&path, &text).unwrap();
+        let lines = read_log_tail(&path, text.len() as u64).unwrap();
+        assert_eq!(lines.len(), LOG_LINES);
+        assert_eq!(lines.last().unwrap(), "[19999] line");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.ends_with("] line") && line.starts_with('['))
+        );
+        fs::remove_file(path).unwrap();
     }
 }
 

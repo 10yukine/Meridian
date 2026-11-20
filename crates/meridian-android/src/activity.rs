@@ -49,6 +49,20 @@ pub(crate) fn pick_skin() -> bool {
         .unwrap_or(false)
 }
 
+/// `MeridianActivity.copyText`: `text` on the clipboard.
+pub(crate) fn copy_text(text: &str) {
+    with_activity(|env, activity| {
+        let text = env.new_string(text)?;
+        env.call_method(
+            activity,
+            "copyText",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&text)],
+        )
+        .map(drop)
+    });
+}
+
 /// `MeridianActivity.imeHeight`: how far the on-screen keyboard covers the window, in pixels.
 pub(crate) fn ime_height() -> u32 {
     with_activity(|env, activity| env.call_method(activity, "imeHeight", "()I", &[])?.i())

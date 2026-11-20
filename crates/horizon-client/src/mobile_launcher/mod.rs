@@ -21,7 +21,7 @@ mod widgets;
 
 use crate::launcher_backend::{
     Account, Backend, ELY_SKINS, ModSearch, PickedSkin, Profile, ProfileState, Setup, SignIn,
-    SkinUpload, VANILLA, valid_profile_name,
+    SkinUpload, VANILLA,
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -42,6 +42,8 @@ pub enum Action {
     OpenUrl(String),
     /// Open the platform's file picker for a PNG skin (`MobileLauncher::poll` takes the file).
     PickSkin,
+    /// Put this on the clipboard (Copy on the game log).
+    CopyText(String),
     /// Close the launcher window.
     Quit,
 }
@@ -50,7 +52,6 @@ pub enum Action {
 enum Route {
     Home,
     Install,
-    NewProfile,
     Mods,
     Skins,
     AccountSwitcher,
@@ -111,9 +112,6 @@ enum ButtonId {
     InstallSelected,
     PlaySelected,
     ViewInstallScreen,
-    OpenModsForSelected,
-    OpenRenameSelected,
-    AskRemoveSelected,
     Quit,
     // Install screen
     CancelSetup,
@@ -124,15 +122,9 @@ enum ButtonId {
     AccountsPrevPage,
     AccountsNextPage,
     AddAccount,
-    // New profile
-    CancelNewProfile,
-    FocusNewProfileName,
-    SelectPresetNone,
-    SelectPreset(usize),
-    ToggleNewProfileMod(usize),
-    NewProfilePrevMods,
-    NewProfileNextMods,
-    CreateProfile,
+    // New Profile makes one at once; its tab renames it in place and deletes it.
+    RenameTabProfile,
+    DeleteTabProfile,
     // Mod manager
     ModManagerPickProfile(usize),
     ToggleProfileMod(usize),
@@ -150,7 +142,6 @@ enum ButtonId {
     ConfirmRemoveProfile,
     FocusRenameInput,
     SaveRenameProfile,
-    CancelRenameProfile,
     // Settings
     SettingsBack,
     ToggleLauncherFont,
@@ -163,6 +154,9 @@ enum ButtonId {
     SkinArms(bool),
     UseSkin,
     OpenElySkins,
+    // Home's game log
+    LogLevel(u8),
+    CopyLog,
 }
 
 /// Interactive Meridian launcher backed by [`Backend`].
@@ -189,16 +183,6 @@ pub struct MobileLauncher {
     // Paging & dropdown scroll
     profile_scroll: usize,
     account_page: usize,
-    // New profile state
-    new_profile_name: String,
-    new_profile_preset: Option<String>,
-    new_profile_mods: Vec<String>,
-    new_profile_mods_page: usize,
-    new_profile_error: Option<String>,
-    /// The name field has the focus: only then does the keyboard show for it.
-    new_profile_name_focused: bool,
-    /// Where New Profile was opened from: Cancel and Create go back there.
-    new_profile_from: Route,
     // Mod manager state
     mods_profile_id: Option<String>,
     mods_list_page: usize,
@@ -211,15 +195,21 @@ pub struct MobileLauncher {
     confirm_free_space: bool,
     /// What Settings' "Free up space" did: the bytes freed, or why not.
     freed: Option<Result<u64, String>>,
-    rename_modal: Option<(String, String, Option<String>)>,
+    /// The Mods tab being renamed in place: its id and the name typed so far (empty: the old
+    /// name stays).
+    profile_rename: Option<(String, String)>,
     /// The skin file chosen on Skins.
     skin_pick: Option<PickedSkin>,
-    /// Put the chosen skin on with slim arms: the file's own at first.
+    /// Put the chosen skin on with slim arms (the player's choice; Classic at first).
     skin_slim: bool,
     /// Why the chosen file can't be a skin, or no picker opened.
     skin_error: Option<String>,
     /// Putting `skin_pick` on was started and hasn't finished.
     skin_uploading: bool,
+    /// The game log's lines shown from this level up: 0 all, 1 warnings, 2 errors.
+    log_level: u8,
+    /// The last tap copied the game log.
+    log_copied: bool,
 }
 
 #[cfg(not(test))]
@@ -261,13 +251,6 @@ impl MobileLauncher {
             status_note: None,
             profile_scroll: 0,
             account_page: 0,
-            new_profile_name: String::new(),
-            new_profile_preset: None,
-            new_profile_mods: Vec::new(),
-            new_profile_mods_page: 0,
-            new_profile_error: None,
-            new_profile_name_focused: false,
-            new_profile_from: Route::Home,
             mods_profile_id: None,
             mods_list_page: 0,
             mod_search_query: String::new(),
@@ -277,11 +260,13 @@ impl MobileLauncher {
             confirm_remove_profile: None,
             confirm_free_space: false,
             freed: None,
-            rename_modal: None,
+            profile_rename: None,
             skin_pick: None,
             skin_slim: false,
             skin_error: None,
             skin_uploading: false,
+            log_level: 0,
+            log_copied: false,
         }
     }
 
@@ -289,7 +274,6 @@ impl MobileLauncher {
     pub fn poll(&mut self) {
         match self.backend.take_picked_skin() {
             Some(Ok(pick)) => {
-                self.skin_slim = pick.slim;
                 self.skin_pick = Some(pick);
                 self.skin_error = None;
             }
@@ -362,8 +346,8 @@ impl MobileLauncher {
         if self.profile_popup_open {
             return None;
         }
-        if self.rename_modal.is_some() {
-            return self.rename_modal.as_mut().map(|(_, text, _)| text);
+        if self.profile_rename.is_some() {
+            return self.profile_rename.as_mut().map(|(_, text)| text);
         }
         let accounts = self.backend.accounts();
         if self.is_onboarding(&accounts) {
@@ -378,14 +362,13 @@ impl MobileLauncher {
             };
         }
         match self.route {
-            Route::NewProfile if self.new_profile_name_focused => Some(&mut self.new_profile_name),
             Route::Mods if self.mod_search_focused => Some(&mut self.mod_search_query),
             _ => None,
         }
     }
 
     fn max_chars_for_active(&self) -> usize {
-        if self.rename_modal.is_some() || self.route == Route::NewProfile {
+        if self.profile_rename.is_some() {
             return 32;
         }
         match self.auth_form {
@@ -399,7 +382,7 @@ impl MobileLauncher {
     }
 
     fn char_allowed_for_active(&self, ch: char) -> bool {
-        if self.rename_modal.is_some() || self.route == Route::NewProfile {
+        if self.profile_rename.is_some() {
             return !ch.is_control();
         }
         if self.auth_form == Some(AuthForm::Offline) {
@@ -454,7 +437,7 @@ impl MobileLauncher {
     }
 
     fn submit_active_form(&mut self) {
-        if self.rename_modal.is_some() {
+        if self.profile_rename.is_some() {
             self.handle_button(ButtonId::SaveRenameProfile);
             return;
         }
@@ -470,9 +453,6 @@ impl MobileLauncher {
             return;
         }
         match self.route {
-            Route::NewProfile => {
-                self.handle_button(ButtonId::CreateProfile);
-            }
             Route::Mods if self.mod_search_focused => {
                 self.handle_button(ButtonId::SubmitModSearch);
             }
@@ -568,22 +548,29 @@ impl MobileLauncher {
         }
         // Opening New Profile focuses its name; tapping anything else (a mod, a preset) doesn't
         // keep the keyboard up.
-        self.new_profile_name_focused =
-            matches!(id, ButtonId::FocusNewProfileName | ButtonId::OpenNewProfile);
+        // A tap anywhere else keeps the name being typed on a Mods tab.
+        if !matches!(id, ButtonId::FocusRenameInput | ButtonId::SaveRenameProfile)
+            && let Some((tab, name)) = self.profile_rename.take()
+            && !name.trim().is_empty()
+            && let Err(err) = self.backend.rename_profile(&tab, name.trim())
+        {
+            self.mods_error = Some(err);
+        }
         // Any other tap answers "Free up space?" with no.
         self.confirm_free_space = matches!(id, ButtonId::FreeSpace | ButtonId::ConfirmFreeSpace);
+        self.log_copied = false;
 
         match id {
             ButtonId::GoHome | ButtonId::SettingsBack => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 self.mod_search_focused = false;
                 self.route = Route::Home;
             }
             ButtonId::ToggleProfilePicker => {
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 self.mod_search_focused = false;
                 self.profile_popup_open = !self.profile_popup_open;
                 if self.profile_popup_open {
@@ -610,7 +597,7 @@ impl MobileLauncher {
             ButtonId::TopProgressBanner | ButtonId::ViewInstallScreen => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 if matches!(
                     self.backend.setup(),
                     Setup::Running(_) | Setup::Failed { .. }
@@ -623,7 +610,7 @@ impl MobileLauncher {
             ButtonId::OpenMods => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 self.mods_profile_id = Some(self.backend.selected_profile());
                 self.mods_list_page = 0;
                 self.mod_registry_page = 0;
@@ -634,21 +621,17 @@ impl MobileLauncher {
                 }
                 self.route = Route::Mods;
             }
-            ButtonId::OpenModsForSelected => {
-                self.mods_profile_id = Some(self.backend.selected_profile());
-                return self.handle_button(ButtonId::OpenMods);
-            }
             ButtonId::OpenSkins => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 self.mod_search_focused = false;
                 self.route = Route::Skins;
             }
             ButtonId::OpenSettings => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 self.mod_search_focused = false;
                 self.route = if self.route == Route::Settings {
                     Route::Home
@@ -659,7 +642,7 @@ impl MobileLauncher {
             ButtonId::OpenAccountSwitcher => {
                 self.profile_popup_open = false;
                 self.confirm_remove_profile = None;
-                self.rename_modal = None;
+                self.profile_rename = None;
                 self.mod_search_focused = false;
                 self.route = if self.route == Route::AccountSwitcher {
                     Route::Home
@@ -861,84 +844,24 @@ impl MobileLauncher {
             }
             ButtonId::OpenNewProfile => {
                 self.profile_popup_open = false;
-                self.new_profile_name.clear();
-                self.new_profile_preset = None;
-                self.new_profile_mods.clear();
-                self.new_profile_mods_page = 0;
-                self.new_profile_error = None;
-                self.mod_search_focused = false;
-                if matches!(self.backend.mod_search(), ModSearch::Idle) {
-                    self.backend.search_mods("");
-                }
-                if self.route != Route::NewProfile {
-                    self.new_profile_from = if self.route == Route::Mods {
-                        Route::Mods
-                    } else {
-                        Route::Home
-                    };
-                }
-                self.route = Route::NewProfile;
-            }
-            ButtonId::CancelNewProfile => {
-                self.route = self.new_profile_from;
-            }
-            ButtonId::FocusNewProfileName => {}
-            ButtonId::SelectPresetNone => {
-                self.new_profile_preset = None;
-            }
-            ButtonId::SelectPreset(idx) => {
-                if let Some(p) = self.backend.presets().get(idx) {
-                    self.new_profile_preset = if self.new_profile_preset.as_deref() == Some(&p.id) {
-                        None
-                    } else {
-                        Some(p.id.clone())
-                    };
-                }
-            }
-            ButtonId::ToggleNewProfileMod(idx) => {
-                if let ModSearch::Done(mods) = self.backend.mod_search()
-                    && let Some(m) = mods.get(idx)
-                {
-                    if let Some(pos) = self.new_profile_mods.iter().position(|id| id == &m.id) {
-                        self.new_profile_mods.remove(pos);
-                    } else {
-                        self.new_profile_mods.push(m.id.clone());
-                    }
-                }
-            }
-            ButtonId::NewProfilePrevMods => {
-                self.new_profile_mods_page = self.new_profile_mods_page.saturating_sub(1);
-            }
-            ButtonId::NewProfileNextMods => {
-                self.new_profile_mods_page = self.new_profile_mods_page.saturating_add(1);
-            }
-            ButtonId::CreateProfile => {
-                let name = self.new_profile_name.trim().to_owned();
-                if !valid_profile_name(&name) {
-                    self.new_profile_error = Some("Enter 1 to 32 characters.".to_owned());
-                    // The keyboard comes back for the correction.
-                    self.new_profile_name_focused = true;
-                    return None;
-                }
-                match self.backend.create_profile(
-                    &name,
-                    self.new_profile_preset.as_deref(),
-                    &self.new_profile_mods,
-                ) {
+                let profiles = self.backend.profiles();
+                // "Profile 1", "Profile 2"...: the first name no profile has (its folder is made
+                // unique by `profile_id`).
+                let name = (1..)
+                    .map(|n| format!("Profile {n}"))
+                    .find(|name| profiles.iter().all(|p| !p.name.eq_ignore_ascii_case(name)))
+                    .unwrap_or_default();
+                match self.backend.create_profile(&name, None, &[]) {
                     Ok(id) => {
                         let _ = self.backend.select_profile(&id);
-                        self.new_profile_error = None;
-                        self.route = self.new_profile_from;
-                        if self.route == Route::Mods {
-                            // The Mods tab shows the new profile, ready for its mods.
-                            self.mods_profile_id = Some(id);
-                            self.mods_list_page = 0;
-                        }
-                        self.status_note = Some(format!("Created profile \"{name}\"."));
+                        self.route = Route::Mods;
+                        self.mods_profile_id = Some(id.clone());
+                        self.mods_list_page = 0;
+                        self.mods_error = None;
+                        // Its name, ready to type over; tapping away keeps "Profile 1".
+                        self.profile_rename = Some((id, String::new()));
                     }
-                    Err(err) => {
-                        self.new_profile_error = Some(err);
-                    }
+                    Err(err) => self.mods_error = Some(err),
                 }
             }
             ButtonId::ModManagerPickProfile(idx) => {
@@ -998,36 +921,32 @@ impl MobileLauncher {
             ButtonId::RegistryModsNext => {
                 self.mod_registry_page = self.mod_registry_page.saturating_add(1);
             }
-            ButtonId::OpenRenameSelected => {
-                self.profile_popup_open = false;
-                let (profiles, sel_id, _) = self.selected_profile_snapshot();
-                if sel_id != VANILLA
-                    && let Some(p) = profiles.iter().find(|p| p.id == sel_id)
-                {
-                    self.rename_modal = Some((p.id.clone(), p.name.clone(), None));
+            ButtonId::RenameTabProfile => {
+                let pid = self.effective_mods_profile_id(&self.backend.profiles());
+                if pid != VANILLA {
+                    self.profile_rename = Some((pid, String::new()));
                 }
             }
             ButtonId::FocusRenameInput => {}
             ButtonId::SaveRenameProfile => {
-                if let Some((id, new_name, _)) = self.rename_modal.take() {
-                    match self.backend.rename_profile(&id, &new_name) {
-                        Ok(()) => {
-                            self.status_note = Some(format!("Renamed to \"{}\".", new_name.trim()));
-                        }
+                if let Some((tab, name)) = self.profile_rename.take()
+                    && !name.trim().is_empty()
+                {
+                    match self.backend.rename_profile(&tab, name.trim()) {
+                        Ok(()) => self.mods_error = None,
                         Err(err) => {
-                            self.rename_modal = Some((id, new_name, Some(err)));
+                            // Still typing: the reason shows under the tabs.
+                            self.mods_error = Some(err);
+                            self.profile_rename = Some((tab, name));
                         }
                     }
                 }
             }
-            ButtonId::CancelRenameProfile => {
-                self.rename_modal = None;
-            }
-            ButtonId::AskRemoveSelected => {
-                self.profile_popup_open = false;
-                let (profiles, sel_id, _) = self.selected_profile_snapshot();
-                if sel_id != VANILLA
-                    && let Some(p) = profiles.iter().find(|p| p.id == sel_id)
+            ButtonId::DeleteTabProfile => {
+                let profiles = self.backend.profiles();
+                let pid = self.effective_mods_profile_id(&profiles);
+                if pid != VANILLA
+                    && let Some(p) = profiles.iter().find(|p| p.id == pid)
                 {
                     self.confirm_remove_profile = Some((p.id.clone(), p.name.clone(), p.worlds));
                 }
@@ -1063,6 +982,18 @@ impl MobileLauncher {
                 }
             }
             ButtonId::OpenElySkins => return Some(Action::OpenUrl(ELY_SKINS.into())),
+            ButtonId::LogLevel(level) => self.log_level = level,
+            ButtonId::CopyLog => {
+                let lines = self.backend.game_log(&self.backend.selected_profile());
+                let shown: Vec<&str> = lines
+                    .iter()
+                    .zip(widgets::log_levels(&lines))
+                    .filter(|(_, level)| *level >= self.log_level)
+                    .map(|(line, _)| line.as_str())
+                    .collect();
+                self.log_copied = true;
+                return Some(Action::CopyText(shown.join("\n")));
+            }
         }
         None
     }
@@ -1198,8 +1129,7 @@ impl MobileLauncher {
         // more room and keeps the dock. Pass the keyboard's height from the host if that matters.
         let typing = kb_h
             && !self.profile_popup_open
-            && (self.rename_modal.is_some()
-                || self.route == Route::NewProfile && self.new_profile_name_focused
+            && (self.profile_rename.is_some()
                 || self.route == Route::Mods && self.mod_search_focused);
         let bottom_h = if typing {
             0.0
@@ -1298,21 +1228,6 @@ impl MobileLauncher {
             );
             return hits;
         }
-        if let Some((ref id, ref draft, ref err)) = self.rename_modal {
-            self.draw_rename_modal(
-                ui,
-                top_hits,
-                modal_x,
-                main_y,
-                modal_w,
-                main_h,
-                id,
-                draft,
-                err.as_deref(),
-                col_danger,
-            );
-            return hits;
-        }
 
         match self.route {
             Route::Install => match setup {
@@ -1352,9 +1267,6 @@ impl MobileLauncher {
                 &accounts,
                 active_idx,
                 col_success,
-            ),
-            Route::NewProfile => self.draw_new_profile(
-                ui, top_hits, main_x, main_y, main_w, main_h, &profiles, col_danger,
             ),
             Route::Mods => self.draw_mods_view(
                 ui,
@@ -1656,13 +1568,8 @@ impl MobileLauncher {
         let max_item_h = ((avail_rail - gap * 3.0) * 0.25).floor().max(22.0);
         let item_h = (if short_h { 46.0_f32 } else { 52.0 }).min(max_item_h);
 
-        // Single clean nav stack: Home, Mods, Skins, Settings (right after Skins). New Profile
-        // belongs to the page it was opened from.
-        let page = if self.route == Route::NewProfile {
-            self.new_profile_from
-        } else {
-            self.route
-        };
+        // Single clean nav stack: Home, Mods, Skins, Settings (right after Skins).
+        let page = self.route;
         let nav_items = [
             (
                 ButtonId::GoHome,

@@ -108,7 +108,7 @@ pub(super) fn offline_skin(root: &Path, player: &Account) -> Option<String> {
 
 fn load(url: &str) -> Option<Head> {
     if let Some(path) = url.strip_prefix("file:") {
-        return skin(&fs::read(path).ok()?).map(|(face, _)| face);
+        return face(&fs::read(path).ok()?);
     }
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
@@ -122,13 +122,11 @@ fn load(url: &str) -> Option<Head> {
         .take(1 << 20)
         .read_to_end(&mut png)
         .ok()?;
-    skin(&png).map(|(face, _)| face)
+    face(&png)
 }
 
-/// A 64x64 or legacy 64x32 skin's face (with its hat) and whether its arms are slim: a slim
-/// skin leaves the right arm's last two columns (x 54 and 55, y 20 to 31) empty.
 // Same face and hat coordinates as the desktop launcher (launcher/src/heads.rs).
-pub(super) fn skin(png: &[u8]) -> Option<(Head, bool)> {
+pub(super) fn face(png: &[u8]) -> Option<Head> {
     let mut decoder = png::Decoder::new(Cursor::new(png));
     decoder.set_limits(png::Limits { bytes: 1 << 20 });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -163,45 +161,12 @@ pub(super) fn skin(png: &[u8]) -> Option<(Head, bool)> {
             out[px + 3] = 255;
         }
     }
-    let slim = frame.height == 64 && (54..56).all(|x| (20..32).all(|y| rgba(x, y)[3] == 0));
-    Some((out, slim))
+    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A 64x64 skin, painted where `paint` says and empty elsewhere.
-    fn painted(paint: impl Fn(usize, usize) -> bool) -> Vec<u8> {
-        let mut rgba = vec![0u8; 64 * 64 * 4];
-        for y in 0..64 {
-            for x in 0..64 {
-                if paint(x, y) {
-                    rgba[(y * 64 + x) * 4..][..4].copy_from_slice(&[90, 110, 200, 255]);
-                }
-            }
-        }
-        let mut png = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut png, 64, 64);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().unwrap();
-            writer.write_image_data(&rgba).unwrap();
-        }
-        png
-    }
-
-    #[test]
-    fn a_skin_tells_slim_arms_from_wide_ones() {
-        let (face, slim) = skin(&painted(|_, _| true)).unwrap();
-        assert!(!slim);
-        assert_eq!(face[..4], [90, 110, 200, 255]);
-        let arm_gap = |x, y| (54..56).contains(&x) && (20..32).contains(&y);
-        let (_, slim) = skin(&painted(|x, y| !arm_gap(x, y))).unwrap();
-        assert!(slim);
-        assert!(skin(b"not a png").is_none());
-    }
 
     #[test]
     fn waits_before_retrying_a_failed_head() {
@@ -243,7 +208,7 @@ mod tests {
             data[(8 * 64 + 40) * 4..][..4].copy_from_slice(&[0, 0, 200, 128]);
             writer.write_image_data(&data).unwrap();
         }
-        assert_eq!(&skin(&bytes).unwrap().0[..4], &[50, 75, 200, 255]);
+        assert_eq!(&face(&bytes).unwrap()[..4], &[50, 75, 200, 255]);
     }
 
     /// Values from Java 21: `UUID.nameUUIDFromBytes("OfflinePlayer:" + name)` and

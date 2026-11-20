@@ -4,6 +4,8 @@ package io.github.u10yukine.meridian;
 
 import android.app.NativeActivity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
@@ -123,6 +125,16 @@ public class MeridianActivity extends NativeActivity {
         } catch (ActivityNotFoundException | SecurityException e) {
             return false;
         }
+    }
+
+    /** Puts `text` on the clipboard (the launcher's Copy on its game log). */
+    public void copyText(String text) {
+        runOnUiThread(() -> {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("Meridian game log", text));
+            }
+        });
     }
 
     /** The system's file picker for a PNG skin; the chosen file lands in files/picked-skin.png,

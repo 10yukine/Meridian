@@ -594,65 +594,57 @@ pub(super) fn draw_input_box(
     hits.push(hit);
 }
 
-/// A row that toggles: a checkbox, the name left-aligned beside it, and `detail` (a size)
-/// right-aligned and muted.
+/// A square button with a drawn icon beside a profile tab: a pencil (rename) or a bin (delete).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_check_row(
+pub(super) fn draw_tool_button(
     ui: &mut Canvas<'_, '_>,
     hits: &mut Vec<HitRect>,
     id: ButtonId,
     x: f32,
     y: f32,
-    w: f32,
-    h: f32,
-    checked: bool,
-    name: &str,
-    detail: &str,
+    size: f32,
+    delete: bool,
 ) {
-    hits.push(HitRect { id, x, y, w, h });
+    draw_button(ui, hits, id, x, y, size, size, Tone::Secondary, "");
     let Some(p) = ui.paint() else { return };
-    let (plate, edge) = if checked {
-        (
-            color::with_alpha(palette::accent(), 0.16),
-            color::with_alpha(palette::accent_star(), 0.6),
-        )
+    let (cx, cy, s) = (x + size * 0.5, y + size * 0.5, size * 0.42);
+    let t = (s * 0.16).max(1.6);
+    if delete {
+        let col = color::hex(menu_style::get().settings.danger, 255);
+        // A bin: its lid and handle, then its body.
+        stroke(
+            p,
+            [cx - s * 0.5, cy - s * 0.3],
+            [cx + s * 0.5, cy - s * 0.3],
+            t,
+            col,
+        );
+        stroke(
+            p,
+            [cx - s * 0.16, cy - s * 0.46],
+            [cx + s * 0.16, cy - s * 0.46],
+            t,
+            col,
+        );
+        p.border(cx - s * 0.36, cy - s * 0.18, s * 0.72, s * 0.68, 2.0, col);
     } else {
-        (palette::surface(), palette::border())
-    };
-    p.rounded(x, y, w, h, 8.0, plate);
-    p.border(x, y, w, h, 8.0, edge);
-    let bs = (h * 0.5).clamp(14.0, 20.0);
-    let (bx, by) = (x + 12.0, (y + (h - bs) * 0.5).round());
-    if checked {
-        p.rounded(bx, by, bs, bs, 4.0, palette::accent_fill());
-        let t = (bs * 0.13).max(1.8);
-        let mid = [bx + bs * 0.42, by + bs * 0.70];
-        stroke(p, [bx + bs * 0.22, by + bs * 0.50], mid, t, palette::text());
-        stroke(p, mid, [bx + bs * 0.78, by + bs * 0.30], t, palette::text());
-    } else {
-        p.border(bx, by, bs, bs, 4.0, palette::muted());
+        // A pencil, its point at the bottom left.
+        let col = palette::body();
+        stroke(
+            p,
+            [cx - s * 0.3, cy + s * 0.3],
+            [cx + s * 0.42, cy - s * 0.42],
+            s * 0.26,
+            col,
+        );
+        stroke(
+            p,
+            [cx - s * 0.5, cy + s * 0.5],
+            [cx - s * 0.36, cy + s * 0.36],
+            t,
+            col,
+        );
     }
-    let size = ui_theme::small();
-    let dw = p.measure(Face::Mono, size, detail);
-    let dx = x + w - 12.0 - dw;
-    p.text_line(Face::Mono, size, h, dx, y, palette::muted(), detail);
-    let nx = bx + bs + 10.0;
-    let fit = truncate_to_fit(
-        p,
-        Face::Medium,
-        ui_theme::body(),
-        name,
-        (dx - 12.0 - nx).max(0.0),
-    );
-    p.text_line(
-        Face::Medium,
-        ui_theme::body(),
-        h,
-        nx,
-        y,
-        palette::text(),
-        &fit,
-    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -887,6 +879,26 @@ pub(super) fn profile_stats_line(profile: &Profile) -> String {
         0 => counts,
         bytes => format!("{counts}, {}", format_size(bytes)),
     }
+}
+
+/// Each game log line's level: 0 information, 1 a warning, 2 an error, from its `[thread/LEVEL]`
+/// tag as the desktop launcher reads it (launcher/src/console_page.rs); a line without a tag
+/// goes on with the entry above (a stack trace, a long message) and takes its level.
+pub(super) fn log_levels(lines: &[String]) -> Vec<u8> {
+    let mut level = 0;
+    lines
+        .iter()
+        .map(|line| {
+            if line.starts_with('[') {
+                level = if line.contains("/ERROR]") || line.contains("/FATAL]") {
+                    2
+                } else {
+                    u8::from(line.contains("/WARN]"))
+                };
+            }
+            level
+        })
+        .collect()
 }
 
 pub(super) fn effective_profile_state(profile: &Profile, setup: &Setup) -> ProfileState {

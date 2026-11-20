@@ -172,12 +172,12 @@ pub type Head = [u8; 8 * 8 * 4];
 /// Where an Ely.by account changes its skin: Ely.by's public API takes no uploads.
 pub const ELY_SKINS: &str = "https://ely.by/skins";
 
-/// A skin file the player chose: the PNG, its face for a preview, and whether its arms look slim.
+/// A skin file the player chose: the PNG and its face for a preview. The player picks the arms,
+/// as Minecraft's own launchers have them do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PickedSkin {
     pub png: Vec<u8>,
     pub face: Head,
-    pub slim: bool,
 }
 
 /// Where putting on a skin ([`Backend::use_skin`]) stands.
@@ -243,6 +243,11 @@ pub trait Backend: Send {
     fn use_skin(&mut self, _png: Vec<u8>, _slim: bool) {}
     fn skin_upload(&self) -> SkinUpload {
         SkinUpload::Idle
+    }
+    /// The last lines of `profile`'s game log (`logs/latest.log` in its folder), oldest first;
+    /// none before its game has run.
+    fn game_log(&self, _profile: &str) -> Vec<String> {
+        Vec::new()
     }
     /// Every profile, installed or offered: [`VANILLA`] first, then the modpacks.
     fn profiles(&self) -> Vec<Profile> {

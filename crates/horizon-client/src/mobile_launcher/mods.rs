@@ -1,8 +1,8 @@
 //! Mod Manager: profile name tabs, per-mod ON/OFF + Remove controls, and Horizon registry browser.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_plate, format_size,
-    palette, truncate_to_fit, wrap_lines,
+    Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_plate,
+    draw_tool_button, format_size, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{ModSearch, Profile, VANILLA};
@@ -60,11 +60,53 @@ impl MobileLauncher {
         let pid = self.effective_mods_profile_id(profiles);
         let mut chip_x = ix;
         for (i, prof) in profiles.iter().enumerate() {
+            // Its name typed in place, and Done: with the keyboard up, this row is what shows.
+            if let Some((_, typed)) = self
+                .profile_rename
+                .as_ref()
+                .filter(|(id, _)| *id == prof.id)
+            {
+                let done_w = 72.0;
+                let field_w = (tabs_right - chip_x - 6.0 - done_w).min(260.0);
+                if field_w < 100.0 {
+                    break;
+                }
+                draw_input_box(
+                    ui,
+                    hits,
+                    ButtonId::FocusRenameInput,
+                    chip_x,
+                    cy,
+                    field_w,
+                    top_btn_h,
+                    // The old name until a new one is typed: it stays if none is.
+                    if typed.is_empty() { &prof.name } else { "" },
+                    typed,
+                    false,
+                    true,
+                );
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::SaveRenameProfile,
+                    chip_x + field_w + 6.0,
+                    cy,
+                    done_w,
+                    top_btn_h,
+                    Tone::Primary,
+                    "Done",
+                );
+                chip_x += field_w + done_w + 12.0;
+                continue;
+            }
             // Always show the profile's display name (not its folder id).
             let label = prof.name.as_str();
             let cw =
                 (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 26.0).clamp(72.0, 180.0);
-            if chip_x + cw > tabs_right {
+            // The modded profile shown has its own tools: rename and delete.
+            let tools = prof.id == pid && prof.id != VANILLA;
+            let tools_w = if tools { 2.0 * top_btn_h + 8.0 } else { 0.0 };
+            if chip_x + cw + tools_w > tabs_right {
                 break;
             }
             draw_button(
@@ -82,7 +124,29 @@ impl MobileLauncher {
                 },
                 label,
             );
-            chip_x += cw + 6.0;
+            chip_x += cw + 4.0;
+            if tools {
+                draw_tool_button(
+                    ui,
+                    hits,
+                    ButtonId::RenameTabProfile,
+                    chip_x,
+                    cy,
+                    top_btn_h,
+                    false,
+                );
+                draw_tool_button(
+                    ui,
+                    hits,
+                    ButtonId::DeleteTabProfile,
+                    chip_x + top_btn_h + 4.0,
+                    cy,
+                    top_btn_h,
+                    true,
+                );
+                chip_x += tools_w;
+            }
+            chip_x += 2.0;
         }
         cy += top_btn_h
             + if ultra_v {

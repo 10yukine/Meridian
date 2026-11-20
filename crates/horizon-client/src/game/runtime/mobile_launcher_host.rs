@@ -205,6 +205,11 @@ impl Host {
                     eprintln!("Meridian: no browser opened the sign-in page");
                 }
             }
+            Some(Action::CopyText(text)) => {
+                if !android_runtime::copy_text(&text) {
+                    eprintln!("Meridian: no clipboard to copy the game log to");
+                }
+            }
             Some(Action::PickSkin) => {
                 if !android_runtime::pick_file() {
                     self.screen.no_file_picker();

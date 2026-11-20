@@ -244,6 +244,19 @@ pub fn pick_file() -> bool {
     PICK_FILE.get().is_some_and(|platform| platform())
 }
 
+/// Meridian: how the platform puts text on the clipboard (`MeridianActivity.copyText`).
+static COPY_TEXT: OnceLock<fn(&str)> = OnceLock::new();
+
+/// Sets the platform's clipboard; the first one set stays.
+pub fn set_copy_text(copy: fn(&str)) {
+    let _ = COPY_TEXT.set(copy);
+}
+
+/// Puts `text` on the clipboard; false where there is none.
+pub fn copy_text(text: &str) -> bool {
+    COPY_TEXT.get().map(|platform| platform(text)).is_some()
+}
+
 /// Meridian: how the platform reads the on-screen keyboard's height (`MeridianActivity.imeHeight`).
 static IME_HEIGHT: OnceLock<fn() -> u32> = OnceLock::new();
 
