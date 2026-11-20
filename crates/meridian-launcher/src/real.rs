@@ -545,8 +545,10 @@ impl Backend for Real {
         let secrets = match &self.identity.lock().unwrap().session {
             Some(Session::Microsoft(_, secrets)) => secrets.clone(),
             _ => {
+                // The Skins page offers uploads to Microsoft accounts only: this one's session
+                // didn't come back.
                 *self.skin_upload.lock().unwrap() =
-                    SkinUpload::Failed("Sign in with Microsoft to upload a skin.".into());
+                    SkinUpload::Failed("Microsoft session expired. Sign in again.".into());
                 return;
             }
         };

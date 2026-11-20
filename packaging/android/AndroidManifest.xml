@@ -5,6 +5,14 @@
     android:versionName="0.1.0-dev">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 11+ hides other apps' activities unless asked for: the file picker for a skin
+         (MeridianActivity.pickSkin). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT" />
+            <data android:mimeType="image/png" />
+        </intent>
+    </queries>
     <application
         android:label="Meridian Dev"
         android:icon="@mipmap/ic_launcher"
