@@ -1445,10 +1445,10 @@ impl MobileLauncher {
                 "Meridian Launcher",
             );
             let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
-            let vw = p.measure(Face::Mono, 11.5, ver);
+            let vw = p.measure(Face::Regular, ui_theme::small(), ver);
             p.text_line(
-                Face::Mono,
-                11.5,
+                Face::Regular,
+                ui_theme::small(),
                 top_h,
                 ui_w - pad - settings_w - 14.0 - vw,
                 0.0,
@@ -1489,7 +1489,7 @@ impl MobileLauncher {
         let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
         let ver_pill_h = (top_h - if tight_top { 10.0 } else { 18.0 }).clamp(22.0, 28.0);
         let ver_pill_y = ((top_h - ver_pill_h) * 0.5).round();
-        let ver_pill_w = ui.ro().measure(Face::Mono, 11.5, ver) + 22.0;
+        let ver_pill_w = ui.ro().measure(Face::Regular, ui_theme::small(), ver) + 22.0;
         let ver_pill_x = ui_w - pad - ver_pill_w;
         let title_sz = if tight_top {
             15.5
@@ -1522,8 +1522,8 @@ impl MobileLauncher {
 
             // Top right: the version, plain.
             p.text_line(
-                Face::Mono,
-                11.5,
+                Face::Regular,
+                ui_theme::small(),
                 ver_pill_h,
                 ver_pill_x + 22.0,
                 ver_pill_y,

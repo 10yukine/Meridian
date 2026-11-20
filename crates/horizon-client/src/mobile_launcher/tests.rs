@@ -1399,3 +1399,12 @@ fn mods_tabs_that_dont_fit_wrap_and_a_new_profiles_name_shows() {
     assert!(l.wants_text());
     assert!(shown(&l, size).contains(&ButtonId::FocusRenameInput));
 }
+
+#[test]
+fn vanilla_note_drops_its_badge_then_its_explanation_when_tab_rows_take_the_room() {
+    let parts = [76.0, 36.0, 30.0];
+    assert_eq!(super::mods::fit_note(200.0, parts), parts);
+    assert_eq!(super::mods::fit_note(100.0, parts), [0.0, 36.0, 30.0]);
+    assert_eq!(super::mods::fit_note(40.0, parts), [0.0, 0.0, 30.0]);
+    assert_eq!(super::mods::fit_note(10.0, parts), [0.0; 3]);
+}
