@@ -172,7 +172,15 @@ pub type Head = [u8; 8 * 8 * 4];
 /// Where an Ely.by account changes its skin: Ely.by's public API takes no uploads.
 pub const ELY_SKINS: &str = "https://ely.by/skins";
 
-/// Where uploading a skin stands.
+/// A skin file the player chose: the PNG, its face for a preview, and whether its arms look slim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickedSkin {
+    pub png: Vec<u8>,
+    pub face: Head,
+    pub slim: bool,
+}
+
+/// Where putting on a skin ([`Backend::use_skin`]) stands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SkinUpload {
     #[default]
@@ -225,13 +233,14 @@ pub trait Backend: Send {
     fn free_space(&mut self) -> Result<u64, String> {
         Err("There is nothing to free up.".into())
     }
-    /// The skin file the platform's picker handed over since the last call: the PNG and its
-    /// face, or why it can't be a skin.
-    fn take_picked_skin(&mut self) -> Option<Result<(Vec<u8>, Head), String>> {
+    /// The skin file the platform's picker handed over since the last call, or why it can't be a
+    /// skin.
+    fn take_picked_skin(&mut self) -> Option<Result<PickedSkin, String>> {
         None
     }
-    /// Makes `png` the signed-in Microsoft account's skin, on a worker: [`Self::skin_upload`].
-    fn upload_skin(&mut self, _png: Vec<u8>, _slim: bool) {}
+    /// Makes `png` the account's skin: a Microsoft account's profile gets it (on a worker), an
+    /// offline account keeps it for the game on this phone. How it went: [`Self::skin_upload`].
+    fn use_skin(&mut self, _png: Vec<u8>, _slim: bool) {}
     fn skin_upload(&self) -> SkinUpload {
         SkinUpload::Idle
     }

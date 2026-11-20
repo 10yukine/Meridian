@@ -147,6 +147,15 @@ fn enter(home: &Path, launch: &Launch) -> bool {
         }
         if let Some(name) = &launch.name {
             std::env::set_var("HORIZON_PLAYER_NAME", name);
+            // The skin this offline name chose on the launcher's Skins page, as a desktop
+            // launcher hands one over.
+            if let Some((skin, slim)) = launch::offline_skin(home, name) {
+                std::env::set_var("HORIZON_OFFLINE_SKIN", skin);
+                std::env::set_var(
+                    "HORIZON_OFFLINE_SKIN_MODEL",
+                    if slim { "slim" } else { "classic" },
+                );
+            }
         }
     }
     true

@@ -20,8 +20,8 @@ mod tests;
 mod widgets;
 
 use crate::launcher_backend::{
-    Account, Backend, ELY_SKINS, Head, ModSearch, Profile, ProfileState, Setup, SignIn, SkinUpload,
-    VANILLA, valid_profile_name,
+    Account, Backend, ELY_SKINS, ModSearch, PickedSkin, Profile, ProfileState, Setup, SignIn,
+    SkinUpload, VANILLA, valid_profile_name,
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -161,7 +161,7 @@ enum ButtonId {
     // Skins
     PickSkin,
     SkinArms(bool),
-    UploadSkin,
+    UseSkin,
     OpenElySkins,
 }
 
@@ -212,13 +212,13 @@ pub struct MobileLauncher {
     /// What Settings' "Free up space" did: the bytes freed, or why not.
     freed: Option<Result<u64, String>>,
     rename_modal: Option<(String, String, Option<String>)>,
-    /// The skin file chosen on Skins, and its face for the preview.
-    skin_pick: Option<(Vec<u8>, Head)>,
-    /// Upload the chosen skin with slim arms.
+    /// The skin file chosen on Skins.
+    skin_pick: Option<PickedSkin>,
+    /// Put the chosen skin on with slim arms: the file's own at first.
     skin_slim: bool,
     /// Why the chosen file can't be a skin, or no picker opened.
     skin_error: Option<String>,
-    /// An upload of `skin_pick` was started and hasn't finished.
+    /// Putting `skin_pick` on was started and hasn't finished.
     skin_uploading: bool,
 }
 
@@ -289,6 +289,7 @@ impl MobileLauncher {
     pub fn poll(&mut self) {
         match self.backend.take_picked_skin() {
             Some(Ok(pick)) => {
+                self.skin_slim = pick.slim;
                 self.skin_pick = Some(pick);
                 self.skin_error = None;
             }
@@ -297,7 +298,7 @@ impl MobileLauncher {
         }
         if self.skin_uploading && self.backend.skin_upload() != SkinUpload::Uploading {
             self.skin_uploading = false;
-            // Uploaded: the account's own head shows it now.
+            // Put on: the account's own head shows it now.
             if self.backend.skin_upload() == SkinUpload::Done {
                 self.skin_pick = None;
             }
@@ -1053,11 +1054,11 @@ impl MobileLauncher {
                 return Some(Action::PickSkin);
             }
             ButtonId::SkinArms(slim) => self.skin_slim = slim,
-            ButtonId::UploadSkin => {
-                if let Some((png, _)) = &self.skin_pick
+            ButtonId::UseSkin => {
+                if let Some(pick) = &self.skin_pick
                     && !self.skin_uploading
                 {
-                    self.backend.upload_skin(png.clone(), self.skin_slim);
+                    self.backend.use_skin(pick.png.clone(), self.skin_slim);
                     self.skin_uploading = true;
                 }
             }

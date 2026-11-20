@@ -137,6 +137,41 @@ pub fn take(root: &Path) -> Option<Launch> {
     launch
 }
 
+/// The skins offline accounts chose on Skins: `<name>.classic.png` or `<name>.slim.png`.
+const SKINS: &str = "launcher-skins";
+
+/// The skin the offline account `name` chose, and whether its arms are slim: what the game wears
+/// for that name (`HORIZON_OFFLINE_SKIN`, `horizon_client::skins::offline_skin`).
+pub fn offline_skin(root: &Path, name: &str) -> Option<(PathBuf, bool)> {
+    if !valid_offline_name(name) {
+        return None;
+    }
+    [(false, "classic"), (true, "slim")]
+        .into_iter()
+        .map(|(slim, arms)| (root.join(SKINS).join(format!("{name}.{arms}.png")), slim))
+        .find(|(path, _)| path.is_file())
+}
+
+/// Keeps `png` (checked: a 64x64 or 64x32 PNG) as the offline account `name`'s skin, in place of
+/// the one it had.
+pub(crate) fn save_offline_skin(root: &Path, name: &str, png: &[u8], slim: bool) -> io::Result<()> {
+    if !valid_offline_name(name) {
+        return Err(io::Error::other("not an offline name"));
+    }
+    let dir = root.join(SKINS);
+    fs::create_dir_all(&dir)?;
+    let (arms, other) = if slim {
+        ("slim", "classic")
+    } else {
+        ("classic", "slim")
+    };
+    // Written beside and renamed: a game starting now never reads half a skin.
+    let part = dir.join(format!("{name}.part"));
+    fs::write(&part, png)?;
+    fs::rename(&part, dir.join(format!("{name}.{arms}.png")))?;
+    remove(&dir.join(format!("{name}.{other}.png")))
+}
+
 const RUNNING: &str = "launch-running";
 
 /// The game is about to run: a marker only its normal end removes, so the launcher can tell
@@ -229,6 +264,27 @@ mod tests {
             assert!(!session_file(&root).exists(), "{profile}");
             assert!(!root.join(FILE).exists(), "{profile}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_offline_name_keeps_one_skin_with_its_arms() {
+        let root = scratch();
+        assert_eq!(offline_skin(&root, "Steve"), None);
+        save_offline_skin(&root, "Steve", b"wide", false).unwrap();
+        let (path, slim) = offline_skin(&root, "Steve").unwrap();
+        assert!(!slim);
+        assert_eq!(fs::read(path).unwrap(), b"wide");
+        // A new choice replaces the old one, arms included.
+        save_offline_skin(&root, "Steve", b"thin", true).unwrap();
+        let (path, slim) = offline_skin(&root, "Steve").unwrap();
+        assert!(slim);
+        assert_eq!(fs::read(path).unwrap(), b"thin");
+        assert_eq!(fs::read_dir(root.join(SKINS)).unwrap().count(), 1);
+        // Each name its own; a name that isn't one is neither written nor read.
+        assert_eq!(offline_skin(&root, "Alex"), None);
+        assert!(save_offline_skin(&root, "../x", b"x", false).is_err());
+        assert_eq!(offline_skin(&root, "../x"), None);
         fs::remove_dir_all(root).unwrap();
     }
 

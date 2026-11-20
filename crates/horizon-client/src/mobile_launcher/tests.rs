@@ -2,8 +2,9 @@ use super::widgets::{Canvas, count_label, profile_stats_line};
 use super::{Action, AuthForm, ButtonId, MobileLauncher, Route};
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
-    Account, Backend, ELY_SKINS, Fake, Head, ModInfo, ModSearch, Profile, ProfileMod, ProfileState,
-    Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, profile_id, valid_offline_name,
+    Account, Backend, ELY_SKINS, Fake, Head, ModInfo, ModSearch, PickedSkin, Profile, ProfileMod,
+    ProfileState, Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, profile_id,
+    valid_offline_name,
 };
 use crate::ui_theme::Ui;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,7 @@ use std::sync::{Arc, Mutex};
 /// for, and how the last one went.
 #[derive(Default)]
 struct SkinStub {
-    picked: Option<Result<(Vec<u8>, Head), String>>,
+    picked: Option<Result<PickedSkin, String>>,
     uploads: Vec<(Vec<u8>, bool)>,
     status: SkinUpload,
 }
@@ -173,10 +174,10 @@ impl Backend for StubBackend {
     fn free_space(&mut self) -> Result<u64, String> {
         Ok(std::mem::take(&mut self.reclaim))
     }
-    fn take_picked_skin(&mut self) -> Option<Result<(Vec<u8>, Head), String>> {
+    fn take_picked_skin(&mut self) -> Option<Result<PickedSkin, String>> {
         self.skins.lock().unwrap().picked.take()
     }
-    fn upload_skin(&mut self, png: Vec<u8>, slim: bool) {
+    fn use_skin(&mut self, png: Vec<u8>, slim: bool) {
         let mut skins = self.skins.lock().unwrap();
         skins.uploads.push((png, slim));
         skins.status = SkinUpload::Uploading;
@@ -1104,7 +1105,7 @@ fn launcher_font_choice_persists_in_horizon_txt_across_restarts() {
 }
 
 #[test]
-fn skins_upload_a_chosen_png_for_microsoft_and_send_ely_to_its_website() {
+fn skins_put_on_a_chosen_png_and_send_ely_to_its_website() {
     let skins = Arc::new(Mutex::new(SkinStub::default()));
     let mut l = MobileLauncher::new(Box::new(StubBackend {
         accounts: vec![
@@ -1137,23 +1138,33 @@ fn skins_upload_a_chosen_png_for_microsoft_and_send_ely_to_its_website() {
         click_button(&mut l, size, ButtonId::PickSkin),
         Some(Action::PickSkin)
     );
-    // Nothing to upload until the picker hands a file over.
+    // Nothing to put on until the picker hands a file over.
     l.poll();
-    assert!(!ids(&l).contains(&ButtonId::UploadSkin));
+    assert!(!ids(&l).contains(&ButtonId::UseSkin));
 
-    skins.lock().unwrap().picked = Some(Ok((b"skin.png".to_vec(), [7; 8 * 8 * 4])));
+    let pick = |slim| PickedSkin {
+        png: b"skin.png".to_vec(),
+        face: [7; 8 * 8 * 4],
+        slim,
+    };
+    skins.lock().unwrap().picked = Some(Ok(pick(true)));
     l.poll();
+    // The arms start as the file's own.
+    assert!(l.skin_slim);
+    skins.lock().unwrap().picked = Some(Ok(pick(false)));
+    l.poll();
+    assert!(!l.skin_slim);
     for size in [[914, 411], [856, 384], [2400, 1080]] {
         assert_hits_fit_without_overlap(&l, size, "skin-chosen");
     }
     click_button(&mut l, size, ButtonId::SkinArms(true));
-    click_button(&mut l, size, ButtonId::UploadSkin);
+    click_button(&mut l, size, ButtonId::UseSkin);
     assert_eq!(
         skins.lock().unwrap().uploads,
         vec![(b"skin.png".to_vec(), true)]
     );
-    // While it uploads there is no second Upload to tap.
-    assert!(!ids(&l).contains(&ButtonId::UploadSkin));
+    // While it goes on there is no second button to tap.
+    assert!(!ids(&l).contains(&ButtonId::UseSkin));
     skins.lock().unwrap().status = SkinUpload::Done;
     l.poll();
     assert!(
@@ -1170,6 +1181,13 @@ fn skins_upload_a_chosen_png_for_microsoft_and_send_ely_to_its_website() {
         click_button(&mut l, size, ButtonId::OpenElySkins),
         Some(Action::OpenUrl(ELY_SKINS.into()))
     );
+    assert!(
+        !ids(&l).contains(&ButtonId::PickSkin),
+        "Ely.by: on its website"
+    );
     l.backend.switch_account(2).unwrap();
-    assert!(!ids(&l).contains(&ButtonId::PickSkin), "offline: no upload");
+    assert!(
+        ids(&l).contains(&ButtonId::PickSkin),
+        "offline: kept on this phone"
+    );
 }

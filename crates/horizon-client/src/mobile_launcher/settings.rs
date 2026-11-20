@@ -10,8 +10,8 @@ use crate::launcher_backend::{Account, Profile, Setup, SkinUpload};
 use crate::ui_theme::{self, Face};
 
 impl MobileLauncher {
-    /// The account's skin: a Microsoft account uploads a PNG to its profile, an Ely.by one
-    /// changes it on ely.by, an offline one wears the default skin for its name.
+    /// The account's skin: a chosen PNG goes to a Microsoft account's profile, or stays on this
+    /// phone for an offline account's game; an Ely.by account changes its own on ely.by.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_skins_view(
         &self,
@@ -59,7 +59,7 @@ impl MobileLauncher {
         let head = self
             .skin_pick
             .as_ref()
-            .map(|(_, face)| face)
+            .map(|pick| &pick.face)
             .or(own.as_ref());
         let name = account.as_ref().map_or("Player", account_short);
         let provider = account
@@ -102,7 +102,7 @@ impl MobileLauncher {
         let mut by = cy + if compact_v { 58.0 } else { 66.0 };
         let upload = self.backend.skin_upload();
         let status = match account {
-            Some(Account::Microsoft { .. }) => {
+            Some(Account::Microsoft { .. } | Account::Offline { .. }) => {
                 draw_button(
                     ui,
                     hits,
@@ -137,18 +137,18 @@ impl MobileLauncher {
                     }
                     by += btn_h + 10.0;
                     if self.skin_uploading {
-                        Some(("Uploading...".to_owned(), palette::muted()))
+                        Some(("Putting it on...".to_owned(), palette::muted()))
                     } else {
                         draw_button(
                             ui,
                             hits,
-                            ButtonId::UploadSkin,
+                            ButtonId::UseSkin,
                             tx,
                             by,
-                            210.0,
+                            170.0,
                             btn_h,
                             Tone::Primary,
-                            "Upload to Microsoft",
+                            "Use This Skin",
                         );
                         match upload {
                             SkinUpload::Failed(why) => Some((why, col_danger)),
@@ -174,14 +174,6 @@ impl MobileLauncher {
                     "Change Skin on ely.by",
                 );
                 None
-            }
-            Some(Account::Offline { .. }) => {
-                // No buttons: the line goes where they would.
-                by -= btn_h + 10.0;
-                Some((
-                    "Offline accounts wear the default skin for their name.".to_owned(),
-                    palette::muted(),
-                ))
             }
             None => None,
         };

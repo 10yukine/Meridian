@@ -524,7 +524,7 @@ impl Backend for Real {
         Ok(bytes)
     }
 
-    fn take_picked_skin(&mut self) -> Option<Result<(Vec<u8>, Head), String>> {
+    fn take_picked_skin(&mut self) -> Option<Result<PickedSkin, String>> {
         let path = self.root.join(PICKED_SKIN);
         let file = fs::File::open(&path).ok()?;
         let mut png = Vec::new();
@@ -533,15 +533,27 @@ impl Backend for Real {
             .read_to_end(&mut png);
         let _ = fs::remove_file(&path);
         Some(match read {
-            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::face(&png)
-                .map(|face| (png, face))
+            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::skin(&png)
+                .map(|(face, slim)| PickedSkin { png, face, slim })
                 .ok_or_else(|| "Choose a 64x64 PNG skin.".to_owned()),
             Ok(_) => Err("That file is too big for a skin.".into()),
             Err(e) => Err(format!("Could not read the file: {e}")),
         })
     }
 
-    fn upload_skin(&mut self, png: Vec<u8>, slim: bool) {
+    fn use_skin(&mut self, png: Vec<u8>, slim: bool) {
+        // An offline account wears it in the game on this phone: kept beside its name.
+        if let Some(account) = self.account()
+            && let Account::Offline { name } = &account
+        {
+            let kept = launch::save_offline_skin(&self.root, name, &png, slim);
+            self.heads.remove(&account);
+            *self.skin_upload.lock().unwrap() = match kept {
+                Ok(()) => SkinUpload::Done,
+                Err(e) => SkinUpload::Failed(format!("Skin not saved: {e}")),
+            };
+            return;
+        }
         let secrets = match &self.identity.lock().unwrap().session {
             Some(Session::Microsoft(_, secrets)) => secrets.clone(),
             _ => {
