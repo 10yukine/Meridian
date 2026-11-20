@@ -2,8 +2,8 @@
 
 use super::widgets::{
     Canvas, HitRect, Tone, account_label, account_provider_tag, account_short, count_label,
-    draw_button, draw_input_box, draw_plate, draw_player_head, draw_skin_body, format_size,
-    palette, truncate_to_fit, wrap_lines,
+    draw_button, draw_input_box, draw_plate, draw_player_head, draw_skin_3d, format_size, palette,
+    truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{Account, Profile, Setup, SkinUpload};
@@ -55,7 +55,8 @@ impl MobileLauncher {
         // The whole figure, head to feet: the chosen file until it is put on, else the account's
         // own (its face alone until that has loaded).
         let tile_h = (y + avail_h - cy - if compact_v { 10.0 } else { 18.0 }).max(80.0);
-        let texel = ((tile_h - 20.0) / 32.0).floor().max(2.0);
+        // Room for the figure turned and tilted: about 34 pixels tall, 18 wide.
+        let texel = ((tile_h - 20.0) / 34.0).floor().max(2.0);
         let tile_w = 16.0 * texel + 32.0;
         let skin = self
             .skin_pick
@@ -72,14 +73,15 @@ impl MobileLauncher {
             p.rounded(ix, cy, tile_w, tile_h, 14.0, palette::surface());
             p.border(ix, cy, tile_w, tile_h, 14.0, palette::border());
             if let Some((skin, slim)) = &skin {
-                let figure_w = if *slim { 14.0 } else { 16.0 } * texel;
-                draw_skin_body(
+                draw_skin_3d(
                     p,
-                    ix + ((tile_w - figure_w) * 0.5).round(),
-                    cy + ((tile_h - 32.0 * texel) * 0.5).round(),
+                    ix + (tile_w * 0.5).round(),
+                    cy + (tile_h * 0.5).round(),
                     texel,
                     skin,
                     *slim,
+                    self.skin_yaw,
+                    self.skin_pitch,
                 );
             } else {
                 let head = account.as_ref().and_then(|a| self.backend.player_head(a));

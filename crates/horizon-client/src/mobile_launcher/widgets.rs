@@ -532,22 +532,6 @@ pub(super) fn draw_player_head(
     }
 }
 
-pub(super) fn draw_player_head_with_dot(
-    p: &mut Ui,
-    x: f32,
-    y: f32,
-    size: f32,
-    head: Option<&Head>,
-    name: &str,
-    dot_col: u32,
-) {
-    draw_player_head(p, x, y, size, head, name);
-    let dx = x + size - 7.0;
-    let dy = y + size - 7.0;
-    p.rounded(dx - 2.0, dy - 2.0, 11.0, 11.0, 5.5, palette::rail());
-    p.rounded(dx, dy, 7.0, 7.0, 3.5, dot_col);
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_input_box(
     ui: &mut Canvas<'_, '_>,
@@ -610,49 +594,176 @@ pub(super) fn draw_input_box(
     hits.push(hit);
 }
 
-/// A skin's front, head to feet, `texel` pixels to a skin texel: 32 texels tall, 16 wide (14
-/// with slim arms). Each part's outer layer (hat, jacket, sleeves, trousers) lies over it.
-pub(super) fn draw_skin_body(p: &mut Ui, x: f32, y: f32, texel: f32, skin: &[u8], slim: bool) {
-    if skin.len() < 64 * 64 * 4 {
-        return;
-    }
+/// The player model's six parts and their outer layers, in skin pixels with y up and the figure
+/// facing +z: where each sits in the skin (u, v), its size (w, h, d), its centre, and how far
+/// the outer layer stands off it (hat, jacket, sleeves, trousers).
+fn player_cuboids(slim: bool) -> Vec<((usize, usize), (usize, usize, usize), [f32; 3], f32)> {
     let arm = if slim { 3 } else { 4 };
-    // (base's x, y; outer layer's x, y; width, height; where on the figure).
+    let half_arm = arm as f32 / 2.0;
     let parts = [
-        ((8, 8), (40, 8), 8, 8, (arm, 0)),
-        ((20, 20), (20, 36), 8, 12, (arm, 8)),
-        ((44, 20), (44, 36), arm, 12, (0, 8)),
-        ((36, 52), (52, 52), arm, 12, (arm + 8, 8)),
-        ((4, 20), (4, 36), 4, 12, (arm, 20)),
-        ((20, 52), (4, 52), 4, 12, (arm + 4, 20)),
+        ((0, 0), (32, 0), (8, 8, 8), [0.0, 28.0, 0.0], 0.5),
+        ((16, 16), (16, 32), (8, 12, 4), [0.0, 18.0, 0.0], 0.25),
+        (
+            (40, 16),
+            (40, 32),
+            (arm, 12, 4),
+            [-4.0 - half_arm, 18.0, 0.0],
+            0.25,
+        ),
+        (
+            (32, 48),
+            (48, 48),
+            (arm, 12, 4),
+            [4.0 + half_arm, 18.0, 0.0],
+            0.25,
+        ),
+        ((0, 16), (0, 32), (4, 12, 4), [-2.0, 6.0, 0.0], 0.25),
+        ((16, 48), (0, 48), (4, 12, 4), [2.0, 6.0, 0.0], 0.25),
     ];
-    let mut blit = |(sx, sy): (usize, usize), w: usize, h: usize, (fx, fy): (usize, usize)| {
-        for j in 0..h {
-            for i in 0..w {
-                let at = ((sy + j) * 64 + sx + i) * 4;
-                let a = skin[at + 3];
-                if a == 0 {
-                    continue;
+    parts
+        .into_iter()
+        .flat_map(|(base, outer, size, centre, grow)| {
+            [(base, size, centre, 0.0), (outer, size, centre, grow)]
+        })
+        .collect()
+}
+
+/// A skin on the player model turned `yaw` about its height and tilted `pitch` toward the
+/// viewer from above: one quad per visible skin pixel, as (corners in skin pixels about the
+/// figure's middle with y down, depth toward the viewer, colour), farthest first. Bottoms are
+/// left out: a viewer level with the figure or above it never sees them.
+pub(super) fn skin_quads(
+    skin: &[u8],
+    slim: bool,
+    yaw: f32,
+    pitch: f32,
+) -> Vec<([[f32; 2]; 4], f32, u32)> {
+    let mut quads = Vec::new();
+    if skin.len() < 64 * 64 * 4 {
+        return quads;
+    }
+    let (sin_y, cos_y) = yaw.sin_cos();
+    let (sin_p, cos_p) = pitch.sin_cos();
+    // Into the view: screen x, screen y (down), depth (toward the viewer).
+    let turn = |[x, y, z]: [f32; 3]| {
+        let xr = x * cos_y + z * sin_y;
+        let zr = -x * sin_y + z * cos_y;
+        [xr, -(y * cos_p - zr * sin_p), y * sin_p + zr * cos_p]
+    };
+    let add =
+        |a: [f32; 3], b: [f32; 3], t: f32| [a[0] + b[0] * t, a[1] + b[1] * t, a[2] + b[2] * t];
+    for ((u, v), (w, h, d), c, grow) in player_cuboids(slim) {
+        let (hx, hy, hz) = (
+            w as f32 / 2.0 + grow,
+            h as f32 / 2.0 + grow,
+            d as f32 / 2.0 + grow,
+        );
+        // About the figure's middle (it is 32 pixels tall).
+        let (x0, x1, y0, y1, z0, z1) = (
+            c[0] - hx,
+            c[0] + hx,
+            c[1] - 16.0 - hy,
+            c[1] - 16.0 + hy,
+            -hz,
+            hz,
+        );
+        let (sx, sy, sz) = (x1 - x0, y1 - y0, z1 - z0);
+        // Each face: where it sits in the skin, its size there, its top-left corner, the
+        // directions of its pixel columns and rows, and its normal.
+        let faces = [
+            (
+                (u + d, v + d),
+                (w, h),
+                [x0, y1, z1],
+                [sx, 0.0, 0.0],
+                [0.0, -sy, 0.0],
+                [0.0, 0.0, 1.0],
+            ),
+            (
+                (u + 2 * d + w, v + d),
+                (w, h),
+                [x1, y1, z0],
+                [-sx, 0.0, 0.0],
+                [0.0, -sy, 0.0],
+                [0.0, 0.0, -1.0],
+            ),
+            (
+                (u, v + d),
+                (d, h),
+                [x0, y1, z0],
+                [0.0, 0.0, sz],
+                [0.0, -sy, 0.0],
+                [-1.0, 0.0, 0.0],
+            ),
+            (
+                (u + d + w, v + d),
+                (d, h),
+                [x1, y1, z1],
+                [0.0, 0.0, -sz],
+                [0.0, -sy, 0.0],
+                [1.0, 0.0, 0.0],
+            ),
+            (
+                (u + d, v),
+                (w, d),
+                [x0, y1, z0],
+                [sx, 0.0, 0.0],
+                [0.0, 0.0, sz],
+                [0.0, 1.0, 0.0],
+            ),
+        ];
+        for ((tu, tv), (tw, th), origin, cols, rows, normal) in faces {
+            let n = turn(normal);
+            if n[2] <= 1e-3 {
+                continue;
+            }
+            // Lit from the viewer's upper side, so the faces stay apart as it turns.
+            let shade = 0.5 + 0.5 * (0.6 * -n[1] + 0.8 * n[2]).clamp(0.0, 1.0);
+            for j in 0..th {
+                for i in 0..tw {
+                    let at = ((tv + j) * 64 + tu + i) * 4;
+                    let a = skin[at + 3];
+                    if a == 0 {
+                        continue;
+                    }
+                    let lit = |c: u8| (f32::from(c) * shade).round() as u32;
+                    let rgb = (lit(skin[at]) << 16) | (lit(skin[at + 1]) << 8) | lit(skin[at + 2]);
+                    let (fi, fj) = (i as f32 / tw as f32, j as f32 / th as f32);
+                    let (di, dj) = (1.0 / tw as f32, 1.0 / th as f32);
+                    let corner = |a: f32, b: f32| turn(add(add(origin, cols, a), rows, b));
+                    let c = [
+                        corner(fi, fj),
+                        corner(fi + di, fj),
+                        corner(fi + di, fj + dj),
+                        corner(fi, fj + dj),
+                    ];
+                    let depth = c.iter().map(|p| p[2]).sum::<f32>() / 4.0;
+                    quads.push((c.map(|p| [p[0], p[1]]), depth, color::hex(rgb, a)));
                 }
-                let rgb = (u32::from(skin[at]) << 16)
-                    | (u32::from(skin[at + 1]) << 8)
-                    | u32::from(skin[at + 2]);
-                p.rounded(
-                    x + (fx + i) as f32 * texel,
-                    y + (fy + j) as f32 * texel,
-                    texel.ceil(),
-                    texel.ceil(),
-                    0.0,
-                    color::hex(rgb, a),
-                );
             }
         }
-    };
-    for (base, _, w, h, at) in parts {
-        blit(base, w, h, at);
     }
-    for (_, outer, w, h, at) in parts {
-        blit(outer, w, h, at);
+    quads.sort_by(|a, b| a.1.total_cmp(&b.1));
+    quads
+}
+
+/// The skin on the player model ([`skin_quads`]), its middle at (`cx`, `cy`), `texel` pixels
+/// to a skin pixel.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_skin_3d(
+    p: &mut Ui,
+    cx: f32,
+    cy: f32,
+    texel: f32,
+    skin: &[u8],
+    slim: bool,
+    yaw: f32,
+    pitch: f32,
+) {
+    let k = p.density / p.batch.scale;
+    for (corners, _, col) in skin_quads(skin, slim, yaw, pitch) {
+        let at = corners.map(|[x, y]| [(cx + x * texel) * k, (cy + y * texel) * k]);
+        p.batch.fill_quad(p.atlas, at, col);
     }
 }
 

@@ -159,6 +159,9 @@ impl Backend for StubBackend {
         }
         self.sign_in = SignIn::Idle;
     }
+    fn dismiss_sign_in(&mut self) {
+        self.sign_in = SignIn::Idle;
+    }
     fn setup(&self) -> Setup {
         self.setup.clone()
     }
@@ -1436,4 +1439,92 @@ fn vanilla_note_drops_its_badge_then_its_explanation_when_room_runs_short() {
     assert_eq!(super::mods::fit_note(100.0, parts), [0.0, 36.0, 30.0]);
     assert_eq!(super::mods::fit_note(40.0, parts), [0.0, 0.0, 30.0]);
     assert_eq!(super::mods::fit_note(10.0, parts), [0.0; 3]);
+}
+
+#[test]
+fn a_failed_sign_in_is_forgotten_and_not_approved_offers_the_offline_account() {
+    use crate::launcher_backend::NOT_APPROVED;
+    let size = [914, 411];
+    // Signed in offline, an earlier Microsoft try failed: adding an account shows the ways in.
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        sign_in: SignIn::Failed(NOT_APPROVED.into()),
+        ..StubBackend::default()
+    }));
+    click_button(&mut l, size, ButtonId::OpenAccountSwitcher);
+    click_button(&mut l, size, ButtonId::AddAccount);
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::SignInMicrosoft), "{ids:?}");
+    assert_eq!(l.backend().sign_in(), SignIn::Idle);
+    // Not approved yet: the offline account, not another try.
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        setup: Setup::Ready,
+        sign_in: SignIn::Failed(NOT_APPROVED.into()),
+        ..StubBackend::default()
+    }));
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::OpenOfflineEntry) && !ids.contains(&ButtonId::RetrySignIn));
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "not-approved");
+    }
+    click_button(&mut l, size, ButtonId::OpenOfflineEntry);
+    assert!(shown(&l, size).contains(&ButtonId::ConfirmOffline));
+    // Another failure keeps Try Again; Back forgets it.
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        setup: Setup::Ready,
+        sign_in: SignIn::Failed("No connection.".into()),
+        ..StubBackend::default()
+    }));
+    assert!(shown(&l, size).contains(&ButtonId::RetrySignIn));
+    click_button(&mut l, size, ButtonId::CancelSignIn);
+    assert_eq!(l.backend().sign_in(), SignIn::Idle);
+}
+
+#[test]
+fn the_skin_figure_shows_its_front_level_and_turns() {
+    use super::widgets::skin_quads;
+    // Only the head's front, its top-left pixel marked.
+    let mut skin = vec![0u8; 64 * 64 * 4];
+    for y in 8..16 {
+        for x in 8..16 {
+            skin[(y * 64 + x) * 4..][..4].copy_from_slice(&[10, 20, 30, 255]);
+        }
+    }
+    skin[(8 * 64 + 8) * 4..][..4].copy_from_slice(&[250, 0, 0, 255]);
+    let front = skin_quads(&skin, false, 0.0, 0.0);
+    assert_eq!(front.len(), 64);
+    // Its top-left pixel sits at the head's top-left, as the flat front view drew it.
+    let top_left = front
+        .iter()
+        .min_by(|a, b| (a.0[0][0] + a.0[0][1]).total_cmp(&(b.0[0][0] + b.0[0][1])))
+        .unwrap();
+    assert_eq!(top_left.0[0], [-4.0, -16.0]);
+    assert_eq!(front.iter().filter(|q| q.2 == top_left.2).count(), 1);
+    // Turned a little and tilted it still shows; turned around, the front is out of sight.
+    assert_eq!(skin_quads(&skin, false, 0.6, 0.4).len(), 64);
+    assert!(skin_quads(&skin, false, std::f32::consts::PI, 0.2).is_empty());
+    // Farthest first, so nearer pixels draw over them.
+    let turned = skin_quads(&vec![255; 64 * 64 * 4], true, 0.5, 0.2);
+    assert!(turned.windows(2).all(|w| w[0].1 <= w[1].1));
+}
+
+#[test]
+fn a_drag_on_skins_turns_the_figure() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    click_button(&mut l, [914, 411], ButtonId::OpenSkins);
+    let (yaw, pitch) = (l.skin_yaw, l.skin_pitch);
+    l.scroll(100.0, 1000.0);
+    assert!(l.skin_yaw > yaw);
+    assert!(l.skin_pitch > pitch && l.skin_pitch <= 0.6);
 }

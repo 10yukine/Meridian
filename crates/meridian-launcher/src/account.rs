@@ -17,6 +17,9 @@ mod session {
 const SCOPE: &str = "XboxLive.signin offline_access";
 pub const NOT_CONFIGURED: &str =
     "Microsoft sign-in is unavailable in this build (HORIZON_MSA_CLIENT_ID is unset).";
+/// What the Minecraft services answer a launcher whose Azure app Mojang hasn't approved.
+pub const NOT_APPROVED: &str =
+    "The Minecraft services refused this launcher: its app is not approved by Mojang yet.";
 const DOES_NOT_OWN: &str = "This account doesn't own Minecraft: Java Edition.";
 const SIGN_IN_AGAIN: &str = "Your Microsoft sign-in expired. Sign in again.";
 const NO_PROFILE: &str =
@@ -414,10 +417,7 @@ fn minecraft_token(ep: &Endpoints, xtoken: &str) -> Result<(String, u64), String
     match (status, str_field(&mc, "access_token")) {
         (200, Some(token)) => Ok((token, lifetime(&mc))),
         // New Azure apps are refused until Mojang approves them (Minecraft API access).
-        (403, _) => Err(
-            "The Minecraft services refused this launcher: its app is not approved by Mojang yet."
-                .into(),
-        ),
+        (403, _) => Err(NOT_APPROVED.into()),
         (429, _) => Err("Too many sign-ins in a short time. Wait a minute and try again.".into()),
         _ => Err("The Minecraft services refused the sign-in.".into()),
     }

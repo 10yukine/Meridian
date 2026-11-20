@@ -375,6 +375,14 @@ impl Backend for Real {
         }
     }
 
+    fn dismiss_sign_in(&mut self) {
+        self.cancel_sign_in();
+        let mut state = self.identity.lock().unwrap();
+        if !matches!(state.sign_in, SignIn::Done(_)) {
+            state.sign_in = SignIn::Idle;
+        }
+    }
+
     fn game_session(&self) -> Result<Option<GameSession>, String> {
         let state = self.identity.lock().unwrap();
         match (state.session.as_ref(), state.shelf.active) {

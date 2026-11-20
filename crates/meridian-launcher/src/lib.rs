@@ -215,6 +215,8 @@ pub trait Backend: Send {
     /// Makes `name` the offline account, or says why it can't be (see [`valid_offline_name`]).
     fn sign_in_offline(&mut self, name: &str) -> Result<Account, String>;
     fn sign_out(&mut self);
+    /// Stops a sign-in in progress, or forgets one that failed; the accounts stay.
+    fn dismiss_sign_in(&mut self);
     /// The current online session, if any. Offline accounts return None.
     fn game_session(&self) -> Result<Option<GameSession>, String> {
         Ok(None)
@@ -405,4 +407,5 @@ mod mojang;
 mod real;
 mod sources;
 
+pub use account::NOT_APPROVED;
 pub use real::Real;

@@ -2,11 +2,10 @@
 
 use super::widgets::{
     Canvas, HitRect, Tone, account_provider_tag, account_short, draw_button, draw_input_box,
-    draw_north_star_badge, draw_plate, draw_player_head_with_dot, palette, truncate_to_fit,
-    wrap_lines,
+    draw_north_star_badge, draw_plate, draw_player_head, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, ElyField, MobileLauncher};
-use crate::launcher_backend::{Account, SignIn, valid_offline_name};
+use crate::launcher_backend::{Account, NOT_APPROVED, SignIn, valid_offline_name};
 use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
@@ -601,16 +600,39 @@ impl MobileLauncher {
         w: f32,
         avail_h: f32,
         sign_in: &SignIn,
-        col_warn: u32,
     ) {
         let compact_v = avail_h < 320.0;
-        let card_h = 310.0_f32.min(avail_h);
-        let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
-        draw_plate(ui, x, cy_top, w, card_h, palette::border());
-
         let inner_x = x + 28.0;
         let inner_w = w - 56.0;
-        let mut cy = cy_top + if compact_v { 14.0 } else { 24.0 };
+        let pad = if compact_v { 14.0 } else { 24.0 };
+        // Until Mojang approves the app, Microsoft sign-in can't work: the offline account is
+        // the way in.
+        let not_approved = matches!(sign_in, SignIn::Failed(e) if e == NOT_APPROVED);
+        let (title, body) = match sign_in {
+            SignIn::Failed(_) if not_approved => (
+                "Microsoft sign-in isn't available yet",
+                "Mojang hasn't approved Meridian's sign-in yet. Play with an offline account until then.",
+            ),
+            SignIn::Failed(err) => ("Sign-in failed", err.as_str()),
+            _ => ("", ""),
+        };
+        let lines: Vec<String> =
+            wrap_lines(ui.ro(), Face::Regular, ui_theme::sizes().ui, body, inner_w)
+                .into_iter()
+                .take(3)
+                .collect();
+        // The card is as tall as what it holds.
+        let content_h = match sign_in {
+            SignIn::Starting => 32.0 + 24.0 + 48.0,
+            SignIn::Code { .. } if compact_v => 30.0 + 54.0 + 8.0 + 22.0 + 48.0,
+            SignIn::Code { .. } => 38.0 + 64.0 + 12.0 + 26.0 + 48.0,
+            SignIn::Failed(_) => 38.0 + lines.len() as f32 * 20.0 + 20.0 + 48.0,
+            SignIn::Idle | SignIn::Done(_) => 0.0,
+        };
+        let card_h = (content_h + 2.0 * pad).min(avail_h);
+        let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
+        draw_plate(ui, x, cy_top, w, card_h, palette::border());
+        let mut cy = cy_top + pad;
 
         match sign_in {
             SignIn::Starting => {
@@ -629,7 +651,7 @@ impl MobileLauncher {
                         "Connecting...",
                     );
                 }
-                cy += 96.0;
+                cy += 56.0;
                 draw_button(
                     ui,
                     hits,
@@ -679,14 +701,14 @@ impl MobileLauncher {
 
                 if let Some(p) = ui.paint() {
                     let msg = self.status_note.as_deref().unwrap_or(url.as_str());
-                    let fit = truncate_to_fit(p, Face::Mono, ui_theme::small(), msg, inner_w);
+                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), msg, inner_w);
                     p.text_line(
-                        Face::Mono,
+                        Face::Regular,
                         ui_theme::small(),
                         18.0,
                         inner_x,
                         cy,
-                        col_warn,
+                        palette::muted(),
                         &fit,
                     );
                 }
@@ -717,7 +739,7 @@ impl MobileLauncher {
                     "Cancel",
                 );
             }
-            SignIn::Failed(err) => {
+            SignIn::Failed(_) => {
                 if let Some(p) = ui.paint() {
                     p.text_line(
                         Face::SemiBold,
@@ -730,38 +752,37 @@ impl MobileLauncher {
                         inner_x,
                         cy,
                         palette::text(),
-                        "Sign-in failed",
+                        title,
                     );
-                    cy += 38.0;
-                    for (i, line) in
-                        wrap_lines(p, Face::Regular, ui_theme::sizes().ui, err, inner_w)
-                            .into_iter()
-                            .take(3)
-                            .enumerate()
-                    {
+                    for (i, line) in lines.iter().enumerate() {
                         p.text_line(
                             Face::Regular,
                             ui_theme::sizes().ui,
                             20.0,
                             inner_x,
-                            cy + i as f32 * 20.0,
+                            cy + 38.0 + i as f32 * 20.0,
                             palette::body(),
-                            &line,
+                            line,
                         );
                     }
                 }
-                let btn_y = cy_top + card_h - 62.0;
+                let btn_y = cy + 38.0 + lines.len() as f32 * 20.0 + 20.0;
                 let half_w = (inner_w - 12.0) * 0.5;
+                let (go, go_label) = if not_approved {
+                    (ButtonId::OpenOfflineEntry, "Use Offline Account")
+                } else {
+                    (ButtonId::RetrySignIn, "Try Again")
+                };
                 draw_button(
                     ui,
                     hits,
-                    ButtonId::RetrySignIn,
+                    go,
                     inner_x,
                     btn_y,
                     half_w,
                     48.0,
                     Tone::Primary,
-                    "Try Again",
+                    go_label,
                 );
                 draw_button(
                     ui,
@@ -879,19 +900,7 @@ impl MobileLauncher {
                 let head_y = cy + ((item_h - head_sz) * 0.5).round();
                 let head = self.backend.player_head(acct);
                 let short = account_short(acct);
-                let dot_col = match acct {
-                    Account::Offline { .. } => palette::accent_star(),
-                    Account::Microsoft { .. } | Account::Ely { .. } => col_success,
-                };
-                draw_player_head_with_dot(
-                    p,
-                    inner_x + 12.0,
-                    head_y,
-                    head_sz,
-                    head.as_ref(),
-                    short,
-                    dot_col,
-                );
+                draw_player_head(p, inner_x + 12.0, head_y, head_sz, head.as_ref(), short);
                 let tx = inner_x + head_sz + 24.0;
                 p.text_line(
                     Face::SemiBold,
@@ -903,7 +912,7 @@ impl MobileLauncher {
                     short,
                 );
                 p.text_line(
-                    Face::Mono,
+                    Face::Regular,
                     ui_theme::small(),
                     18.0,
                     tx,
@@ -929,15 +938,15 @@ impl MobileLauncher {
             );
             if is_active {
                 if let Some(p) = ui.paint() {
-                    let aw = p.measure(Face::Mono, ui_theme::small(), "ACTIVE");
+                    let aw = p.measure(Face::Medium, ui_theme::small(), "Active");
                     p.text_line(
-                        Face::Mono,
+                        Face::Medium,
                         ui_theme::small(),
                         act_h,
                         inner_x + inner_w - 22.0 - rem_w - aw,
                         ay,
                         col_success,
-                        "ACTIVE",
+                        "Active",
                     );
                 }
             } else {

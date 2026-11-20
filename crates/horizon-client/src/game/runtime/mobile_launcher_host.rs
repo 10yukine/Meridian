@@ -382,8 +382,13 @@ impl Host {
                 if tapped {
                     self.click(event_loop);
                 }
+                // A lifted finger points at nothing, so nothing stays highlighted where it was.
+                self.pointer = (-1.0, -1.0);
             }
-            (TouchPhase::Cancelled, _) => self.finger = None,
+            (TouchPhase::Cancelled, _) => {
+                self.finger = None;
+                self.pointer = (-1.0, -1.0);
+            }
             _ => {}
         }
     }

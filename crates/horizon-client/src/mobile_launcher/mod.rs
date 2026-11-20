@@ -28,9 +28,9 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use widgets::{
     Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, draw_backdrop,
-    draw_button, draw_icon_chevron, draw_north_star_badge, draw_play_button,
-    draw_player_head_with_dot, draw_rail_item, effective_profile_state, palette,
-    profile_stats_line, stage_fraction, stage_name, stage_pill_text, truncate_to_fit,
+    draw_button, draw_icon_chevron, draw_north_star_badge, draw_play_button, draw_player_head,
+    draw_rail_item, effective_profile_state, palette, profile_stats_line, stage_fraction,
+    stage_name, stage_pill_text, truncate_to_fit,
 };
 
 /// About's links: the source, and the licenses of what Meridian is built from.
@@ -221,6 +221,9 @@ pub struct MobileLauncher {
     skin_pick: Option<PickedSkin>,
     /// Put the chosen skin on with slim arms (the player's choice; Classic at first).
     skin_slim: bool,
+    /// How the Skins page's figure is turned (about its height) and tilted, in radians.
+    skin_yaw: f32,
+    skin_pitch: f32,
     /// Why the chosen file can't be a skin, or no picker opened.
     skin_error: Option<String>,
     /// Putting `skin_pick` on was started and hasn't finished.
@@ -292,6 +295,8 @@ impl MobileLauncher {
             profile_rename: None,
             skin_pick: None,
             skin_slim: false,
+            skin_yaw: 0.5,
+            skin_pitch: 0.2,
             skin_error: None,
             skin_uploading: false,
             log_level: 0,
@@ -354,6 +359,12 @@ impl MobileLauncher {
         let row = match (self.profile_popup_open, self.route) {
             _ if self.confirm_free_space || self.confirm_remove_profile.is_some() => return,
             (true, _) => 34.0,
+            (false, Route::Skins) => {
+                // The figure turns as far as the finger moves sideways, and tilts a little.
+                self.skin_yaw += delta_x * 0.012;
+                self.skin_pitch = (self.skin_pitch + delta_y * 0.006).clamp(0.0, 0.6);
+                return;
+            }
             (false, Route::Mods) => {
                 let max = self.scroll_max.get() as f32;
                 self.tab_scroll
@@ -375,6 +386,19 @@ impl MobileLauncher {
             let rows = if self.route == Route::Home { rows } else { -rows };
             let at = (self.page_offset() as f32 + rows).clamp(0.0, max);
             self.page_scroll = (self.route, at as usize);
+        }
+    }
+
+    /// A sign-in that failed, or the welcome screen's one still running, is dropped before
+    /// another way in opens. The active account's own sign-in, while adding one, keeps going.
+    fn drop_stale_sign_in(&mut self) {
+        let stale = match self.backend.sign_in() {
+            SignIn::Failed(_) => true,
+            SignIn::Starting | SignIn::Code { .. } => !self.adding_account,
+            SignIn::Idle | SignIn::Done(_) => false,
+        };
+        if stale {
+            self.backend.dismiss_sign_in();
         }
     }
 
@@ -725,14 +749,7 @@ impl MobileLauncher {
                 self.backend.sign_in_microsoft();
             }
             ButtonId::OpenOfflineEntry => {
-                if !self.adding_account
-                    && matches!(
-                        self.backend.sign_in(),
-                        SignIn::Starting | SignIn::Code { .. } | SignIn::Failed(_)
-                    )
-                {
-                    self.backend.sign_out();
-                }
+                self.drop_stale_sign_in();
                 self.ely_error = None;
                 self.clear_ely_secrets();
                 self.offline_error = None;
@@ -743,14 +760,7 @@ impl MobileLauncher {
                 self.show_more_auth = !self.show_more_auth;
             }
             ButtonId::OpenElyEntry => {
-                if !self.adding_account
-                    && matches!(
-                        self.backend.sign_in(),
-                        SignIn::Starting | SignIn::Code { .. } | SignIn::Failed(_)
-                    )
-                {
-                    self.backend.sign_out();
-                }
+                self.drop_stale_sign_in();
                 self.offline_error = None;
                 self.ely_error = None;
                 self.ely_field = ElyField::Username;
@@ -801,9 +811,7 @@ impl MobileLauncher {
                 }
             }
             ButtonId::CancelSignIn => {
-                if self.backend.account().is_none() {
-                    self.backend.sign_out();
-                }
+                self.backend.dismiss_sign_in();
                 self.status_note = None;
                 self.adding_account = false;
                 if self.sign_in_provider == SignInProvider::Ely {
@@ -900,6 +908,7 @@ impl MobileLauncher {
             ButtonId::AddAccount => {
                 self.accounts_before_add = self.backend.accounts().len();
                 self.adding_account = true;
+                self.drop_stale_sign_in();
                 self.route = Route::Home;
                 self.auth_form = None;
                 self.show_more_auth = false;
@@ -1078,7 +1087,6 @@ impl MobileLauncher {
         self.scroll_max.set(0);
         let styles = &menu_style::get().settings;
         let col_success = color::hex(styles.success, 255);
-        let col_warn = color::hex(styles.warn, 255);
         let col_danger = color::hex(styles.danger, 255);
 
         let (ui_w, ui_h) = (ui.ro().w, ui.ro().h);
@@ -1160,7 +1168,6 @@ impl MobileLauncher {
                         card_w,
                         content_h,
                         &sign_in,
-                        col_warn,
                     );
                     return hits;
                 }
@@ -1268,7 +1275,6 @@ impl MobileLauncher {
                 &setup,
                 &profiles,
                 col_success,
-                col_warn,
                 col_danger,
             )
         };
@@ -1709,7 +1715,6 @@ impl MobileLauncher {
         setup: &Setup,
         profiles: &[Profile],
         col_success: u32,
-        col_warn: u32,
         col_danger: u32,
     ) -> (f32, f32) {
         if let Some(p) = ui.paint() {
@@ -1740,17 +1745,9 @@ impl MobileLauncher {
             w: acct_w,
             h: bar_h,
         };
-        let (acct_name, acct_sub, dot_col) = match account {
-            Some(a @ Account::Microsoft { .. }) => {
-                (account_short(a), account_provider_tag(a), col_success)
-            }
-            Some(a @ Account::Ely { .. }) => {
-                (account_short(a), account_provider_tag(a), col_success)
-            }
-            Some(a @ Account::Offline { .. }) => {
-                (account_short(a), account_provider_tag(a), col_warn)
-            }
-            None => ("Account", "Not signed in", palette::muted()),
+        let (acct_name, acct_sub) = match account {
+            Some(a) => (account_short(a), account_provider_tag(a)),
+            None => ("Account", "Not signed in"),
         };
         if let Some(p) = ui.paint() {
             let active = self.route == Route::AccountSwitcher;
@@ -1783,15 +1780,7 @@ impl MobileLauncher {
             let head_sz = (bar_h - 8.0).clamp(28.0, 38.0);
             let head_y = by + ((bar_h - head_sz) * 0.5).round();
             let head = account.as_ref().and_then(|a| self.backend.player_head(a));
-            draw_player_head_with_dot(
-                p,
-                pad + 6.0,
-                head_y,
-                head_sz,
-                head.as_ref(),
-                acct_name,
-                dot_col,
-            );
+            draw_player_head(p, pad + 6.0, head_y, head_sz, head.as_ref(), acct_name);
 
             let tx = pad + head_sz + 14.0;
             let max_tw = (acct_w - head_sz - 24.0).max(40.0);
