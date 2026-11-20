@@ -35,15 +35,7 @@ fn clone_file(from: &Path, to: &Path) -> io::Result<()> {
         }
         Err(io::Error::last_os_error())
     }
-    // Android (Meridian): the source is the launcher's own download store on the same disk, so
-    // the file gets a second name instead of a second copy: half the storage, nothing written.
-    // Downloads replace a file by renaming a new one over it, never by rewriting it, so the two
-    // names can't drift apart.
-    #[cfg(target_os = "android")]
-    {
-        fs::hard_link(from, to)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (from, to);
         Err(io::ErrorKind::Unsupported.into())

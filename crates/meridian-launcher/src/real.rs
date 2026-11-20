@@ -817,7 +817,7 @@ fn spawn_later(root: PathBuf, cancel: Arc<AtomicBool>) {
 }
 
 /// The assets the game starts without (music, records, the other languages: about 380 MB of
-/// 485), downloaded after the first start and linked into its resources, so a first start waits
+/// 485), downloaded after the first start and imported into its resources, so a first start waits
 /// for a fifth of the download. Runs at each start until done; a cut-short run keeps what it got.
 /// ponytail: it needs the install cache's version file and index: freed before it finished (Free
 /// Up Space refuses while it runs), the music comes back only with a repair.
@@ -842,7 +842,20 @@ fn fetch_later(root: &Path, cancel: &AtomicBool) -> Result<(), String> {
     let log = |line: &str| eprintln!("Meridian: music and languages: {line}");
     horizon_prepare::sounds(root, Some(&game), &log)?;
     horizon_prepare::languages(root, Some(&game), &log)?;
+    drop_asset_objects(&game);
     sources::write_file(&done, b"")
+}
+
+/// Mojang's asset objects once they are imported into the game's resources, which is all the
+/// game reads: kept, they would be every sound and language twice (Android allows no hard links
+/// in app storage). A repair downloads the ones it needs again.
+fn drop_asset_objects(game: &Path) {
+    let objects = game.join("assets/objects");
+    if let Err(e) = fs::remove_dir_all(&objects)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("Meridian: {} not removed: {e}", objects.display());
+    }
 }
 
 const LATER_JOBS: usize = 4;
@@ -992,6 +1005,7 @@ fn prepare(root: &Path, state: &Mutex<Setup>, cancel: &AtomicBool) -> Result<(),
     cancelled(cancel)?;
     let missing = horizon_prepare::check(root, &made)?;
     if missing.is_empty() {
+        drop_asset_objects(&game);
         Ok(())
     } else {
         Err(missing.join("; "))

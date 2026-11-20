@@ -66,28 +66,9 @@ fn install_cache(root: &Path) -> [PathBuf; 2] {
 
 /// The bytes [`free_install_cache`] would free. Walks thousands of files: call off the UI thread.
 pub fn install_cache_size(root: &Path) -> u64 {
-    install_cache(root).iter().map(|dir| own_bytes(dir)).sum()
-}
-
-/// The bytes under `dir` that deleting it frees: a file with another name elsewhere (the game's
-/// sounds share theirs with the downloads on Android) stays.
-fn own_bytes(dir: &Path) -> u64 {
-    fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let ty = entry.file_type().ok()?;
-            if ty.is_dir() {
-                return Some(own_bytes(&entry.path()));
-            }
-            let meta = entry.metadata().ok().filter(|_| ty.is_file())?;
-            #[cfg(unix)]
-            if std::os::unix::fs::MetadataExt::nlink(&meta) > 1 {
-                return Some(0);
-            }
-            Some(meta.len())
-        })
+    install_cache(root)
+        .iter()
+        .map(|dir| crate::real::profiles::folder_bytes(dir))
         .sum()
 }
 
