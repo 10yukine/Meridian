@@ -359,58 +359,47 @@ fn arc(c: [f32; 2], r: f32, from: f32, to: f32) -> impl Iterator<Item = [f32; 2]
     })
 }
 
+/// A house: its outline alone.
 pub(super) fn draw_icon_home(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let roof = [[2.0, 8.5], [9.0, 2.5], [16.0, 8.5]];
-    icon_path(p, cx, cy, sz, col, &roof, false);
-    let walls = [[4.0, 7.0], [4.0, 15.5], [14.0, 15.5], [14.0, 7.0]];
-    icon_path(p, cx, cy, sz, col, &walls, false);
-    let door = [[7.3, 15.5], [7.3, 11.0], [10.7, 11.0], [10.7, 15.5]];
-    icon_path(p, cx, cy, sz, col, &door, false);
-}
-
-/// A puzzle piece: a square with a knob on its top and right sides.
-pub(super) fn draw_icon_mods(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let mut piece = vec![[3.0, 15.0], [3.0, 5.0], [6.3, 5.0]];
-    piece.extend(arc([8.0, 3.77], 2.1, 144.0, 396.0));
-    piece.extend([[9.7, 5.0], [13.0, 5.0], [13.0, 8.3]]);
-    piece.extend(arc([14.23, 10.0], 2.1, 234.0, 486.0));
-    piece.extend([[13.0, 11.7], [13.0, 15.0]]);
-    // Centred: the knobs reach past the square up and to the right.
-    let piece: Vec<_> = piece
-        .into_iter()
-        .map(|[x, y]| [x - 0.65, y + 0.65])
-        .collect();
-    icon_path(p, cx, cy, sz, col, &piece, true);
-}
-
-pub(super) fn draw_icon_skins(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let shirt = [
-        [6.5, 2.5],
-        [2.0, 4.8],
-        [3.0, 8.6],
-        [5.0, 8.0],
-        [5.0, 15.5],
-        [13.0, 15.5],
-        [13.0, 8.0],
-        [15.0, 8.6],
-        [16.0, 4.8],
-        [11.5, 2.5],
-        [9.0, 4.0],
+    let house = [
+        [3.0, 8.0],
+        [9.0, 3.0],
+        [15.0, 8.0],
+        [15.0, 15.0],
+        [3.0, 15.0],
     ];
+    icon_path(p, cx, cy, sz, col, &house, true);
+}
+
+/// Four squares in a grid.
+pub(super) fn draw_icon_mods(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    for (x, y) in [(2.5, 2.5), (10.0, 2.5), (2.5, 10.0), (10.0, 10.0)] {
+        let square = [[x, y], [x + 5.5, y], [x + 5.5, y + 5.5], [x, y + 5.5]];
+        icon_path(p, cx, cy, sz, col, &square, true);
+    }
+}
+
+/// A T-shirt with a round collar.
+pub(super) fn draw_icon_skins(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
+    let mut shirt = vec![
+        [2.5, 5.2],
+        [3.7, 8.7],
+        [5.3, 8.1],
+        [5.3, 15.5],
+        [12.7, 15.5],
+    ];
+    shirt.extend([[12.7, 8.1], [14.3, 8.7], [15.5, 5.2], [11.6, 3.0]]);
+    shirt.extend(arc([9.0, 2.4], 2.7, 13.0, 167.0));
+    shirt.push([6.4, 3.0]);
     icon_path(p, cx, cy, sz, col, &shirt, true);
 }
 
-/// A gear: a ring with eight teeth around a hub.
+/// Two sliders, each line with its knob.
 pub(super) fn draw_icon_settings(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let ring: Vec<_> = arc([9.0, 9.0], 5.0, 0.0, 360.0).collect();
-    icon_path(p, cx, cy, sz, col, &ring, false);
-    let hub: Vec<_> = arc([9.0, 9.0], 1.9, 0.0, 360.0).collect();
-    icon_path(p, cx, cy, sz, col, &hub, false);
-    let s = sz / 18.0;
-    for tooth in 0..8 {
-        let a = (tooth as f32 * 45.0).to_radians();
-        let at = |r: f32| [cx + r * a.cos() * s, cy + r * a.sin() * s];
-        stroke(p, at(5.0), at(7.2), 2.4 * s, col);
+    for (y, knob, from, to) in [(5.5, 5.0, 7.6, 16.0), (12.5, 13.0, 2.0, 10.4)] {
+        icon_path(p, cx, cy, sz, col, &[[from, y], [to, y]], false);
+        let ring: Vec<_> = arc([knob, y], 2.6, 0.0, 360.0).collect();
+        icon_path(p, cx, cy, sz, col, &ring, false);
     }
 }
 
