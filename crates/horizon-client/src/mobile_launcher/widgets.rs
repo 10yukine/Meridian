@@ -1080,14 +1080,6 @@ pub(super) fn account_provider_tag(account: &Account) -> &'static str {
     }
 }
 
-pub(super) fn account_label(account: &Account) -> String {
-    match account {
-        Account::Microsoft { name } => format!("Microsoft ({name})"),
-        Account::Ely { name } => format!("Ely.by ({name})"),
-        Account::Offline { name } => format!("Offline ({name})"),
-    }
-}
-
 pub(super) fn format_size(bytes: u64) -> String {
     if bytes == 0 {
         "Base game".to_owned()
@@ -1130,16 +1122,6 @@ pub(super) fn stage_fraction(progress: &Progress) -> f32 {
         return 0.0;
     }
     (progress.done as f64 / progress.total as f64).clamp(0.0, 1.0) as f32
-}
-
-pub(super) fn stage_pill_text(progress: &Progress) -> String {
-    let pct = (stage_fraction(progress) * 100.0).round() as u32;
-    if progress.stage == Stage::Download && progress.bytes_per_second > 0 {
-        let mbps = progress.bytes_per_second as f64 / 1_000_000.0;
-        format!("Downloading {pct}% ({mbps:.1} MB/s)")
-    } else {
-        format!("{} {pct}%", stage_name(progress.stage))
-    }
 }
 
 pub(super) fn format_progress_stats(progress: &Progress, frac: f32) -> (String, String) {

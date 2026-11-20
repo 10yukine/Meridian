@@ -22,13 +22,25 @@ impl MobileLauncher {
         show_cancel_add: bool,
     ) {
         let compact_v = avail_h < 340.0;
-        let card_h = 294.0_f32.min(avail_h);
+        let pad_top = if compact_v { 14.0_f32 } else { 26.0 };
+        let title_block = if compact_v { 44.0 } else { 62.0 };
+        let btn_h = if compact_v { 48.0 } else { 52.0 };
+        let gap = if compact_v { 8.0 } else { 12.0 };
+        let more_h = if self.show_more_auth {
+            if compact_v { 42.0 } else { 48.0 }
+        } else if compact_v {
+            38.0
+        } else {
+            42.0
+        };
+        let card_h = (pad_top + title_block + btn_h + gap + btn_h + gap + more_h + pad_top)
+            .min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, palette::border());
 
         let inner_x = x + 28.0;
         let inner_w = w - 56.0;
-        let mut cy = cy_top + if compact_v { 14.0 } else { 26.0 };
+        let mut cy = cy_top + pad_top;
 
         if show_cancel_add {
             draw_button(
@@ -62,10 +74,8 @@ impl MobileLauncher {
                 "Sign in to Meridian",
             );
         }
-        cy += if compact_v { 44.0 } else { 62.0 };
+        cy += title_block;
 
-        let btn_h = if compact_v { 48.0 } else { 52.0 };
-        let gap = if compact_v { 8.0 } else { 12.0 };
         draw_button(
             ui,
             hits,
@@ -793,10 +803,9 @@ impl MobileLauncher {
         col_success: u32,
     ) {
         let compact_v = avail_h < 300.0;
-        draw_plate(ui, x, y, w, avail_h, palette::border());
 
-        let inner_x = x + 20.0;
-        let inner_w = w - 40.0;
+        let inner_x = x;
+        let inner_w = w;
         let mut cy = y + if compact_v { 10.0 } else { 18.0 };
         let hdr_h = if compact_v { 34.0 } else { 40.0 };
 

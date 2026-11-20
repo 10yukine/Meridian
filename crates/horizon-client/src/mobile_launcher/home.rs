@@ -36,13 +36,11 @@ impl MobileLauncher {
             effective_profile_state(p, setup)
         });
 
-        // The selected profile, the whole page.
+        // The page is the backdrop. Name and status sit on it; the log fills what is left.
         let hero_h = avail_h;
-        draw_plate(ui, x, y, w, hero_h, palette::border());
-        let pad_x = if compact_v { 16.0 } else { 24.0 };
-        let pad_y = if compact_v { 10.0 } else { 18.0 };
-        let ix = x + pad_x;
-        let iw = w - pad_x * 2.0;
+        let pad_y = if compact_v { 2.0 } else { 6.0 };
+        let ix = x;
+        let iw = w;
 
         if let Some(p) = ui.paint() {
             // Top row: the profile's name, its status on the right.
@@ -91,30 +89,31 @@ impl MobileLauncher {
                 &fit_name,
             );
 
-            // Single-line stats right under profile name (on compact phones, status note takes priority).
-            let stats = selected.map_or_else(|| "...".to_owned(), profile_stats_line);
-            let (sub, sub_col) = if compact_v && let Some(note) = &self.status_note {
-                (note.clone(), palette::accent_star())
-            } else {
-                (stats, palette::muted())
-            };
-            let sub_y = title_y + title_h + if compact_v { 0.0 } else { 4.0 };
-            let fit_sub = truncate_to_fit(p, Face::Regular, ui_theme::small(), &sub, iw);
-            p.text_line(
-                Face::Regular,
-                ui_theme::small(),
-                18.0,
-                ix,
-                sub_y,
-                sub_col,
-                &fit_sub,
-            );
+            // The dock already shows the mod/world/size line. A status note still belongs here.
+            let sub_y = title_y + title_h + 2.0;
+            if let Some(note) = &self.status_note {
+                let fit_sub = truncate_to_fit(p, Face::Regular, ui_theme::small(), note, iw);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    18.0,
+                    ix,
+                    sub_y,
+                    palette::accent_star(),
+                    &fit_sub,
+                );
+            }
 
             if let ProfileState::Installing(prog) = &sel_state {
                 let frac = stage_fraction(prog);
-                let bar_y = sub_y + if compact_v { 18.0 } else { 26.0 };
+                let bar_y = sub_y
+                    + if self.status_note.is_some() {
+                        20.0
+                    } else {
+                        0.0
+                    };
                 let bar_h = if compact_v { 4.0 } else { 6.0 };
-                p.rounded(ix, bar_y, iw, bar_h, bar_h * 0.5, palette::bg_outer());
+                p.rounded(ix, bar_y, iw, bar_h, bar_h * 0.5, palette::surface());
                 if frac > 0.0 {
                     p.rounded(
                         ix,
@@ -125,26 +124,20 @@ impl MobileLauncher {
                         palette::accent(),
                     );
                 }
-            } else if !compact_v && let Some(note) = &self.status_note {
-                let fit = truncate_to_fit(p, Face::Regular, ui_theme::sizes().ui, note, iw);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::sizes().ui,
-                    20.0,
-                    ix,
-                    sub_y + 24.0,
-                    palette::accent_star(),
-                    &fit,
-                );
             }
         }
         let title_h = if compact_v { 22.0 } else { 30.0 };
-        let below_stats = y + pad_y + title_h + if compact_v { 20.0 } else { 26.0 };
-        let log_y = below_stats
+        let note_h = if self.status_note.is_some() {
+            20.0
+        } else {
+            0.0
+        };
+        let log_y = y
+            + pad_y
+            + title_h
+            + note_h
             + if matches!(sel_state, ProfileState::Installing(_)) {
-                if compact_v { 10.0 } else { 18.0 }
-            } else if !compact_v && self.status_note.is_some() {
-                30.0
+                if compact_v { 14.0 } else { 18.0 }
             } else {
                 6.0
             };
@@ -253,15 +246,15 @@ impl MobileLauncher {
                 if self.log_copied { "Copied" } else { "Copy" },
             );
         }
-        let box_y = y + head_h + 8.0;
-        let box_h = h - head_h - 8.0;
+        let box_y = y + head_h + 4.0;
+        let box_h = h - head_h - 4.0;
         let shown: Vec<(&String, u8)> = lines
             .iter()
             .zip(log_levels(&lines))
             .filter(|(_, level)| *level >= self.log_level)
             .collect();
         let (size, line_h) = (11.0, 16.0);
-        let rows = ((box_h - 16.0) / line_h).floor().max(0.0) as usize;
+        let rows = (box_h / line_h).floor().max(0.0) as usize;
         // The last lines that fit, or earlier ones a drag went back to.
         let max_back = shown.len().saturating_sub(rows);
         self.scroll_max.set(max_back);
@@ -269,8 +262,6 @@ impl MobileLauncher {
         let Some(p) = ui.paint() else {
             return;
         };
-        p.rounded(x, box_y, w, box_h, 10.0, palette::bg_outer());
-        p.border(x, box_y, w, box_h, 10.0, palette::border_subtle());
         if shown.is_empty() {
             let empty = if lines.is_empty() {
                 "The game's log shows here once you play."
@@ -281,8 +272,8 @@ impl MobileLauncher {
                 Face::Regular,
                 ui_theme::small(),
                 20.0,
-                x + 12.0,
-                box_y + 10.0,
+                x,
+                box_y,
                 palette::muted(),
                 empty,
             );
@@ -294,13 +285,13 @@ impl MobileLauncher {
                 1 => col_warn,
                 _ => palette::body(),
             };
-            let fit = truncate_to_fit(p, Face::Mono, size, line, w - 24.0);
+            let fit = truncate_to_fit(p, Face::Mono, size, line, w);
             p.text_line(
                 Face::Mono,
                 size,
                 line_h,
-                x + 12.0,
-                box_y + 8.0 + i as f32 * line_h,
+                x,
+                box_y + i as f32 * line_h,
                 ink,
                 &fit,
             );
