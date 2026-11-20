@@ -709,9 +709,12 @@ pub(super) fn draw_button(
                 Some(palette::text()),
                 palette::text(),
             ),
-            (Tone::Secondary, false) => {
-                (palette::surface(), Some(palette::border()), palette::body())
-            }
+            // One step lighter than the surface rows it sits on, with an edge that shows.
+            (Tone::Secondary, false) => (
+                palette::surface_hover(),
+                Some(color::with_alpha(palette::text(), 0.18)),
+                palette::body(),
+            ),
             (Tone::Secondary, true) => (
                 palette::surface_hover(),
                 Some(palette::accent_star()),
@@ -753,15 +756,6 @@ pub(super) fn draw_play_button(
     let hit = HitRect { id, x, y, w, h };
     if let Some(p) = ui.paint() {
         let hovered = hit.contains(p.cursor);
-        // Subtle purple glow behind the primary launch CTA
-        p.rounded(
-            x - 2.0,
-            y - 2.0,
-            w + 4.0,
-            h + 4.0,
-            13.0,
-            color::with_alpha(palette::accent(), if hovered { 0.24 } else { 0.14 }),
-        );
         let fill = if hovered {
             palette::accent_fill_hover()
         } else {
@@ -901,12 +895,15 @@ pub(super) fn count_label(n: usize, singular: &str, plural: &str) -> String {
 }
 
 pub(super) fn profile_stats_line(profile: &Profile) -> String {
-    format!(
-        "{}  |  {}  |  {}",
+    let counts = format!(
+        "{}, {}",
         count_label(profile.mods, "mod", "mods"),
-        count_label(profile.worlds, "world", "worlds"),
-        format_size(profile.size)
-    )
+        count_label(profile.worlds, "world", "worlds")
+    );
+    match profile.size {
+        0 => counts,
+        bytes => format!("{counts}, {}", format_size(bytes)),
+    }
 }
 
 pub(super) fn effective_profile_state(profile: &Profile, setup: &Setup) -> ProfileState {
@@ -929,14 +926,14 @@ pub(super) fn profile_badge_parts(
     col_danger: u32,
 ) -> (String, u32) {
     match state {
-        ProfileState::Available => ("NEEDS INSTALL".to_owned(), palette::accent_star()),
+        ProfileState::Available => ("Needs install".to_owned(), palette::accent_star()),
         ProfileState::Installing(p) => {
             let pct = (stage_fraction(p) * 100.0).round() as u32;
-            (format!("INSTALLING {pct}%"), palette::accent())
+            (format!("Installing {pct}%"), palette::accent())
         }
-        ProfileState::Installed if selected => ("READY".to_owned(), col_success),
-        ProfileState::Installed => ("INSTALLED".to_owned(), palette::muted()),
-        ProfileState::Failed(_) => ("FAILED".to_owned(), col_danger),
+        ProfileState::Installed if selected => ("Ready".to_owned(), col_success),
+        ProfileState::Installed => ("Installed".to_owned(), palette::muted()),
+        ProfileState::Failed(_) => ("Failed".to_owned(), col_danger),
     }
 }
 
@@ -950,9 +947,9 @@ pub(super) fn account_short(account: &Account) -> &str {
 
 pub(super) fn account_provider_tag(account: &Account) -> &'static str {
     match account {
-        Account::Microsoft { .. } => "Microsoft account",
-        Account::Ely { .. } => "Ely.by account",
-        Account::Offline { .. } => "Offline profile",
+        Account::Microsoft { .. } => "Microsoft",
+        Account::Ely { .. } => "Ely.by",
+        Account::Offline { .. } => "Offline",
     }
 }
 
@@ -1032,7 +1029,7 @@ pub(super) fn format_progress_stats(progress: &Progress, frac: f32) -> (String, 
             let right = if progress.bytes_per_second > 0 && progress.total > progress.done {
                 let speed = progress.bytes_per_second as f64 / 1_000_000.0;
                 let eta = (progress.total - progress.done) / progress.bytes_per_second.max(1);
-                format!("{pct}%  |  {speed:.1} MB/s  |  ETA {eta}s")
+                format!("{pct}%  ·  {speed:.1} MB/s  ·  {eta} s left")
             } else {
                 format!("{pct}%")
             };

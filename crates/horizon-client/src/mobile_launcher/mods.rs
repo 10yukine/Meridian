@@ -52,8 +52,8 @@ impl MobileLauncher {
             cy,
             new_w,
             top_btn_h,
-            Tone::Ghost,
-            "+ New profile",
+            Tone::Secondary,
+            "New Profile",
         );
 
         let tabs_right = ix + iw - new_w - 10.0;
@@ -125,45 +125,12 @@ impl MobileLauncher {
             let cta_y = (ey + text_h + 14.0).min(y + avail_h - cta_h - 10.0);
 
             if let Some(p) = ui.paint() {
-                let bx = (center_x - badge_sz * 0.5).round();
-                p.rounded(
-                    bx - 4.0,
-                    ey - 4.0,
-                    badge_sz + 8.0,
-                    badge_sz + 8.0,
-                    18.0,
-                    color::with_alpha(palette::accent(), 0.10),
-                );
-                p.rounded(
-                    bx,
-                    ey,
-                    badge_sz,
-                    badge_sz,
-                    14.0,
-                    color::with_alpha(palette::accent(), 0.18),
-                );
-                p.border(
-                    bx,
-                    ey,
-                    badge_sz,
-                    badge_sz,
-                    14.0,
-                    color::with_alpha(palette::accent_star(), 0.55),
-                );
                 draw_icon_box(
                     p,
                     center_x,
                     ey + badge_sz * 0.5,
                     badge_sz * 0.46,
-                    palette::accent_star(),
-                );
-                p.rounded(
-                    bx + badge_sz - 6.0,
-                    ey - 2.0,
-                    8.0,
-                    8.0,
-                    4.0,
-                    palette::accent(),
+                    palette::muted(),
                 );
                 ey += badge_sz + badge_gap;
 
@@ -203,7 +170,7 @@ impl MobileLauncher {
                 cta_w,
                 cta_h,
                 Tone::Primary,
-                "+ Create Modded Profile",
+                "Create Modded Profile",
             );
             return;
         }
@@ -367,7 +334,7 @@ impl MobileLauncher {
                     palette::text(),
                     &fit_n,
                 );
-                let meta = format!("v{}  |  {}", pm.info.version, format_size(pm.info.size));
+                let meta = format!("v{}  ·  {}", pm.info.version, format_size(pm.info.size));
                 let fit_m = truncate_to_fit(p, Face::Mono, 11.0, &meta, max_nw);
                 p.text_line(
                     Face::Mono,
@@ -606,7 +573,7 @@ impl MobileLauncher {
                             palette::text(),
                             &fit_n,
                         );
-                        let sub = format!("{}  |  {}", format_size(m.size), m.description);
+                        let sub = format!("{}  ·  {}", format_size(m.size), m.description);
                         let fit_s = truncate_to_fit(p, Face::Regular, 11.0, &sub, max_nw);
                         p.text_line(
                             Face::Regular,

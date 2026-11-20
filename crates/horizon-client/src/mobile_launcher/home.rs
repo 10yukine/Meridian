@@ -1,10 +1,10 @@
-//! Home dashboard (`[profile]` + `[news][upd]`), floating Profile Switcher popup,
+//! Home (the selected profile), floating Profile Switcher popup,
 //! New Profile form, and Rename/Remove profile modals.
 
 use super::widgets::{
     Canvas, HitRect, Tone, count_label, draw_button, draw_check_row, draw_input_box, draw_plate,
     effective_profile_state, format_size, palette, profile_badge_parts, profile_stats_line,
-    stage_fraction, stage_name, truncate_to_fit, wrap_lines,
+    stage_fraction, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{ModSearch, Profile, ProfileState, Setup, VANILLA, profile_id};
@@ -37,41 +37,18 @@ impl MobileLauncher {
             effective_profile_state(p, setup)
         });
 
-        let card_gap = if compact_v { 10.0 } else { 14.0 };
-        let hero_h = if compact_v {
-            (avail_h * 0.47).round().clamp(108.0, 134.0).min(avail_h)
-        } else {
-            (avail_h * 0.43).round().clamp(186.0, 236.0).min(avail_h)
-        };
-
-        // 1. Top Hero Card: [profile] — Last Selected Profile
-        draw_plate(
-            ui,
-            x,
-            y,
-            w,
-            hero_h,
-            color::with_alpha(palette::accent_star(), 0.48),
-        );
+        // The selected profile, the whole page.
+        let hero_h = avail_h;
+        draw_plate(ui, x, y, w, hero_h, palette::border());
         let pad_x = if compact_v { 16.0 } else { 24.0 };
         let pad_y = if compact_v { 10.0 } else { 18.0 };
         let ix = x + pad_x;
         let iw = w - pad_x * 2.0;
 
         if let Some(p) = ui.paint() {
-            // Subtle vertical North Star accent strip on the left edge
-            p.rounded(
-                x + 4.0,
-                y + 14.0,
-                3.0,
-                (hero_h - 28.0).max(24.0),
-                1.5,
-                palette::accent_star(),
-            );
-
-            // Top row: Eyebrow + right status badge
+            // Top row: the profile's name, its status on the right.
             let (badge, bcol) = profile_badge_parts(&sel_state, true, col_success, col_danger);
-            let bw = p.measure(Face::Mono, ui_theme::small(), &badge) + 16.0;
+            let bw = p.measure(Face::Medium, ui_theme::small(), &badge) + 16.0;
             let bx = ix + iw - bw;
             let badge_h = if compact_v { 20.0 } else { 22.0 };
             p.rounded(
@@ -91,7 +68,7 @@ impl MobileLauncher {
                 color::with_alpha(bcol, 0.75),
             );
             p.text_line(
-                Face::Mono,
+                Face::Medium,
                 ui_theme::small(),
                 badge_h,
                 bx + 8.0,
@@ -100,29 +77,11 @@ impl MobileLauncher {
                 &badge,
             );
 
-            let eyebrow_max = (bx - ix - 10.0).max(80.0);
-            let eyebrow = truncate_to_fit(
-                p,
-                Face::Mono,
-                11.0,
-                "SELECTED PROFILE  |  MINECRAFT 26.3",
-                eyebrow_max,
-            );
-            p.text_line(
-                Face::Mono,
-                11.0,
-                badge_h,
-                ix,
-                y + pad_y,
-                palette::accent_star(),
-                &eyebrow,
-            );
-
             // Profile title
-            let title_y = y + pad_y + badge_h + if compact_v { 2.0 } else { 8.0 };
+            let title_y = y + pad_y;
             let title_sz = if compact_v { 18.5 } else { 24.0 };
             let title_h = if compact_v { 22.0 } else { 30.0 };
-            let fit_name = truncate_to_fit(p, Face::SemiBold, title_sz, sel_name, iw);
+            let fit_name = truncate_to_fit(p, Face::SemiBold, title_sz, sel_name, bx - ix - 12.0);
             p.text_line(
                 Face::SemiBold,
                 title_sz,
@@ -141,9 +100,9 @@ impl MobileLauncher {
                 (stats, palette::muted())
             };
             let sub_y = title_y + title_h + if compact_v { 0.0 } else { 4.0 };
-            let fit_sub = truncate_to_fit(p, Face::Mono, ui_theme::small(), &sub, iw);
+            let fit_sub = truncate_to_fit(p, Face::Regular, ui_theme::small(), &sub, iw);
             p.text_line(
-                Face::Mono,
+                Face::Regular,
                 ui_theme::small(),
                 18.0,
                 ix,
@@ -171,10 +130,7 @@ impl MobileLauncher {
                 let (detail, detail_col) = if let Some(note) = &self.status_note {
                     (note.as_str(), palette::accent_star())
                 } else {
-                    let desc = selected
-                        .map(|prof| prof.description.as_str())
-                        .filter(|d| !d.is_empty())
-                        .unwrap_or("Isolated worlds and mods for this profile.");
+                    let desc = selected.map_or("", |prof| prof.description.as_str());
                     (desc, palette::body())
                 };
                 let fit_desc = truncate_to_fit(p, Face::Regular, ui_theme::sizes().ui, detail, iw);
@@ -263,326 +219,8 @@ impl MobileLauncher {
             new_w,
             btn_h,
             Tone::Secondary,
-            "+ New profile",
+            "New Profile",
         );
-
-        // 2. Bottom Split Row: [news] (left) + [upd] (right)
-        let row_y = y + hero_h + card_gap;
-        let row_h = (y + avail_h - row_y).max(0.0);
-        if row_h < 64.0 {
-            return;
-        }
-        let left_w = ((w - card_gap) * 0.5).floor();
-        let right_x = x + left_w + card_gap;
-        let right_w = w - left_w - card_gap;
-
-        self.draw_home_news_card(ui, x, row_y, left_w, row_h, compact_v);
-        self.draw_home_updates_card(
-            ui,
-            right_x,
-            row_y,
-            right_w,
-            row_h,
-            compact_v,
-            setup,
-            profiles,
-            col_success,
-            col_danger,
-        );
-    }
-
-    fn draw_home_news_card(
-        &self,
-        ui: &mut Canvas<'_, '_>,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        compact_v: bool,
-    ) {
-        draw_plate(ui, x, y, w, h, palette::border());
-        let Some(p) = ui.paint() else {
-            return;
-        };
-        let px = if compact_v { 14.0 } else { 20.0 };
-        let py = if compact_v { 10.0 } else { 18.0 };
-        let ix = x + px;
-        let iw = (w - px * 2.0).max(80.0);
-
-        let pill = "SOON";
-        let pw = p.measure(Face::Mono, 11.0, pill) + 14.0;
-        let ph = 20.0;
-        let pill_x = ix + iw - pw;
-        p.rounded(
-            pill_x,
-            y + py + 1.0,
-            pw,
-            ph,
-            6.0,
-            color::with_alpha(palette::accent(), 0.16),
-        );
-        p.border(
-            pill_x,
-            y + py + 1.0,
-            pw,
-            ph,
-            6.0,
-            color::with_alpha(palette::accent_star(), 0.65),
-        );
-        p.text_line(
-            Face::Mono,
-            11.0,
-            ph,
-            pill_x + 7.0,
-            y + py + 1.0,
-            palette::accent_star(),
-            pill,
-        );
-
-        let title_w = (pill_x - ix - 8.0).max(60.0);
-        let title_sz = if compact_v { 15.5 } else { 18.0 };
-        let fit_title = truncate_to_fit(p, Face::SemiBold, title_sz, "GitHub News", title_w);
-        p.text_line(
-            Face::SemiBold,
-            title_sz,
-            22.0,
-            ix,
-            y + py,
-            palette::text(),
-            &fit_title,
-        );
-
-        let mut cy = y + py + if compact_v { 24.0 } else { 32.0 };
-        p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
-        cy += if compact_v { 8.0 } else { 14.0 };
-
-        let headline = truncate_to_fit(
-            p,
-            Face::Medium,
-            ui_theme::sizes().ui,
-            "Meridian releases & dev notes",
-            iw,
-        );
-        p.text_line(
-            Face::Medium,
-            ui_theme::sizes().ui,
-            18.0,
-            ix,
-            cy,
-            palette::body(),
-            &headline,
-        );
-        cy += if compact_v { 19.0 } else { 24.0 };
-
-        let foot_h = if compact_v { 24.0 } else { 30.0 };
-        let foot_pad = if compact_v { 10.0 } else { 14.0 };
-        let foot_y = y + h - foot_h - foot_pad;
-        let show_footer = foot_y >= cy + 20.0;
-        let text_bottom = if show_footer {
-            foot_y - 6.0
-        } else {
-            y + h - foot_pad
-        };
-
-        let blurb = "Release notes and launcher updates will show here.";
-        let line_h = if compact_v { 16.0 } else { 19.0 };
-        let max_lines = (((text_bottom - cy) / line_h).floor().max(0.0) as usize).min(4);
-        let lines = wrap_lines(p, Face::Regular, ui_theme::small(), blurb, iw);
-        let cut = lines.len() > max_lines;
-        for (i, line) in lines.into_iter().take(max_lines).enumerate() {
-            // A line cut short says so, instead of ending mid-sentence.
-            let line = if cut && i + 1 == max_lines {
-                truncate_to_fit(
-                    p,
-                    Face::Regular,
-                    ui_theme::small(),
-                    &format!("{line}..."),
-                    iw,
-                )
-            } else {
-                line
-            };
-            p.text_line(
-                Face::Regular,
-                ui_theme::small(),
-                line_h,
-                ix,
-                cy + i as f32 * line_h,
-                palette::muted(),
-                &line,
-            );
-        }
-
-        if show_footer {
-            p.rounded(ix, foot_y, iw, foot_h, 7.0, palette::surface());
-            let repo = truncate_to_fit(
-                p,
-                Face::Mono,
-                11.0,
-                "github.com/10yukine/Meridian",
-                iw - 20.0,
-            );
-            p.text_line(
-                Face::Mono,
-                11.0,
-                foot_h,
-                ix + 10.0,
-                foot_y,
-                palette::muted(),
-                &repo,
-            );
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_home_updates_card(
-        &self,
-        ui: &mut Canvas<'_, '_>,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        compact_v: bool,
-        setup: &Setup,
-        profiles: &[Profile],
-        col_success: u32,
-        col_danger: u32,
-    ) {
-        draw_plate(ui, x, y, w, h, palette::border());
-        let Some(p) = ui.paint() else {
-            return;
-        };
-        let px = if compact_v { 14.0 } else { 20.0 };
-        let py = if compact_v { 10.0 } else { 18.0 };
-        let ix = x + px;
-        let iw = (w - px * 2.0).max(80.0);
-
-        let ver = concat!("v", env!("CARGO_PKG_VERSION"));
-        let ver_col = match setup {
-            Setup::Ready => col_success,
-            Setup::Failed { .. } => col_danger,
-            Setup::Needed | Setup::Running(_) => palette::accent_star(),
-        };
-        let pw = p.measure(Face::Mono, 11.0, ver) + 14.0;
-        let ph = 20.0;
-        let pill_x = ix + iw - pw;
-        p.rounded(
-            pill_x,
-            y + py + 1.0,
-            pw,
-            ph,
-            6.0,
-            color::with_alpha(ver_col, 0.16),
-        );
-        p.border(
-            pill_x,
-            y + py + 1.0,
-            pw,
-            ph,
-            6.0,
-            color::with_alpha(ver_col, 0.70),
-        );
-        p.text_line(
-            Face::Mono,
-            11.0,
-            ph,
-            pill_x + 7.0,
-            y + py + 1.0,
-            ver_col,
-            ver,
-        );
-
-        let title_w = (pill_x - ix - 8.0).max(60.0);
-        let title_sz = if compact_v { 15.5 } else { 18.0 };
-        let fit_title = truncate_to_fit(p, Face::SemiBold, title_sz, "Horizon Updates", title_w);
-        p.text_line(
-            Face::SemiBold,
-            title_sz,
-            22.0,
-            ix,
-            y + py,
-            palette::text(),
-            &fit_title,
-        );
-
-        let mut cy = y + py + if compact_v { 24.0 } else { 32.0 };
-        p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
-        cy += if compact_v { 8.0 } else { 14.0 };
-
-        let (runtime_text, runtime_col) = match setup {
-            Setup::Needed => ("Not installed".to_owned(), palette::muted()),
-            Setup::Running(prog) => (
-                format!(
-                    "{} {:.0}%",
-                    stage_name(prog.stage),
-                    stage_fraction(prog) * 100.0
-                ),
-                palette::accent_star(),
-            ),
-            Setup::Failed { stage, .. } => (format!("Failed ({})", stage_name(*stage)), col_danger),
-            Setup::Ready => ("Installed & ready".to_owned(), col_success),
-        };
-        let total_bytes: u64 = profiles.iter().map(|prof| prof.size).sum();
-        let storage_text = format!(
-            "{}  |  {}",
-            count_label(profiles.len(), "profile", "profiles"),
-            format_size(total_bytes)
-        );
-
-        let rows: Vec<(&str, String, u32)> = vec![
-            ("Target", "Java Edition 26.3".to_owned(), palette::body()),
-            ("Runtime", runtime_text, runtime_col),
-            ("Storage", storage_text, palette::body()),
-        ];
-
-        let row_h: f32 = if compact_v { 26.0 } else { 36.0 };
-        let row_step: f32 = if compact_v { 31.0 } else { 44.0 };
-        for (label, value, vcol) in rows {
-            if cy + row_h > y + h - 8.0 {
-                break;
-            }
-            p.rounded(ix, cy, iw, row_h, 8.0, palette::surface());
-            p.text_line(
-                Face::Medium,
-                ui_theme::small(),
-                row_h,
-                ix + 12.0,
-                cy,
-                palette::muted(),
-                label,
-            );
-            let fit_v = truncate_to_fit(p, Face::Mono, ui_theme::small(), &value, iw * 0.62);
-            let vw = p.measure(Face::Mono, ui_theme::small(), &fit_v);
-            p.text_line(
-                Face::Mono,
-                ui_theme::small(),
-                row_h,
-                ix + iw - 12.0 - vw,
-                cy,
-                vcol,
-                &fit_v,
-            );
-            cy += row_step;
-        }
-
-        if !compact_v && cy + 20.0 <= y + h - 10.0 {
-            let note = truncate_to_fit(
-                p,
-                Face::Regular,
-                ui_theme::small(),
-                "Tracking upstream Horizon engine & Minecraft 26.3.",
-                iw,
-            );
-            p.text_line(
-                Face::Regular,
-                ui_theme::small(),
-                18.0,
-                ix,
-                cy + 4.0,
-                palette::muted(),
-                &note,
-            );
-        }
     }
 
     /// Upward profile dropdown anchored directly above the bottom Profile Bar, matching its width,
@@ -1248,7 +886,6 @@ impl MobileLauncher {
         y: f32,
         w: f32,
         avail_h: f32,
-        id: &str,
         name: &str,
         worlds: usize,
         col_danger: u32,
@@ -1264,20 +901,6 @@ impl MobileLauncher {
         let world_phrase = count_label(worlds, "saved world", "saved worlds");
 
         if let Some(p) = ui.paint() {
-            p.rounded(inner_x, cy + 5.0, 8.0, 8.0, 4.0, col_danger);
-            p.text_line(
-                Face::Mono,
-                ui_theme::small(),
-                18.0,
-                inner_x + 16.0,
-                cy,
-                col_danger,
-                &format!(
-                    "DELETE PROFILE  |  {} WILL BE LOST",
-                    world_phrase.to_uppercase()
-                ),
-            );
-            cy += if compact_v { 20.0 } else { 26.0 };
             p.text_line(
                 Face::SemiBold,
                 if compact_v {
@@ -1292,9 +915,8 @@ impl MobileLauncher {
                 &format!("Delete \"{name}\"?"),
             );
             cy += if compact_v { 28.0 } else { 38.0 };
-            let body = format!(
-                "Removing \"{name}\" permanently deletes profiles/{id}, its mods, and {world_phrase}. Existing Vanilla worlds in the main game folder are untouched."
-            );
+            let body =
+                format!("Its mods and {world_phrase} are deleted for good. Vanilla worlds stay.");
             for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, &body, inner_w)
                 .into_iter()
                 .take(4)

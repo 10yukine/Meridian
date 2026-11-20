@@ -295,7 +295,7 @@ fn pluralization_handles_singular_and_plural_counts() {
         worlds: 1,
         state: ProfileState::Installed,
     };
-    assert_eq!(profile_stats_line(&prof), "1 mod  |  1 world  |  3.8 MB");
+    assert_eq!(profile_stats_line(&prof), "1 mod, 1 world, 3.8 MB");
 }
 
 #[test]

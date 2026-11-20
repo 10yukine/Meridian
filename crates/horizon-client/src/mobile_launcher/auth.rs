@@ -61,17 +61,6 @@ impl MobileLauncher {
                 palette::text(),
                 "Sign in to Meridian",
             );
-            if !compact_v {
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    18.0,
-                    title_x,
-                    cy + 28.0,
-                    palette::muted(),
-                    "Choose how you want to play Minecraft: Java Edition 26.3.",
-                );
-            }
         }
         cy += if compact_v { 44.0 } else { 62.0 };
 
@@ -99,7 +88,7 @@ impl MobileLauncher {
             inner_w,
             btn_h,
             Tone::Secondary,
-            "Play Offline  (Singleplayer / LAN)",
+            "Play Offline",
         );
         cy += btn_h + gap;
 
@@ -612,7 +601,6 @@ impl MobileLauncher {
         w: f32,
         avail_h: f32,
         sign_in: &SignIn,
-        col_danger: u32,
         col_warn: u32,
     ) {
         let compact_v = avail_h < 320.0;
@@ -638,16 +626,7 @@ impl MobileLauncher {
                         inner_x,
                         cy,
                         palette::text(),
-                        "Connecting to Account Service...",
-                    );
-                    p.text_line(
-                        Face::Regular,
-                        ui_theme::sizes().ui,
-                        22.0,
-                        inner_x,
-                        cy + 40.0,
-                        palette::muted(),
-                        "Preparing your sign-in session. This usually takes a moment.",
+                        "Connecting...",
                     );
                 }
                 cy += 96.0;
@@ -666,16 +645,6 @@ impl MobileLauncher {
             SignIn::Code { url, code } => {
                 if let Some(p) = ui.paint() {
                     p.text_line(
-                        Face::Mono,
-                        ui_theme::small(),
-                        18.0,
-                        inner_x,
-                        cy,
-                        palette::accent_star(),
-                        "MICROSOFT DEVICE CODE",
-                    );
-                    cy += if compact_v { 20.0 } else { 24.0 };
-                    p.text_line(
                         Face::SemiBold,
                         if compact_v {
                             20.0
@@ -688,8 +657,6 @@ impl MobileLauncher {
                         palette::text(),
                         "Enter this code in your browser",
                     );
-                } else {
-                    cy += if compact_v { 20.0 } else { 24.0 };
                 }
                 cy += if compact_v { 30.0 } else { 38.0 };
 
@@ -753,16 +720,6 @@ impl MobileLauncher {
             SignIn::Failed(err) => {
                 if let Some(p) = ui.paint() {
                     p.text_line(
-                        Face::Mono,
-                        ui_theme::small(),
-                        18.0,
-                        inner_x,
-                        cy,
-                        col_danger,
-                        "SIGN-IN FAILED",
-                    );
-                    cy += 24.0;
-                    p.text_line(
                         Face::SemiBold,
                         if compact_v {
                             20.0
@@ -773,7 +730,7 @@ impl MobileLauncher {
                         inner_x,
                         cy,
                         palette::text(),
-                        "Could not complete sign-in",
+                        "Sign-in failed",
                     );
                     cy += 38.0;
                     for (i, line) in

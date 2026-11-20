@@ -1094,7 +1094,6 @@ impl MobileLauncher {
                         card_w,
                         content_h,
                         &sign_in,
-                        col_danger,
                         col_warn,
                     );
                     return hits;
@@ -1234,9 +1233,9 @@ impl MobileLauncher {
             self.draw_free_space_confirm(ui, top_hits, modal_x, main_y, modal_w, main_h);
             return hits;
         }
-        if let Some((ref id, ref name, worlds)) = self.confirm_remove_profile {
+        if let Some((_, ref name, worlds)) = self.confirm_remove_profile {
             self.draw_remove_confirm(
-                ui, top_hits, modal_x, main_y, modal_w, main_h, id, name, worlds, col_danger,
+                ui, top_hits, modal_x, main_y, modal_w, main_h, name, worlds, col_danger,
             );
             return hits;
         }
@@ -1387,7 +1386,7 @@ impl MobileLauncher {
                 palette::text(),
                 "Meridian Launcher",
             );
-            let ver = concat!("v", env!("CARGO_PKG_VERSION"), "  |  MC 26.3");
+            let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
             let vw = p.measure(Face::Mono, 11.5, ver);
             p.text_line(
                 Face::Mono,
@@ -1429,7 +1428,7 @@ impl MobileLauncher {
         profiles: &[Profile],
     ) {
         let tight_top = top_h < 40.0;
-        let ver = concat!("v", env!("CARGO_PKG_VERSION"), "  |  MC 26.3");
+        let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
         let ver_pill_h = (top_h - if tight_top { 10.0 } else { 18.0 }).clamp(22.0, 28.0);
         let ver_pill_y = ((top_h - ver_pill_h) * 0.5).round();
         let ver_pill_w = ui.ro().measure(Face::Mono, 11.5, ver) + 22.0;
@@ -1463,36 +1462,12 @@ impl MobileLauncher {
                 "Meridian Launcher",
             );
 
-            // Top-right version badge
-            p.rounded(
-                ver_pill_x,
-                ver_pill_y,
-                ver_pill_w,
-                ver_pill_h,
-                7.0,
-                palette::surface(),
-            );
-            p.border(
-                ver_pill_x,
-                ver_pill_y,
-                ver_pill_w,
-                ver_pill_h,
-                7.0,
-                palette::border(),
-            );
-            p.rounded(
-                ver_pill_x + 8.0,
-                ver_pill_y + ((ver_pill_h - 6.0) * 0.5).round(),
-                6.0,
-                6.0,
-                3.0,
-                palette::accent_star(),
-            );
+            // Top right: the version, plain.
             p.text_line(
                 Face::Mono,
                 11.5,
                 ver_pill_h,
-                ver_pill_x + 18.0,
+                ver_pill_x + 22.0,
                 ver_pill_y,
                 palette::muted(),
                 ver,
@@ -1833,25 +1808,6 @@ impl MobileLauncher {
             };
             p.rounded(prof_x, pill_y, prof_w, pill_h, 11.0, fill);
             p.border(prof_x, pill_y, prof_w, pill_h, 11.0, bdr);
-            // Subtle centered violet underline accent along bottom of the pill
-            let line_w = if open || hovered {
-                prof_w * 0.48
-            } else {
-                prof_w * 0.24
-            };
-            p.rounded(
-                prof_x + ((prof_w - line_w) * 0.5).round(),
-                pill_y + pill_h - 2.0,
-                line_w,
-                2.0,
-                1.0,
-                if open || hovered {
-                    palette::accent_star()
-                } else {
-                    color::with_alpha(palette::accent(), 0.42)
-                },
-            );
-
             let state_dot = match &sel_state {
                 ProfileState::Installed => col_success,
                 ProfileState::Installing(_) | ProfileState::Available => palette::accent_star(),
@@ -1893,10 +1849,10 @@ impl MobileLauncher {
             );
             let rem_w = max_tw - nw;
             if rem_w > 46.0 {
-                let sep_and_sub = format!("  |  {summary}");
-                let fit_s = truncate_to_fit(p, Face::Mono, ui_theme::small(), &sep_and_sub, rem_w);
+                let sub = format!("   {summary}");
+                let fit_s = truncate_to_fit(p, Face::Regular, ui_theme::small(), &sub, rem_w);
                 p.text_line(
-                    Face::Mono,
+                    Face::Regular,
                     ui_theme::small(),
                     pill_h,
                     tx + nw,

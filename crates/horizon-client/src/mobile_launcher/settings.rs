@@ -25,7 +25,6 @@ impl MobileLauncher {
         draw_plate(ui, x, y, w, avail_h, palette::border());
 
         let ix = x + 22.0;
-        let iw = w - 44.0;
         let mut cy = y + if compact_v { 12.0 } else { 22.0 };
 
         if let Some(p) = ui.paint() {
@@ -85,7 +84,6 @@ impl MobileLauncher {
             );
 
             let tx = ix + preview_sz + 24.0;
-            let tw = (iw - preview_sz - 24.0).max(120.0);
             p.text_line(
                 Face::SemiBold,
                 20.0,
@@ -104,23 +102,6 @@ impl MobileLauncher {
                 palette::accent_star(),
                 provider,
             );
-            let note = "Your active account face is loaded automatically. Custom Steve/Alex skin uploads and cape selection are coming in a future update.";
-            let max_lines = if compact_v { 2 } else { 4 };
-            for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, note, tw)
-                .into_iter()
-                .take(max_lines)
-                .enumerate()
-            {
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::sizes().ui,
-                    20.0,
-                    tx,
-                    cy + 58.0 + i as f32 * 20.0,
-                    palette::muted(),
-                    &line,
-                );
-            }
         }
 
         let btn_x = ix + preview_sz + 24.0;
@@ -197,7 +178,7 @@ impl MobileLauncher {
                 cy,
                 136.0,
                 hdr_h,
-                Tone::Ghost,
+                Tone::Secondary,
                 "Quit Launcher",
             );
         }
@@ -245,27 +226,6 @@ impl MobileLauncher {
                 palette::text(),
                 "Launcher Font",
             );
-            if inner_w >= 500.0 {
-                let hint = if pixel_font && pack_font_ready {
-                    "Minecraft bitmap font"
-                } else if pixel_font {
-                    "Uses Geist until Minecraft 26.3 is installed"
-                } else if pack_font_ready {
-                    "Clean modern UI font"
-                } else {
-                    "Modern UI font (Pixel unlocks after 26.3 install)"
-                };
-                let hw = p.measure(Face::Regular, ui_theme::small(), hint);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    row_h,
-                    font_btn_x - 14.0 - hw,
-                    cy,
-                    palette::muted(),
-                    hint,
-                );
-            }
         }
         let font_btn_label = if pixel_font && pack_font_ready {
             "Pixel (Minecraft)"
@@ -302,10 +262,7 @@ impl MobileLauncher {
             let (hint, hint_col) = match (&self.freed, offer) {
                 (Some(Err(err)), _) => (err.clone(), col_danger),
                 (Some(Ok(bytes)), None) => (format!("Freed {}", format_size(*bytes)), col_success),
-                _ => (
-                    "Download cache & Java, only used to install".to_owned(),
-                    palette::muted(),
-                ),
+                _ => (String::new(), palette::muted()),
             };
             let btn_w = font_btn_w;
             if let Some(p) = ui.paint() {
@@ -383,18 +340,13 @@ impl MobileLauncher {
                 },
             ),
             (
-                "Profiles Storage",
+                "Profiles",
                 format!(
-                    "{}  |  {}",
+                    "{}, {}",
                     count_label(profiles.len(), "profile", "profiles"),
                     format_size(total_profile_bytes)
                 ),
                 palette::body(),
-            ),
-            (
-                "Touch Controls",
-                "MCPE default (Meridian art fallback)".to_owned(),
-                palette::muted(),
             ),
         ];
 
@@ -460,9 +412,8 @@ impl MobileLauncher {
                 &format!("Free up {size}?"),
             );
             cy += if compact_v { 30.0 } else { 40.0 };
-            let body = format!(
-                "Removes Minecraft's download cache and Java, which only installing uses. Your worlds, profiles, settings and the game stay, and you can keep playing. A game update or repair downloads them again (up to {size})."
-            );
+            let body = "Deletes the download cache and Java, which only installing uses. Your worlds and profiles stay. An update downloads them again."
+                .to_owned();
             let lines = ((btn_y - 8.0 - cy) / 20.0).floor().max(0.0) as usize;
             for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, &body, inner_w)
                 .into_iter()
