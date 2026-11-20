@@ -6,7 +6,7 @@ use super::widgets::{
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{Progress, Stage};
-use crate::ui_theme::{self, Face, color};
+use crate::ui_theme::{self, Face};
 
 impl MobileLauncher {
     #[allow(clippy::too_many_arguments)]
@@ -20,7 +20,6 @@ impl MobileLauncher {
         avail_h: f32,
         progress: &Progress,
         col_success: u32,
-        col_warn: u32,
     ) {
         let compact_v = avail_h < 300.0;
         let card_h = 340.0_f32.min(avail_h);
@@ -32,16 +31,6 @@ impl MobileLauncher {
         let mut cy = cy_top + if compact_v { 10.0 } else { 22.0 };
 
         if let Some(p) = ui.paint() {
-            p.text_line(
-                Face::Mono,
-                ui_theme::small(),
-                18.0,
-                inner_x,
-                cy,
-                palette::accent_star(),
-                "INSTALLING MINECRAFT 26.3",
-            );
-            cy += if compact_v { 18.0 } else { 24.0 };
             p.text_line(
                 Face::SemiBold,
                 if compact_v {
@@ -55,41 +44,38 @@ impl MobileLauncher {
                 palette::text(),
                 stage_heading(progress.stage),
             );
-        } else {
-            cy += if compact_v { 18.0 } else { 24.0 };
         }
-        cy += if compact_v { 26.0 } else { 38.0 };
+        cy += if compact_v { 32.0 } else { 44.0 };
 
         let current_idx = stage_index(progress.stage);
         let pill_gap = 8.0;
         let pill_w = (inner_w - pill_gap * 3.0) / 4.0;
         let pill_h = if compact_v { 28.0 } else { 36.0 };
         if let Some(p) = ui.paint() {
-            for (i, label) in ["1 Check", "2 Download", "3 Verify", "4 Prepare"]
+            for (i, label) in ["Check", "Download", "Verify", "Prepare"]
                 .iter()
                 .enumerate()
             {
                 let px = inner_x + i as f32 * (pill_w + pill_gap);
+                // Done in green, the current one on a plate, the rest muted.
                 let (bg, bdr, ink) = if i < current_idx {
-                    (
-                        color::with_alpha(col_success, 0.2),
-                        col_success,
-                        col_success,
-                    )
+                    (0, palette::border_subtle(), col_success)
                 } else if i == current_idx {
                     (
-                        color::with_alpha(palette::accent(), 0.26),
+                        palette::surface_hover(),
                         palette::accent_star(),
                         palette::text(),
                     )
                 } else {
-                    (palette::surface(), palette::border(), palette::muted())
+                    (0, palette::border_subtle(), palette::muted())
                 };
-                p.rounded(px, cy, pill_w, pill_h, 8.0, bg);
+                if bg != 0 {
+                    p.rounded(px, cy, pill_w, pill_h, 8.0, bg);
+                }
                 p.border(px, cy, pill_w, pill_h, 8.0, bdr);
-                let tw = p.measure(Face::Mono, ui_theme::small(), label);
+                let tw = p.measure(Face::Medium, ui_theme::small(), label);
                 p.text_line(
-                    Face::Mono,
+                    Face::Medium,
                     ui_theme::small(),
                     pill_h,
                     px + ((pill_w - tw) * 0.5).round(),
@@ -146,7 +132,7 @@ impl MobileLauncher {
                     18.0,
                     inner_x,
                     cy,
-                    col_warn,
+                    palette::muted(),
                     &fit,
                 );
             }
@@ -203,16 +189,6 @@ impl MobileLauncher {
 
         if let Some(p) = ui.paint() {
             p.text_line(
-                Face::Mono,
-                ui_theme::small(),
-                18.0,
-                inner_x,
-                cy,
-                col_danger,
-                &format!("SETUP FAILED AT {}", stage_name(stage).to_uppercase()),
-            );
-            cy += 22.0;
-            p.text_line(
                 Face::SemiBold,
                 if compact_v {
                     19.0
@@ -223,7 +199,7 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                "Game installation interrupted",
+                &format!("Install stopped at {}", stage_name(stage)),
             );
             cy += if compact_v { 30.0 } else { 36.0 };
             for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, error, inner_w)

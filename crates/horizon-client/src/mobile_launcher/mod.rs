@@ -1266,7 +1266,6 @@ impl MobileLauncher {
                     main_h,
                     progress,
                     col_success,
-                    col_warn,
                 ),
                 Setup::Failed { stage, ref error } => self.draw_setup_failed(
                     ui, top_hits, modal_x, main_y, modal_w, main_h, stage, error, col_danger,
