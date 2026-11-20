@@ -29,6 +29,11 @@ pub fn prepare() -> Startup {
     let result: crate::Result<_> = (|| {
         let mut command = std::process::Command::new(std::env::current_exe()?);
         command.args(std::env::args_os().skip(1));
+        // Meridian: a launcher that can't give the process arguments (Android's) hands them
+        // over here, one to a line.
+        if let Ok(extra) = std::env::var("HORIZON_EXTRA_ARGS") {
+            command.args(extra.lines());
+        }
         let launch = LaunchArguments::for_command(&command)?;
         let options = game::Options::validate(launch.clone())?;
         Ok((launch, options))

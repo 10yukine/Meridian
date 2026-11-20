@@ -474,27 +474,43 @@ pub(super) fn draw_player_head(
 ) {
     if let Some(rgba) = head {
         let step = size / 8.0;
+        let texel = |row: usize, col: usize| {
+            let i = (row * 8 + col) * 4;
+            let rgb =
+                (u32::from(rgba[i]) << 16) | (u32::from(rgba[i + 1]) << 8) | u32::from(rgba[i + 2]);
+            color::hex(rgb, rgba[i + 3])
+        };
+        // Rounded like the cells around it: each corner texel is a rounded square two texels
+        // wide from its corner, the texels drawn over it leaving only its own rounded corner.
+        let radius = step.min(size * 0.2);
+        for (row, col) in [(0, 0), (0, 7), (7, 0), (7, 7)] {
+            p.rounded(
+                x + if col == 0 { 0.0 } else { size - 2.0 * step },
+                y + if row == 0 { 0.0 } else { size - 2.0 * step },
+                2.0 * step,
+                2.0 * step,
+                radius,
+                texel(row, col),
+            );
+        }
         for row in 0..8 {
             for col in 0..8 {
-                let i = (row * 8 + col) * 4;
-                let a = rgba[i + 3];
-                if a == 0 {
+                if matches!((row, col), (0 | 7, 0 | 7)) {
                     continue;
                 }
-                let rgb = (u32::from(rgba[i]) << 16)
-                    | (u32::from(rgba[i + 1]) << 8)
-                    | u32::from(rgba[i + 2]);
+                // Rounded up to cover the seams, but never past the head's own edge.
+                let (tx, ty) = (x + col as f32 * step, y + row as f32 * step);
                 p.rounded(
-                    x + col as f32 * step,
-                    y + row as f32 * step,
-                    step.ceil(),
-                    step.ceil(),
+                    tx,
+                    ty,
+                    step.ceil().min(x + size - tx),
+                    step.ceil().min(y + size - ty),
                     0.0,
-                    color::hex(rgb, a),
+                    texel(row, col),
                 );
             }
         }
-        p.border(x, y, size, size, 3.0, palette::border());
+        p.border(x, y, size, size, radius, palette::border());
     } else {
         p.rounded(x, y, size, size, 6.0, palette::surface_hover());
         p.border(x, y, size, size, 6.0, palette::accent_star());
@@ -594,57 +610,173 @@ pub(super) fn draw_input_box(
     hits.push(hit);
 }
 
-/// A square button with a drawn icon beside a profile tab: a pencil (rename) or a bin (delete).
+/// A skin's front, head to feet, `texel` pixels to a skin texel: 32 texels tall, 16 wide (14
+/// with slim arms). Each part's outer layer (hat, jacket, sleeves, trousers) lies over it.
+pub(super) fn draw_skin_body(p: &mut Ui, x: f32, y: f32, texel: f32, skin: &[u8], slim: bool) {
+    if skin.len() < 64 * 64 * 4 {
+        return;
+    }
+    let arm = if slim { 3 } else { 4 };
+    // (base's x, y; outer layer's x, y; width, height; where on the figure).
+    let parts = [
+        ((8, 8), (40, 8), 8, 8, (arm, 0)),
+        ((20, 20), (20, 36), 8, 12, (arm, 8)),
+        ((44, 20), (44, 36), arm, 12, (0, 8)),
+        ((36, 52), (52, 52), arm, 12, (arm + 8, 8)),
+        ((4, 20), (4, 36), 4, 12, (arm, 20)),
+        ((20, 52), (4, 52), 4, 12, (arm + 4, 20)),
+    ];
+    let mut blit = |(sx, sy): (usize, usize), w: usize, h: usize, (fx, fy): (usize, usize)| {
+        for j in 0..h {
+            for i in 0..w {
+                let at = ((sy + j) * 64 + sx + i) * 4;
+                let a = skin[at + 3];
+                if a == 0 {
+                    continue;
+                }
+                let rgb = (u32::from(skin[at]) << 16)
+                    | (u32::from(skin[at + 1]) << 8)
+                    | u32::from(skin[at + 2]);
+                p.rounded(
+                    x + (fx + i) as f32 * texel,
+                    y + (fy + j) as f32 * texel,
+                    texel.ceil(),
+                    texel.ceil(),
+                    0.0,
+                    color::hex(rgb, a),
+                );
+            }
+        }
+    };
+    for (base, _, w, h, at) in parts {
+        blit(base, w, h, at);
+    }
+    for (_, outer, w, h, at) in parts {
+        blit(outer, w, h, at);
+    }
+}
+
+/// Lucide's 24-unit outlines, drawn as the rail's icons are (`icon_path`, an 18-unit grid).
+fn lucide_path(p: &mut Ui, cx: f32, cy: f32, size: f32, points: &[[f32; 2]], col: u32) {
+    let points: Vec<[f32; 2]> = points.iter().map(|[x, y]| [x * 0.75, y * 0.75]).collect();
+    icon_path(p, cx, cy, size, col, &points, false);
+}
+
+/// Lucide's `pencil`: the body, its rounded end, the point, and the band near the end.
+pub(super) fn draw_icon_pencil(p: &mut Ui, cx: f32, cy: f32, size: f32, col: u32) {
+    let outline = [
+        [17.19, 2.83],
+        [3.84, 16.17],
+        [2.3, 21.4],
+        [7.0, 20.1],
+        [21.17, 6.81],
+        [22.0, 4.82],
+        [21.17, 2.83],
+        [19.18, 2.0],
+        [17.19, 2.83],
+    ];
+    lucide_path(p, cx, cy, size, &outline, col);
+    lucide_path(p, cx, cy, size, &[[15.0, 5.0], [19.0, 9.0]], col);
+}
+
+/// Lucide's `trash-2`: the lid, the handle, the can, and its two slots.
+pub(super) fn draw_icon_trash(p: &mut Ui, cx: f32, cy: f32, size: f32, col: u32) {
+    lucide_path(p, cx, cy, size, &[[3.0, 6.0], [21.0, 6.0]], col);
+    let handle = [
+        [8.0, 6.0],
+        [8.0, 3.5],
+        [9.5, 2.0],
+        [14.5, 2.0],
+        [16.0, 3.5],
+        [16.0, 6.0],
+    ];
+    lucide_path(p, cx, cy, size, &handle, col);
+    let can = [
+        [19.0, 6.0],
+        [19.0, 20.5],
+        [17.5, 22.0],
+        [6.5, 22.0],
+        [5.0, 20.5],
+        [5.0, 6.0],
+    ];
+    lucide_path(p, cx, cy, size, &can, col);
+    lucide_path(p, cx, cy, size, &[[10.0, 11.0], [10.0, 17.0]], col);
+    lucide_path(p, cx, cy, size, &[[14.0, 11.0], [14.0, 17.0]], col);
+}
+
+/// The shown modded profile's tab: one cell with its name, then its pencil (rename) and bin
+/// (delete), each its own tap.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_tool_button(
+pub(super) fn draw_tab_with_tools(
     ui: &mut Canvas<'_, '_>,
     hits: &mut Vec<HitRect>,
-    id: ButtonId,
+    name_id: ButtonId,
+    rename_id: ButtonId,
+    delete_id: ButtonId,
     x: f32,
     y: f32,
-    size: f32,
-    delete: bool,
+    name_w: f32,
+    tool_w: f32,
+    h: f32,
+    label: &str,
 ) {
-    draw_button(ui, hits, id, x, y, size, size, Tone::Secondary, "");
-    let Some(p) = ui.paint() else { return };
-    let (cx, cy, s) = (x + size * 0.5, y + size * 0.5, size * 0.42);
-    let t = (s * 0.16).max(1.6);
-    if delete {
-        let col = color::hex(menu_style::get().settings.danger, 255);
-        // A bin: its lid and handle, then its body.
-        stroke(
-            p,
-            [cx - s * 0.5, cy - s * 0.3],
-            [cx + s * 0.5, cy - s * 0.3],
-            t,
-            col,
+    let w = name_w + 2.0 * tool_w;
+    if let Some(p) = ui.paint() {
+        p.rounded(x, y, w, h, 10.0, color::with_alpha(palette::accent(), 0.22));
+        p.border(x, y, w, h, 10.0, palette::accent_star());
+        let room = (name_w - 16.0).max(16.0);
+        let size = p.fit(Face::Medium, ui_theme::sizes().ui, label, room);
+        let tw = p.measure(Face::Medium, size, label);
+        p.text_line(
+            Face::Medium,
+            size,
+            h,
+            x + ((name_w - tw) * 0.5).round(),
+            y,
+            palette::text(),
+            label,
         );
-        stroke(
-            p,
-            [cx - s * 0.16, cy - s * 0.46],
-            [cx + s * 0.16, cy - s * 0.46],
-            t,
-            col,
+        // A hairline between the name and its tools.
+        p.rounded(
+            x + name_w,
+            y + h * 0.25,
+            1.0,
+            h * 0.5,
+            0.0,
+            color::with_alpha(palette::accent_star(), 0.45),
         );
-        p.border(cx - s * 0.36, cy - s * 0.18, s * 0.72, s * 0.68, 2.0, col);
-    } else {
-        // A pencil, its point at the bottom left.
-        let col = palette::body();
-        stroke(
+        let icon = (h * 0.46).min(18.0);
+        draw_icon_pencil(
             p,
-            [cx - s * 0.3, cy + s * 0.3],
-            [cx + s * 0.42, cy - s * 0.42],
-            s * 0.26,
-            col,
+            x + name_w + tool_w * 0.5,
+            y + h * 0.5,
+            icon,
+            palette::body(),
         );
-        stroke(
-            p,
-            [cx - s * 0.5, cy + s * 0.5],
-            [cx - s * 0.36, cy + s * 0.36],
-            t,
-            col,
-        );
+        let danger = color::hex(menu_style::get().settings.danger, 255);
+        draw_icon_trash(p, x + name_w + tool_w * 1.5, y + h * 0.5, icon, danger);
     }
+    hits.push(HitRect {
+        id: name_id,
+        x,
+        y,
+        w: name_w,
+        h,
+    });
+    hits.push(HitRect {
+        id: rename_id,
+        x: x + name_w,
+        y,
+        w: tool_w,
+        h,
+    });
+    hits.push(HitRect {
+        id: delete_id,
+        x: x + name_w + tool_w,
+        y,
+        w: tool_w,
+        h,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -158,6 +158,11 @@ fn enter(home: &Path, launch: &Launch) -> bool {
                 );
             }
         }
+        // The game's arguments from Settings: Android starts the app without any.
+        let args = launch::game_args(home);
+        if !args.is_empty() {
+            std::env::set_var("HORIZON_EXTRA_ARGS", args.join("\n"));
+        }
     }
     true
 }

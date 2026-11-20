@@ -172,6 +172,62 @@ pub(crate) fn save_offline_skin(root: &Path, name: &str, png: &[u8], slim: bool)
     remove(&dir.join(format!("{name}.{other}.png")))
 }
 
+/// The game's arguments, as the player typed them on Settings.
+const GAME_ARGS: &str = "game-arguments.txt";
+
+/// `text` as arguments: split at spaces, a "quoted part" (or 'quoted') one argument with its
+/// spaces. An unclosed quote is refused.
+pub fn split_args(text: &str) -> Result<Vec<String>, String> {
+    let (mut args, mut word, mut quote, mut in_word) = (Vec::new(), String::new(), None, false);
+    for c in text.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    args.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err("A quote isn't closed.".into());
+    }
+    if in_word {
+        args.push(word);
+    }
+    Ok(args)
+}
+
+/// What the player typed as the game's arguments (empty: none).
+pub fn game_args_text(root: &Path) -> String {
+    fs::read_to_string(root.join(GAME_ARGS)).unwrap_or_default()
+}
+
+/// The game's arguments: what [`game_args_text`] holds, split.
+pub fn game_args(root: &Path) -> Vec<String> {
+    split_args(&game_args_text(root)).unwrap_or_default()
+}
+
+/// Keeps `text` as the game's arguments, once it splits (see [`split_args`]); empty removes them.
+pub(crate) fn save_game_args(root: &Path, text: &str) -> Result<(), String> {
+    let text = text.trim();
+    split_args(text)?;
+    if text.is_empty() {
+        return remove(&root.join(GAME_ARGS)).map_err(|e| e.to_string());
+    }
+    fs::write(root.join(GAME_ARGS), text).map_err(|e| e.to_string())
+}
+
 const RUNNING: &str = "launch-running";
 
 /// The game is about to run: a marker only its normal end removes, so the launcher can tell
@@ -285,6 +341,28 @@ mod tests {
         assert_eq!(offline_skin(&root, "Alex"), None);
         assert!(save_offline_skin(&root, "../x", b"x", false).is_err());
         assert_eq!(offline_skin(&root, "../x"), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn game_arguments_split_at_spaces_keep_quoted_parts_and_refuse_an_open_quote() {
+        assert_eq!(
+            split_args(r#"  --render-distance 8 --quickPlaySingleplayer "New World" 'a b'"#)
+                .unwrap(),
+            ["--render-distance", "8", "--quickPlaySingleplayer", "New World", "a b"]
+        );
+        assert_eq!(split_args(r#""" x"#).unwrap(), ["", "x"]);
+        assert!(split_args("").unwrap().is_empty());
+        assert!(split_args(r#"--world "unclosed"#).is_err());
+
+        let root = scratch();
+        save_game_args(&root, " --render-distance 8 ").unwrap();
+        assert_eq!(game_args(&root), ["--render-distance", "8"]);
+        assert!(save_game_args(&root, r#"--world "x"#).is_err());
+        assert_eq!(game_args_text(&root), "--render-distance 8", "a refused one keeps the old");
+        save_game_args(&root, "").unwrap();
+        assert!(game_args(&root).is_empty());
+        assert!(!root.join(GAME_ARGS).exists());
         fs::remove_dir_all(root).unwrap();
     }
 

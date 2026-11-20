@@ -1,5 +1,5 @@
 use super::widgets::{Canvas, count_label, log_levels, profile_stats_line};
-use super::{Action, AuthForm, ButtonId, MobileLauncher, Route};
+use super::{Action, AuthForm, ButtonId, LICENSES, MobileLauncher, Route, SOURCE_CODE};
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
     Account, Backend, ELY_SKINS, Fake, Head, ModInfo, ModSearch, PickedSkin, Profile, ProfileMod,
@@ -32,6 +32,8 @@ struct StubBackend {
     skins: Arc<Mutex<SkinStub>>,
     /// The selected profile's game log.
     log: Vec<String>,
+    /// The game's arguments, as kept.
+    args: String,
 }
 
 impl Default for StubBackend {
@@ -80,6 +82,7 @@ impl Default for StubBackend {
             reclaim: 0,
             skins: Arc::default(),
             log: Vec::new(),
+            args: String::new(),
         }
     }
 }
@@ -190,6 +193,14 @@ impl Backend for StubBackend {
     }
     fn game_log(&self, _profile: &str) -> Vec<String> {
         self.log.clone()
+    }
+    fn game_args(&self) -> String {
+        self.args.clone()
+    }
+    fn set_game_args(&mut self, text: &str) -> Result<(), String> {
+        crate::launcher_backend::launch::split_args(text)?;
+        self.args = text.trim().into();
+        Ok(())
     }
     fn profiles(&self) -> Vec<Profile> {
         self.profiles.clone()
@@ -1116,6 +1127,7 @@ fn skins_put_on_a_chosen_png_and_send_ely_to_its_website() {
     skins.lock().unwrap().picked = Some(Ok(PickedSkin {
         png: b"skin.png".to_vec(),
         face: [7; 8 * 8 * 4],
+        skin: vec![9; 64 * 64 * 4].into(),
     }));
     l.poll();
     // Classic until the player picks Slim.
@@ -1209,4 +1221,113 @@ fn home_shows_the_game_log_and_copies_the_level_chosen() {
             "[2] [main/ERROR]: broke\n    at here".into()
         ))
     );
+}
+
+#[test]
+fn settings_keeps_game_arguments_and_links_about() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let ids = |l: &MobileLauncher, size: [u32; 2]| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui))
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    click_button(&mut l, [914, 411], ButtonId::OpenSettings);
+    // Below everything: the arguments, then About, at every phone size.
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "settings");
+        let shown = ids(&l, size);
+        for id in [
+            ButtonId::ToggleLauncherFont,
+            ButtonId::FocusGameArgs,
+            ButtonId::OpenSourceCode,
+            ButtonId::OpenLicenses,
+        ] {
+            assert!(shown.contains(&id), "{size:?}: {id:?}");
+        }
+    }
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::FocusGameArgs);
+    assert!(l.wants_text());
+    // With the keyboard up, the field is what shows; the rail stays.
+    let keyboard = ids(&l, [914, 213]);
+    assert!(keyboard.contains(&ButtonId::FocusGameArgs));
+    assert!(keyboard.contains(&ButtonId::OpenMods));
+    assert!(!keyboard.contains(&ButtonId::OpenAccountSwitcher));
+    l.typed(r#"--render-distance 8 --world "New World""#);
+    l.typed("\n");
+    assert!(!l.wants_text());
+    assert_eq!(
+        l.backend().game_args(),
+        r#"--render-distance 8 --world "New World""#
+    );
+    // An open quote is refused, with the reason, and the kept arguments stay.
+    click_button(&mut l, size, ButtonId::FocusGameArgs);
+    l.typed(r#" "x"#);
+    click_button(&mut l, size, ButtonId::GoHome);
+    assert!(l.game_args_error.is_some());
+    assert_eq!(
+        l.backend().game_args(),
+        r#"--render-distance 8 --world "New World""#
+    );
+    // Play refused on them (the host checks them as the game will): Settings says why.
+    click_button(&mut l, size, ButtonId::GoHome);
+    l.game_args_refused("missing value after --bogus");
+    assert_eq!(l.route, Route::Settings);
+    assert_eq!(
+        l.game_args_error.as_deref(),
+        Some("missing value after --bogus")
+    );
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::OpenSourceCode),
+        Some(Action::OpenUrl(SOURCE_CODE.into()))
+    );
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::OpenLicenses),
+        Some(Action::OpenUrl(LICENSES.into()))
+    );
+}
+
+#[test]
+fn a_question_pops_up_over_the_page_and_alone_takes_taps() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    click_button(&mut l, size, ButtonId::OpenNewProfile);
+    click_button(&mut l, size, ButtonId::SaveRenameProfile);
+    click_button(&mut l, size, ButtonId::DeleteTabProfile);
+    let shown = with_ui(size, (0.0, 0.0), |ui| {
+        l.layout(&mut Canvas::Hit(ui))
+            .iter()
+            .map(|h| h.id)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        shown,
+        [
+            ButtonId::CancelRemoveProfile,
+            ButtonId::ConfirmRemoveProfile
+        ]
+    );
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "delete-popup");
+    }
+    click_button(&mut l, size, ButtonId::CancelRemoveProfile);
+    assert_eq!(l.backend().profiles().len(), 2, "kept");
 }

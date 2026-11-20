@@ -625,7 +625,7 @@ impl MobileLauncher {
         col_danger: u32,
     ) {
         let compact_v = avail_h < 280.0;
-        let card_h = 286.0_f32.min(avail_h);
+        let card_h = (if compact_v { 176.0_f32 } else { 196.0 }).min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, col_danger);
 

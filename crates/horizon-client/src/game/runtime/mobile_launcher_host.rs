@@ -15,6 +15,21 @@ use horizon_client_render::android_runtime;
 use horizon_client_render::gamepad::{Button, PadState};
 use winit::event::{MouseButton, Touch, TouchPhase};
 
+/// The game's arguments from Settings as the game reads them (`Options::validate`): one it
+/// doesn't take stops Play here, with the reason, instead of the game closing as it starts.
+fn check_game_args(args: &[String]) -> std::result::Result<(), String> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    let mut command = std::process::Command::new("horizon");
+    command.args(args);
+    let launch = horizon_mod_package::selection::LaunchArguments::for_command(&command)
+        .map_err(|e| e.to_string())?;
+    crate::game::Options::validate(launch)
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
 /// How fast a controller moves the pointer at full tilt, in window pixels a second.
 const PAD_SPEED: f64 = 1100.0;
 /// Stick tilt below this doesn't move the pointer.
@@ -170,7 +185,13 @@ impl Host {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        match renderer.render(&loading_frame(&batch)) {
+        let mut frame = loading_frame(&batch);
+        // A launcher pop-up blurs the page behind it (`MobileLauncher` marks where: `blur_at`), at
+        // vanilla's default menu blur.
+        if batch.blur_at > 0 {
+            frame.menu_blur = Some(5.0);
+        }
+        match renderer.render(&frame) {
             Ok(true) => {
                 if !std::mem::replace(&mut self.shown, true) {
                     eprintln!(
@@ -271,6 +292,10 @@ impl Host {
 
     /// The selected profile with the account's session or offline name, for the next process.
     fn hand_off(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(error) = check_game_args(&launch::game_args(&self.root)) {
+            self.screen.game_args_refused(error);
+            return;
+        }
         let backend = self.screen.backend();
         let session = match backend.game_session() {
             Ok(session) => session,

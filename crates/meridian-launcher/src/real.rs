@@ -541,8 +541,8 @@ impl Backend for Real {
             .read_to_end(&mut png);
         let _ = fs::remove_file(&path);
         Some(match read {
-            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::face(&png)
-                .map(|face| PickedSkin { png, face })
+            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::decode(&png)
+                .map(|(face, skin)| PickedSkin { png, face, skin })
                 .ok_or_else(|| "Choose a 64x64 PNG skin.".to_owned()),
             Ok(_) => Err("That file is too big for a skin.".into()),
             Err(e) => Err(format!("Could not read the file: {e}")),
@@ -609,6 +609,40 @@ impl Backend for Real {
 
     fn skin_upload(&self) -> SkinUpload {
         self.skin_upload.lock().unwrap().clone()
+    }
+
+    fn player_skin(&self, player: &Account) -> Option<(Arc<[u8]>, bool)> {
+        let slim = {
+            let state = self.identity.lock().unwrap();
+            match state
+                .shelf
+                .entries
+                .iter()
+                .find(|item| item.account() == *player)?
+            {
+                Remembered::Microsoft {
+                    profile: Some(profile),
+                    ..
+                } => profile
+                    .skin
+                    .as_ref()
+                    .is_some_and(|(_, arms)| arms == "slim"),
+                // The skin an offline name chose (`<name>.slim.png`), else its default one.
+                _ => heads::offline_skin(&self.root, player)
+                    .is_some_and(|url| url.ends_with(".slim.png") || url.contains("/slim/")),
+            }
+        };
+        // Loads it with the head, if it isn't yet.
+        self.player_head(player)?;
+        Some((self.heads.skin(player)?, slim))
+    }
+
+    fn game_args(&self) -> String {
+        launch::game_args_text(&self.root)
+    }
+
+    fn set_game_args(&mut self, text: &str) -> Result<(), String> {
+        launch::save_game_args(&self.root, text)
     }
 
     fn game_log(&self, profile: &str) -> Vec<String> {

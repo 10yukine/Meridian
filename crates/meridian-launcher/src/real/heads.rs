@@ -5,7 +5,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(30);
 
 enum Status {
     Loading,
-    Ready(Head),
+    /// The face, and the whole skin (64x64 RGBA) for the Skins page's figure.
+    Ready(Head, Arc<[u8]>),
     RetryAt(Instant),
 }
 
@@ -38,7 +39,7 @@ impl Cache {
         }
         let mut status = entry.status.lock().unwrap();
         match *status {
-            Status::Ready(face) => return Some(face),
+            Status::Ready(face, _) => return Some(face),
             Status::Loading => return None,
             Status::RetryAt(at) if Instant::now() < at => return None,
             Status::RetryAt(_) => {}
@@ -52,7 +53,7 @@ impl Cache {
                 let result = load(&url);
                 *worker_status.lock().unwrap() = result.map_or_else(
                     || Status::RetryAt(Instant::now() + RETRY_DELAY),
-                    Status::Ready,
+                    |(face, skin)| Status::Ready(face, skin),
                 );
             })
             .is_err()
@@ -60,6 +61,16 @@ impl Cache {
             *status = Status::RetryAt(Instant::now() + RETRY_DELAY);
         }
         None
+    }
+
+    /// The whole skin [`Self::get`] loaded for `player`, once it has.
+    pub(super) fn skin(&self, player: &Account) -> Option<Arc<[u8]>> {
+        let entries = self.0.lock().unwrap();
+        let entry = entries.iter().find(|entry| &entry.player == player)?;
+        match &*entry.status.lock().unwrap() {
+            Status::Ready(_, skin) => Some(skin.clone()),
+            _ => None,
+        }
     }
 
     pub(super) fn remove(&self, player: &Account) {
@@ -106,9 +117,9 @@ pub(super) fn offline_skin(root: &Path, player: &Account) -> Option<String> {
     Some(format!("file:{}", file.display()))
 }
 
-fn load(url: &str) -> Option<Head> {
+fn load(url: &str) -> Option<(Head, Arc<[u8]>)> {
     if let Some(path) = url.strip_prefix("file:") {
-        return face(&fs::read(path).ok()?);
+        return decode(&fs::read(path).ok()?);
     }
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
@@ -122,11 +133,19 @@ fn load(url: &str) -> Option<Head> {
         .take(1 << 20)
         .read_to_end(&mut png)
         .ok()?;
-    face(&png)
+    decode(&png)
 }
 
+#[cfg(test)]
+fn face(png: &[u8]) -> Option<Head> {
+    decode(png).map(|(face, _)| face)
+}
+
+/// A 64x64 or legacy 64x32 skin: its face with the hat over it, and the whole skin as 64x64
+/// RGBA. A legacy skin's left arm and leg are its right ones (the game mirrors them; a front
+/// view shows the difference only on an uneven limb).
 // Same face and hat coordinates as the desktop launcher (launcher/src/heads.rs).
-pub(super) fn face(png: &[u8]) -> Option<Head> {
+pub(super) fn decode(png: &[u8]) -> Option<(Head, Arc<[u8]>)> {
     let mut decoder = png::Decoder::new(Cursor::new(png));
     decoder.set_limits(png::Limits { bytes: 1 << 20 });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -161,12 +180,51 @@ pub(super) fn face(png: &[u8]) -> Option<Head> {
             out[px + 3] = 255;
         }
     }
-    Some(out)
+    let mut skin = vec![0u8; 64 * 64 * 4];
+    for y in 0..frame.height as usize {
+        for x in 0..64 {
+            skin[(y * 64 + x) * 4..][..4].copy_from_slice(&rgba(x, y));
+        }
+    }
+    if frame.height == 32 {
+        // (from x, to x, width): the right leg and arm, copied to where the left ones go.
+        for (from, to, w) in [(0, 16, 16), (40, 32, 16)] {
+            for y in 16..32 {
+                let row = |x: usize, y: usize| (y * 64 + x) * 4;
+                skin.copy_within(row(from, y)..row(from + w, y), row(to, y + 32));
+            }
+        }
+    }
+    Some((out, skin.into()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_legacy_skin_lends_its_right_limbs_to_the_left() {
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 64, 32);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut rgba = vec![0u8; 64 * 32 * 4];
+            // The right leg's front (x 4, y 20) and the right arm's (x 44, y 20).
+            rgba[(20 * 64 + 4) * 4..][..4].copy_from_slice(&[1, 2, 3, 255]);
+            rgba[(20 * 64 + 44) * 4..][..4].copy_from_slice(&[4, 5, 6, 255]);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&rgba)
+                .unwrap();
+        }
+        let (_, skin) = decode(&png).unwrap();
+        assert_eq!(skin.len(), 64 * 64 * 4);
+        let at = |x: usize, y: usize| &skin[(y * 64 + x) * 4..][..4];
+        assert_eq!(at(20, 52), [1, 2, 3, 255], "left leg's front");
+        assert_eq!(at(36, 52), [4, 5, 6, 255], "left arm's front");
+    }
 
     #[test]
     fn waits_before_retrying_a_failed_head() {

@@ -172,12 +172,13 @@ pub type Head = [u8; 8 * 8 * 4];
 /// Where an Ely.by account changes its skin: Ely.by's public API takes no uploads.
 pub const ELY_SKINS: &str = "https://ely.by/skins";
 
-/// A skin file the player chose: the PNG and its face for a preview. The player picks the arms,
-/// as Minecraft's own launchers have them do.
+/// A skin file the player chose: the PNG, its face, and the whole skin as 64x64 RGBA for the
+/// figure. The player picks the arms, as Minecraft's own launchers have them do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PickedSkin {
     pub png: Vec<u8>,
     pub face: Head,
+    pub skin: std::sync::Arc<[u8]>,
 }
 
 /// Where putting on a skin ([`Backend::use_skin`]) stands.
@@ -243,6 +244,18 @@ pub trait Backend: Send {
     fn use_skin(&mut self, _png: Vec<u8>, _slim: bool) {}
     fn skin_upload(&self) -> SkinUpload {
         SkinUpload::Idle
+    }
+    /// The account's whole skin (64x64 RGBA, once loaded) and whether its arms are slim.
+    fn player_skin(&self, _account: &Account) -> Option<(std::sync::Arc<[u8]>, bool)> {
+        None
+    }
+    /// The arguments the game starts with, as the player typed them.
+    fn game_args(&self) -> String {
+        String::new()
+    }
+    /// Keeps `text` as the game's arguments: words, "quoted words" as one.
+    fn set_game_args(&mut self, _text: &str) -> Result<(), String> {
+        Err("Game arguments are unavailable in this launcher.".into())
     }
     /// The last lines of `profile`'s game log (`logs/latest.log` in its folder), oldest first;
     /// none before its game has run.

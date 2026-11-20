@@ -33,6 +33,10 @@ use widgets::{
     profile_stats_line, stage_fraction, stage_name, stage_pill_text, truncate_to_fit,
 };
 
+/// About's links: the source, and the licenses of what Meridian is built from.
+const SOURCE_CODE: &str = "https://github.com/10yukine/Meridian";
+const LICENSES: &str = "https://github.com/10yukine/Meridian/blob/main/THIRD_PARTY_NOTICES.md";
+
 /// Action requested by clicking on [`MobileLauncher`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -157,6 +161,10 @@ enum ButtonId {
     // Home's game log
     LogLevel(u8),
     CopyLog,
+    // Settings: the game's arguments, About's links
+    FocusGameArgs,
+    OpenSourceCode,
+    OpenLicenses,
 }
 
 /// Interactive Meridian launcher backed by [`Backend`].
@@ -210,6 +218,11 @@ pub struct MobileLauncher {
     log_level: u8,
     /// The last tap copied the game log.
     log_copied: bool,
+    /// The game's arguments are being typed on Settings: what so far, and why the last was
+    /// turned down.
+    game_args_focused: bool,
+    game_args_draft: String,
+    game_args_error: Option<String>,
 }
 
 #[cfg(not(test))]
@@ -267,7 +280,17 @@ impl MobileLauncher {
             skin_uploading: false,
             log_level: 0,
             log_copied: false,
+            game_args_focused: false,
+            game_args_draft: String::new(),
+            game_args_error: None,
         }
+    }
+
+    /// Keeps the game's arguments typed on Settings, and stops typing them; why not, if they
+    /// can't be kept.
+    fn save_game_args(&mut self) {
+        self.game_args_focused = false;
+        self.game_args_error = self.backend.set_game_args(&self.game_args_draft).err();
     }
 
     /// Once a frame: takes the skin file the platform's picker handed over.
@@ -287,6 +310,13 @@ impl MobileLauncher {
                 self.skin_pick = None;
             }
         }
+    }
+
+    /// Play stopped on the game's arguments: Settings shows why, under them.
+    pub fn game_args_refused(&mut self, why: impl Into<String>) {
+        self.profile_popup_open = false;
+        self.route = Route::Settings;
+        self.game_args_error = Some(why.into());
     }
 
     /// The platform has no file picker to open.
@@ -363,6 +393,7 @@ impl MobileLauncher {
         }
         match self.route {
             Route::Mods if self.mod_search_focused => Some(&mut self.mod_search_query),
+            Route::Settings if self.game_args_focused => Some(&mut self.game_args_draft),
             _ => None,
         }
     }
@@ -370,6 +401,9 @@ impl MobileLauncher {
     fn max_chars_for_active(&self) -> usize {
         if self.profile_rename.is_some() {
             return 32;
+        }
+        if self.game_args_focused {
+            return 512;
         }
         match self.auth_form {
             Some(AuthForm::Offline) => 16,
@@ -456,6 +490,7 @@ impl MobileLauncher {
             Route::Mods if self.mod_search_focused => {
                 self.handle_button(ButtonId::SubmitModSearch);
             }
+            Route::Settings if self.game_args_focused => self.save_game_args(),
             _ => {}
         }
     }
@@ -555,6 +590,10 @@ impl MobileLauncher {
             && let Err(err) = self.backend.rename_profile(&tab, name.trim())
         {
             self.mods_error = Some(err);
+        }
+        // A tap anywhere else keeps the game's arguments typed so far.
+        if self.game_args_focused && id != ButtonId::FocusGameArgs {
+            self.save_game_args();
         }
         // Any other tap answers "Free up space?" with no.
         self.confirm_free_space = matches!(id, ButtonId::FreeSpace | ButtonId::ConfirmFreeSpace);
@@ -983,6 +1022,15 @@ impl MobileLauncher {
             }
             ButtonId::OpenElySkins => return Some(Action::OpenUrl(ELY_SKINS.into())),
             ButtonId::LogLevel(level) => self.log_level = level,
+            ButtonId::FocusGameArgs => {
+                if !self.game_args_focused {
+                    self.game_args_draft = self.backend.game_args();
+                    self.game_args_focused = true;
+                    self.game_args_error = None;
+                }
+            }
+            ButtonId::OpenSourceCode => return Some(Action::OpenUrl(SOURCE_CODE.into())),
+            ButtonId::OpenLicenses => return Some(Action::OpenUrl(LICENSES.into())),
             ButtonId::CopyLog => {
                 let lines = self.backend.game_log(&self.backend.selected_profile());
                 let shown: Vec<&str> = lines
@@ -1123,14 +1171,15 @@ impl MobileLauncher {
         }
 
         // ---- Signed-in Shell: Left Sidebar (above top bar, under bottom bar) + Top Bar + Full-Width Bottom Dock ----
-        // While the keyboard is up for a field, the form gets the room above it: no rail, and no
-        // dock rising behind it with the account switcher.
+        // While the keyboard is up for a field, the form gets the room above it: no dock rising
+        // behind it with the account switcher. The rail stays, so the page keeps its place.
         // ponytail: "keyboard up" is the keyboard-lifted height (kb_h); a tablet's keyboard leaves
         // more room and keeps the dock. Pass the keyboard's height from the host if that matters.
         let typing = kb_h
             && !self.profile_popup_open
             && (self.profile_rename.is_some()
-                || self.route == Route::Mods && self.mod_search_focused);
+                || self.route == Route::Mods && self.mod_search_focused
+                || self.route == Route::Settings && self.game_args_focused);
         let bottom_h = if typing {
             0.0
         } else if kb_h {
@@ -1142,9 +1191,7 @@ impl MobileLauncher {
         } else {
             68.0
         };
-        let rail_w = if typing {
-            0.0
-        } else if kb_h {
+        let rail_w = if kb_h {
             58.0
         } else if compact_w {
             64.0
@@ -1156,10 +1203,12 @@ impl MobileLauncher {
         let rail_h = (ui_h - bottom_h).max(0.0);
 
         let mut bg_hits = Vec::new();
+        // A question over the page: the page shows, blurred, and only the question takes taps.
+        let popup = self.confirm_free_space || self.confirm_remove_profile.is_some();
 
         // Top bar drawn first (right of left panel); left panel drawn above it; bottom dock caps full width on top.
         {
-            let chrome_hits = if self.profile_popup_open {
+            let chrome_hits = if self.profile_popup_open || popup {
                 &mut bg_hits
             } else {
                 &mut hits
@@ -1174,16 +1223,14 @@ impl MobileLauncher {
                 &setup,
                 &profiles,
             );
-            if !typing {
-                self.draw_rail(ui, chrome_hits, rail_w, rail_h, top_h, short_h);
-            }
+            self.draw_rail(ui, chrome_hits, rail_w, rail_h, top_h, short_h);
         }
         let (prof_x, prof_w) = if typing {
             (0.0, 0.0)
         } else {
             self.draw_bottom_bar(
                 ui,
-                &mut hits,
+                if popup { &mut bg_hits } else { &mut hits },
                 ui_w,
                 ui_h - bottom_h,
                 bottom_h,
@@ -1212,22 +1259,11 @@ impl MobileLauncher {
         let modal_w = main_w.min(if wide_w { 720.0 } else { 600.0 });
         let modal_x = main_x + ((main_w - modal_w) * 0.5).round();
 
-        let top_hits = if self.profile_popup_open {
+        let top_hits = if self.profile_popup_open || popup {
             &mut bg_hits
         } else {
             &mut hits
         };
-
-        if self.confirm_free_space {
-            self.draw_free_space_confirm(ui, top_hits, modal_x, main_y, modal_w, main_h);
-            return hits;
-        }
-        if let Some((_, ref name, worlds)) = self.confirm_remove_profile {
-            self.draw_remove_confirm(
-                ui, top_hits, modal_x, main_y, modal_w, main_h, name, worlds, col_danger,
-            );
-            return hits;
-        }
 
         match self.route {
             Route::Install => match setup {
@@ -1320,6 +1356,31 @@ impl MobileLauncher {
             ),
         }
 
+        if popup {
+            // Everything drawn so far blurs (the host turns the blur on for a frame that marks
+            // where it ends), dimmed under the question, which sits in the middle of the screen.
+            if let Some(p) = ui.paint() {
+                p.batch.blur_at = p.batch.vertices.len() as u32;
+                p.rounded(
+                    0.0,
+                    0.0,
+                    ui_w,
+                    ui_h,
+                    0.0,
+                    color::with_alpha(palette::bg_outer(), 0.55),
+                );
+            }
+            let pop_w = modal_w.min(ui_w - 32.0);
+            let pop_x = ((ui_w - pop_w) * 0.5).round();
+            if self.confirm_free_space {
+                self.draw_free_space_confirm(ui, &mut hits, pop_x, 0.0, pop_w, ui_h);
+            } else if let Some((_, ref name, worlds)) = self.confirm_remove_profile {
+                self.draw_remove_confirm(
+                    ui, &mut hits, pop_x, 0.0, pop_w, ui_h, name, worlds, col_danger,
+                );
+            }
+            return hits;
+        }
         if self.profile_popup_open {
             self.draw_profile_popup(
                 ui,

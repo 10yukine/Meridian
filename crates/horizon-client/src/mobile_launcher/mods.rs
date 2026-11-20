@@ -2,7 +2,7 @@
 
 use super::widgets::{
     Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_plate,
-    draw_tool_button, format_size, palette, truncate_to_fit, wrap_lines,
+    draw_tab_with_tools, format_size, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{ModSearch, Profile, VANILLA};
@@ -103,11 +103,28 @@ impl MobileLauncher {
             let label = prof.name.as_str();
             let cw =
                 (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 26.0).clamp(72.0, 180.0);
-            // The modded profile shown has its own tools: rename and delete.
+            // The modded profile shown carries its own tools in its cell: rename and delete.
             let tools = prof.id == pid && prof.id != VANILLA;
-            let tools_w = if tools { 2.0 * top_btn_h + 8.0 } else { 0.0 };
-            if chip_x + cw + tools_w > tabs_right {
+            let tool_w = top_btn_h;
+            if chip_x + cw + if tools { 2.0 * tool_w } else { 0.0 } > tabs_right {
                 break;
+            }
+            if tools {
+                draw_tab_with_tools(
+                    ui,
+                    hits,
+                    ButtonId::ModManagerPickProfile(i),
+                    ButtonId::RenameTabProfile,
+                    ButtonId::DeleteTabProfile,
+                    chip_x,
+                    cy,
+                    cw,
+                    tool_w,
+                    top_btn_h,
+                    label,
+                );
+                chip_x += cw + 2.0 * tool_w + 6.0;
+                continue;
             }
             draw_button(
                 ui,
@@ -124,29 +141,7 @@ impl MobileLauncher {
                 },
                 label,
             );
-            chip_x += cw + 4.0;
-            if tools {
-                draw_tool_button(
-                    ui,
-                    hits,
-                    ButtonId::RenameTabProfile,
-                    chip_x,
-                    cy,
-                    top_btn_h,
-                    false,
-                );
-                draw_tool_button(
-                    ui,
-                    hits,
-                    ButtonId::DeleteTabProfile,
-                    chip_x + top_btn_h + 4.0,
-                    cy,
-                    top_btn_h,
-                    true,
-                );
-                chip_x += tools_w;
-            }
-            chip_x += 2.0;
+            chip_x += cw + 6.0;
         }
         cy += top_btn_h
             + if ultra_v {
