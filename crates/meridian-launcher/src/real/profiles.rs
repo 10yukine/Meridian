@@ -492,41 +492,6 @@ impl Store {
         })
     }
 
-    pub(super) fn presets(&self) -> Vec<Profile> {
-        let catalog = self.catalog.lock().unwrap();
-        let Some(i) = &catalog.index else {
-            let fetch = matches!(catalog.search, ModSearch::Idle);
-            drop(catalog);
-            if fetch {
-                self.search("");
-            }
-            return Vec::new();
-        };
-        i.projects
-            .iter()
-            .filter_map(|p| {
-                if p.kind != Kind::Modpack {
-                    return None;
-                }
-                let v = newest(i, p)?;
-                let required = v
-                    .requires
-                    .iter()
-                    .map(|pin| resolve(i, pin, Kind::Mod).ok().map(|(_, v)| v.file.size))
-                    .sum::<Option<u64>>()?;
-                Some(Profile {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    description: p.summary.clone(),
-                    mods: v.requires.len(),
-                    size: required.saturating_add(v.file.size),
-                    worlds: 0,
-                    state: ProfileState::Available,
-                })
-            })
-            .collect()
-    }
-
     pub(super) fn search(&self, query: &str) {
         let mut state = self.catalog.lock().unwrap();
         let query = query.trim().to_lowercase();

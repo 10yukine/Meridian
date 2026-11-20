@@ -407,9 +407,6 @@ impl Backend for Real {
     fn remove_profile(&mut self, id: &str) -> Result<(), String> {
         self.profiles.remove(id)
     }
-    fn presets(&self) -> Vec<Profile> {
-        self.profiles.presets()
-    }
     fn create_profile(
         &mut self,
         name: &str,

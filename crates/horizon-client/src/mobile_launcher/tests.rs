@@ -2,7 +2,7 @@ use super::widgets::{Canvas, count_label, log_levels, profile_stats_line};
 use super::{Action, AuthForm, ButtonId, LICENSES, MobileLauncher, Route, SOURCE_CODE};
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
-    Account, Backend, ELY_SKINS, Fake, Head, ModInfo, ModSearch, PickedSkin, Profile, ProfileMod,
+    Account, Backend, ELY_SKINS, Head, ModInfo, ModSearch, PickedSkin, Profile, ProfileMod,
     ProfileState, Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, profile_id,
     valid_offline_name,
 };
@@ -217,17 +217,6 @@ impl Backend for StubBackend {
         self.selected_profile = VANILLA.into();
         Ok(())
     }
-    fn presets(&self) -> Vec<Profile> {
-        vec![Profile {
-            id: "performance".into(),
-            name: "Performance".into(),
-            description: "Faster chunks.".into(),
-            mods: 2,
-            size: 3_500_000,
-            worlds: 0,
-            state: ProfileState::Available,
-        }]
-    }
     fn create_profile(
         &mut self,
         name: &str,
@@ -407,7 +396,7 @@ fn ely_under_more_options_wipes_secrets_on_submit() {
 
 #[test]
 fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
-    let mut launcher = MobileLauncher::new(Box::new(Fake::default()));
+    let mut launcher = MobileLauncher::new(Box::new(StubBackend::default()));
     let size = [1040, 700];
 
     launcher.backend.sign_in_offline("Steve").unwrap();
