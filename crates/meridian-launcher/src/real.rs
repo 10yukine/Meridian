@@ -824,7 +824,8 @@ fn spawn_later(root: PathBuf, cancel: Arc<AtomicBool>) {
 fn fetch_later(root: &Path, cancel: &AtomicBool) -> Result<(), String> {
     let lock: serde_json::Value = serde_json::from_str(LOCK).map_err(|e| e.to_string())?;
     let pins = sources::Pins::read(&lock).ok_or("Missing Minecraft version pins.")?;
-    let done = horizon_prepare::resources_dir(root, &pins.version, None).join("later-assets.done");
+    let resources = horizon_prepare::resources_dir(root, &pins.version, None);
+    let done = resources.join("later-assets.done");
     if done.is_file() {
         return Ok(());
     }
@@ -843,6 +844,16 @@ fn fetch_later(root: &Path, cancel: &AtomicBool) -> Result<(), String> {
     horizon_prepare::sounds(root, Some(&game), &log)?;
     horizon_prepare::languages(root, Some(&game), &log)?;
     drop_asset_objects(&game);
+    // The game's data file lists only what was there when it was written: the languages added
+    // since read as missing (its language list showed English alone). Without the file the next
+    // start reads the folder, and a new one is written with them.
+    let data = resources.join(horizon_core::prepared_files::FILE_NAME);
+    match fs::remove_file(&data) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("{}: {e}", data.display()));
+        }
+        _ => {}
+    }
     sources::write_file(&done, b"")
 }
 
