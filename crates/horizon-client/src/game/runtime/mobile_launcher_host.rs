@@ -36,6 +36,18 @@ const PAD_SPEED: f64 = 1100.0;
 const PAD_DEADZONE: f32 = 0.25;
 /// A brief grace for a nearly finished cache. A longer wait costs more than an uncached start.
 const MAX_FILE_WAIT: Duration = Duration::from_secs(1);
+/// How far a finger moves, in UI pixels, before it scrolls instead of tapping (Android's touch
+/// slop is 8 dp).
+const DRAG: f64 = 8.0;
+
+/// The finger followed: where it went down and last was (physical pixels), and whether it has
+/// started scrolling, so it doesn't tap where it lifts.
+struct Finger {
+    id: u64,
+    down_y: f64,
+    last_y: f64,
+    dragging: bool,
+}
 
 enum GameFiles {
     Pending,
@@ -51,6 +63,7 @@ struct Host {
     screen: MobileLauncher,
     /// The pointer (or finger) in physical pixels.
     pointer: (f64, f64),
+    finger: Option<Finger>,
     /// The phone's keyboard is up for a text field.
     keyboard: bool,
     /// How far the keyboard covers the window, in pixels (polled: the window doesn't shrink).
@@ -105,6 +118,7 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
         gui,
         screen,
         pointer: (0.0, 0.0),
+        finger: None,
         keyboard: false,
         ime: 0,
         pad: PadState::default(),
@@ -334,6 +348,40 @@ impl Host {
         }
     }
 
+    /// A finger past [`DRAG`] scrolls the page by as much as it moves; one that didn't taps.
+    fn touch(&mut self, event_loop: &ActiveEventLoop, phase: TouchPhase, id: u64, y: f64) {
+        let scale = f64::from(self.batch().scale);
+        match (phase, &mut self.finger) {
+            (TouchPhase::Started, _) => {
+                self.finger = Some(Finger {
+                    id,
+                    down_y: y,
+                    last_y: y,
+                    dragging: false,
+                });
+            }
+            (TouchPhase::Moved, Some(finger)) if finger.id == id => {
+                if !finger.dragging && (y - finger.down_y).abs() >= DRAG * scale {
+                    finger.dragging = true;
+                    finger.last_y = y;
+                }
+                if finger.dragging {
+                    self.screen.scroll(((y - finger.last_y) / scale) as f32);
+                    finger.last_y = y;
+                }
+            }
+            (TouchPhase::Ended, Some(finger)) if finger.id == id => {
+                let tapped = !finger.dragging;
+                self.finger = None;
+                if tapped {
+                    self.click(event_loop);
+                }
+            }
+            (TouchPhase::Cancelled, _) => self.finger = None,
+            _ => {}
+        }
+    }
+
     /// A controller moves the pointer (left stick, D-pad) and its A button taps where it is.
     fn pad_input(&mut self, event_loop: &ActiveEventLoop, seconds: f64) {
         let pad = android_runtime::pad_state();
@@ -434,15 +482,16 @@ impl ApplicationHandler for Host {
                 button: MouseButton::Left,
                 ..
             } => self.click(event_loop),
-            // A finger is the pointer while it's down, and taps where it lifts.
+            // A finger is the pointer while it's down, and taps where it lifts unless it dragged.
             WindowEvent::Touch(Touch {
-                phase, location, ..
+                phase,
+                location,
+                id,
+                ..
             }) => {
                 self.pad_used = None;
                 self.pointer = (location.x, location.y);
-                if phase == TouchPhase::Ended {
-                    self.click(event_loop);
-                }
+                self.touch(event_loop, phase, id, location.y);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 match event.physical_key {

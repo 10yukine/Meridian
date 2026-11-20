@@ -100,8 +100,15 @@ impl Store {
         let _ = std::thread::Builder::new()
             .name("launcher-profile-size".into())
             .spawn(move || {
-                for id in std::iter::once(VANILLA.to_owned()).chain(ids) {
-                    reader.refresh_usage(&id);
+                let ids: Vec<String> = std::iter::once(VANILLA.to_owned()).chain(ids).collect();
+                // Every profile's worlds first (a delete confirmation shows them): the sizes walk
+                // every file.
+                for id in &ids {
+                    let worlds = reader.worlds(id);
+                    reader.put_usage(id, |usage| usage.1 = worlds);
+                }
+                for id in &ids {
+                    reader.refresh_usage(id);
                 }
             });
         store
@@ -117,10 +124,9 @@ impl Store {
         Ok(())
     }
 
-    fn refresh_usage(&self, id: &str) {
-        let home = profile_dir(&self.root, id);
-        let saves = home.join("saves");
-        let worlds = fs::read_dir(&saves)
+    /// The worlds in a profile's `saves`: folders with a `level.dat`.
+    fn worlds(&self, id: &str) -> usize {
+        fs::read_dir(profile_dir(&self.root, id).join("saves"))
             .into_iter()
             .flatten()
             .flatten()
@@ -128,17 +134,27 @@ impl Store {
                 entry.file_type().is_ok_and(|ty| ty.is_dir())
                     && entry.path().join("level.dat").is_file()
             })
-            .count();
+            .count()
+    }
+
+    /// Changes a known profile's (bytes, worlds).
+    fn put_usage(&self, id: &str, set: impl FnOnce(&mut (u64, usize))) {
+        let mut state = self.state.lock().unwrap();
+        if id == VANILLA || state.library.entries.iter().any(|entry| entry.id == id) {
+            set(state.usage.entry(id.into()).or_default());
+        }
+    }
+
+    fn refresh_usage(&self, id: &str) {
+        let home = profile_dir(&self.root, id);
+        let worlds = self.worlds(id);
         let size = if id == VANILLA {
             folder_bytes(&horizon_prepare::resources_dir(&self.root, GAME, None))
-                + folder_bytes(&saves)
+                + folder_bytes(&home.join("saves"))
         } else {
             folder_bytes(&home)
         };
-        let mut state = self.state.lock().unwrap();
-        if id == VANILLA || state.library.entries.iter().any(|entry| entry.id == id) {
-            state.usage.insert(id.into(), (size, worlds));
-        }
+        self.put_usage(id, |usage| *usage = (size, worlds));
     }
 
     pub(super) fn list(&self, base_ready: bool, setup: Setup) -> Vec<Profile> {

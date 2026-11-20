@@ -255,16 +255,22 @@ impl MobileLauncher {
         }
         let box_y = y + head_h + 8.0;
         let box_h = h - head_h - 8.0;
-        let Some(p) = ui.paint() else {
-            return;
-        };
-        p.rounded(x, box_y, w, box_h, 10.0, palette::bg_outer());
-        p.border(x, box_y, w, box_h, 10.0, palette::border_subtle());
         let shown: Vec<(&String, u8)> = lines
             .iter()
             .zip(log_levels(&lines))
             .filter(|(_, level)| *level >= self.log_level)
             .collect();
+        let (size, line_h) = (11.0, 16.0);
+        let rows = ((box_h - 16.0) / line_h).floor().max(0.0) as usize;
+        // The last lines that fit, or earlier ones a drag went back to.
+        let max_back = shown.len().saturating_sub(rows);
+        self.scroll_max.set(max_back);
+        let end = shown.len() - self.page_offset().min(max_back);
+        let Some(p) = ui.paint() else {
+            return;
+        };
+        p.rounded(x, box_y, w, box_h, 10.0, palette::bg_outer());
+        p.border(x, box_y, w, box_h, 10.0, palette::border_subtle());
         if shown.is_empty() {
             let empty = if lines.is_empty() {
                 "The game's log shows here once you play."
@@ -282,9 +288,7 @@ impl MobileLauncher {
             );
             return;
         }
-        let (size, line_h) = (11.0, 16.0);
-        let rows = ((box_h - 16.0) / line_h).floor().max(0.0) as usize;
-        for (i, (line, level)) in shown[shown.len().saturating_sub(rows)..].iter().enumerate() {
+        for (i, (line, level)) in shown[end.saturating_sub(rows)..end].iter().enumerate() {
             let ink = match level {
                 2 => col_danger,
                 1 => col_warn,
@@ -341,6 +345,7 @@ impl MobileLauncher {
         let overflows = profiles.len() > visible_cap;
         let visible = profiles.len().min(visible_cap).max(1);
         let max_scroll = profiles.len().saturating_sub(visible);
+        self.scroll_max.set(max_scroll);
         let scroll = self.profile_scroll.min(max_scroll);
 
         let rows_h = visible as f32 * row_h + visible.saturating_sub(1) as f32 * row_gap;
@@ -356,15 +361,6 @@ impl MobileLauncher {
                 dock_y,
                 0.0,
                 color::with_alpha(palette::bg_outer(), 0.58),
-            );
-            // Soft ambient drop glow behind the upward dropdown.
-            p.rounded(
-                popup_x - 2.0,
-                popup_y - 2.0,
-                popup_w + 4.0,
-                popup_h + 4.0,
-                12.0,
-                color::with_alpha(palette::accent(), 0.14),
             );
         }
         if popup_y > 0.0 {
@@ -408,14 +404,7 @@ impl MobileLauncher {
 
         // Solid opaque dropdown container so dimmed cards underneath never bleed through.
         if let Some(p) = ui.paint() {
-            p.rounded(
-                popup_x,
-                popup_y,
-                popup_w,
-                popup_h,
-                10.0,
-                color::hex(0x0f081c, 255),
-            );
+            p.rounded(popup_x, popup_y, popup_w, popup_h, 10.0, palette::surface());
             p.border(
                 popup_x,
                 popup_y,
@@ -479,7 +468,7 @@ impl MobileLauncher {
                     ProfileState::Installed => profile_stats_line(profile),
                 };
                 let meta_col = if is_selected {
-                    color::hex(0xebe4ff, 255)
+                    palette::text()
                 } else {
                     match &state {
                         ProfileState::Failed(_) => col_danger,
@@ -504,18 +493,18 @@ impl MobileLauncher {
                 };
                 let fit_meta = truncate_to_fit(
                     p,
-                    Face::Mono,
+                    Face::Regular,
                     ui_theme::small(),
                     &right_meta,
                     max_row_w * 0.56,
                 );
-                let mw = p.measure(Face::Mono, ui_theme::small(), &fit_meta);
+                let mw = p.measure(Face::Regular, ui_theme::small(), &fit_meta);
                 let name_room = (max_row_w - mw - 12.0).max(52.0);
                 let fit_name = truncate_to_fit(p, name_face, 13.5, &profile.name, name_room);
 
                 p.text_line(name_face, 13.5, row_h, tx, ly, name_col, &fit_name);
                 p.text_line(
-                    Face::Mono,
+                    Face::Regular,
                     ui_theme::small(),
                     row_h,
                     ix + iw - 10.0 - mw,
@@ -649,8 +638,11 @@ impl MobileLauncher {
                 &format!("Delete \"{name}\"?"),
             );
             cy += if compact_v { 28.0 } else { 38.0 };
-            let body =
-                format!("Its mods and {world_phrase} are deleted for good. Vanilla worlds stay.");
+            let body = if worlds == 0 {
+                "Everything in it is deleted for good. Vanilla worlds stay.".to_owned()
+            } else {
+                format!("Its mods and {world_phrase} are deleted for good. Vanilla worlds stay.")
+            };
             for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, &body, inner_w)
                 .into_iter()
                 .take(4)
@@ -691,7 +683,11 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Danger,
-            "Delete Profile & Worlds",
+            if worlds == 0 {
+                "Delete Profile"
+            } else {
+                "Delete Profile & Worlds"
+            },
         );
     }
 }

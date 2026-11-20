@@ -993,12 +993,10 @@ fn profile_dropdown_matches_bar_width_opens_upward_and_scrolls_long_lists() {
             );
         });
 
-        // Scroll down via scrollbar tap + scroll wheel until the final profile is visible and selectable.
+        // Scroll down via scrollbar tap + a long drag up until the final profile is visible and selectable.
         click_button(&mut launcher, size, ButtonId::ProfileScrollDown);
         assert_eq!(launcher.profile_scroll, 1);
-        for _ in 0..12 {
-            launcher.scroll(-1.0);
-        }
+        launcher.scroll(-1000.0);
         assert_hits_fit_without_overlap(&launcher, size, "profile-dropdown-scrolled-bottom");
         click_button(&mut launcher, size, ButtonId::SelectProfile(11));
         assert!(!launcher.profile_popup_open);
@@ -1319,4 +1317,85 @@ fn a_question_pops_up_over_the_page_and_alone_takes_taps() {
     }
     click_button(&mut l, size, ButtonId::CancelRemoveProfile);
     assert_eq!(l.backend().profiles().len(), 2, "kept");
+}
+
+/// The ids laid out at `size`.
+fn shown(l: &MobileLauncher, size: [u32; 2]) -> Vec<ButtonId> {
+    with_ui(size, (0.0, 0.0), |ui| {
+        l.layout(&mut Canvas::Hit(ui))
+            .iter()
+            .map(|h| h.id)
+            .collect()
+    })
+}
+
+#[test]
+fn a_drag_scrolls_settings_rows_that_dont_fit_and_the_game_log_back() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        log: (0..60).map(|i| format!("[{i}] [main/INFO]: line {i}")).collect(),
+        ..StubBackend::default()
+    }));
+    // Too short for About: a drag up brings it in, a drag down the first row back.
+    let size = [914, 300];
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    assert!(!shown(&l, size).contains(&ButtonId::OpenLicenses));
+    l.scroll(-1000.0);
+    let scrolled = shown(&l, size);
+    assert!(scrolled.contains(&ButtonId::OpenLicenses), "{scrolled:?}");
+    assert!(!scrolled.contains(&ButtonId::ToggleLauncherFont));
+    assert_hits_fit_without_overlap(&l, size, "settings-scrolled");
+    l.scroll(1000.0);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleLauncherFont));
+
+    // Home starts at the log's end; a drag down goes back, as far as its first line.
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::GoHome);
+    assert_eq!(l.page_offset(), 0, "another page starts unscrolled");
+    shown(&l, size);
+    let back = l.scroll_max.get();
+    assert!(back > 0 && back < 60, "{back}");
+    l.scroll(32.0);
+    assert_eq!(l.page_offset(), 2);
+    l.scroll(10_000.0);
+    assert_eq!(l.page_offset(), back);
+}
+
+#[test]
+fn mods_tabs_that_dont_fit_wrap_and_a_new_profiles_name_shows() {
+    let mut profiles = StubBackend::default().profiles;
+    for i in 1..=9 {
+        profiles.push(Profile {
+            id: format!("pack-{i}"),
+            name: format!("A Longer Modpack Name {i}"),
+            description: String::new(),
+            mods: 1,
+            size: 1_000_000,
+            worlds: 0,
+            state: ProfileState::Installed,
+        });
+    }
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        profiles,
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    let tabs = shown(&l, size);
+    for i in 0..10 {
+        assert!(tabs.contains(&ButtonId::ModManagerPickProfile(i)), "tab {i}");
+    }
+    assert_hits_fit_without_overlap(&l, size, "mods-many-tabs");
+    click_button(&mut l, size, ButtonId::OpenNewProfile);
+    assert!(l.wants_text());
+    assert!(shown(&l, size).contains(&ButtonId::FocusRenameInput));
 }

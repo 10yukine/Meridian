@@ -1,6 +1,5 @@
-//! Meridian mobile launcher UI (`docs/launcher-spec.md`):
-//! North Star visual identity (`#080310` -> `#170e29`, `#a575f6` / `#a990ff` accents) over
-//! `crate::ui_theme` so no prepared pack is required.
+//! Meridian mobile launcher UI (`docs/launcher-spec.md`): neutral greys and one violet accent
+//! (`widgets::palette`) over `crate::ui_theme`, so no prepared pack is required.
 //!
 //! Shell layout:
 //! - Left sidebar (above top bar, under bottom bar): Meridian North Star logo, then Home, Mods,
@@ -25,6 +24,7 @@ use crate::launcher_backend::{
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
+use std::cell::Cell;
 use std::path::PathBuf;
 use widgets::{
     Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, draw_backdrop,
@@ -191,6 +191,13 @@ pub struct MobileLauncher {
     // Paging & dropdown scroll
     profile_scroll: usize,
     account_page: usize,
+    /// The page a drag scrolled and how far: Settings' rows scrolled past, or the game log's
+    /// lines back from its end on Home. Another page starts unscrolled.
+    page_scroll: (Route, usize),
+    /// The drag not yet a whole row ([`Self::scroll`]).
+    scroll_carry: f32,
+    /// How far the list a drag scrolls can go, from the last layout.
+    scroll_max: Cell<usize>,
     // Mod manager state
     mods_profile_id: Option<String>,
     mods_list_page: usize,
@@ -198,8 +205,8 @@ pub struct MobileLauncher {
     mod_search_focused: bool,
     mod_registry_page: usize,
     mods_error: Option<String>,
-    // Modals
-    confirm_remove_profile: Option<(String, String, usize)>,
+    // Modals: the profile to delete, its id and name.
+    confirm_remove_profile: Option<(String, String)>,
     confirm_free_space: bool,
     /// What Settings' "Free up space" did: the bytes freed, or why not.
     freed: Option<Result<u64, String>>,
@@ -264,6 +271,9 @@ impl MobileLauncher {
             status_note: None,
             profile_scroll: 0,
             account_page: 0,
+            page_scroll: (Route::Home, 0),
+            scroll_carry: 0.0,
+            scroll_max: Cell::new(0),
             mods_profile_id: None,
             mods_list_page: 0,
             mod_search_query: String::new(),
@@ -331,36 +341,41 @@ impl MobileLauncher {
         self
     }
 
-    /// Scroll active lists (for example the profile dropdown when more profiles exist than fit).
-    /// Positive `delta_y` scrolls upward toward earlier items; negative scrolls downward.
+    /// A drag, `delta_y` UI pixels (positive: the finger moved down, toward earlier rows): it
+    /// scrolls the profile dropdown while that is open, else Settings' rows or Home's game log.
     pub fn scroll(&mut self, delta_y: f32) {
-        if !self.profile_popup_open || delta_y.abs() < 0.01 {
-            return;
-        }
-        let max_idx = self.backend.profiles().len().saturating_sub(1);
-        if delta_y > 0.0 {
-            self.profile_scroll = self.profile_scroll.saturating_sub(1);
+        let row = match (self.profile_popup_open, self.route) {
+            _ if self.confirm_free_space || self.confirm_remove_profile.is_some() => return,
+            (true, _) => 34.0,
+            (false, Route::Home) => 16.0,
+            (false, Route::Settings) => 50.0,
+            _ => return,
+        };
+        self.scroll_carry += delta_y;
+        let rows = (self.scroll_carry / row).trunc();
+        self.scroll_carry -= rows * row;
+        let max = self.scroll_max.get() as f32;
+        if self.profile_popup_open {
+            self.profile_scroll = (self.profile_scroll as f32 - rows).clamp(0.0, max) as usize;
         } else {
-            self.profile_scroll = (self.profile_scroll + 1).min(max_idx);
+            // The game log counts back from its end: a drag down shows earlier lines there too.
+            let rows = if self.route == Route::Home { rows } else { -rows };
+            let at = (self.page_offset() as f32 + rows).clamp(0.0, max);
+            self.page_scroll = (self.route, at as usize);
+        }
+    }
+
+    /// How far a drag scrolled this page ([`Self::page_scroll`]).
+    fn page_offset(&self) -> usize {
+        if self.page_scroll.0 == self.route {
+            self.page_scroll.1
+        } else {
+            0
         }
     }
 
     pub fn backend(&self) -> &dyn Backend {
         &*self.backend
-    }
-
-    /// True while a background sign-in, setup, profile install, or mod search needs redraws.
-    pub fn is_busy(&self) -> bool {
-        matches!(
-            self.backend.sign_in(),
-            SignIn::Starting | SignIn::Code { .. }
-        ) || matches!(self.backend.setup(), Setup::Running(_))
-            || matches!(self.backend.mod_search(), ModSearch::Searching)
-            || self
-                .backend
-                .profiles()
-                .iter()
-                .any(|p| matches!(p.state, ProfileState::Installing(_)))
     }
 
     fn is_onboarding(&self, accounts: &[Account]) -> bool {
@@ -581,8 +596,6 @@ impl MobileLauncher {
             self.adding_account = false;
             self.auth_form = None;
         }
-        // Opening New Profile focuses its name; tapping anything else (a mod, a preset) doesn't
-        // keep the keyboard up.
         // A tap anywhere else keeps the name being typed on a Mods tab.
         if !matches!(id, ButtonId::FocusRenameInput | ButtonId::SaveRenameProfile)
             && let Some((tab, name)) = self.profile_rename.take()
@@ -987,14 +1000,14 @@ impl MobileLauncher {
                 if pid != VANILLA
                     && let Some(p) = profiles.iter().find(|p| p.id == pid)
                 {
-                    self.confirm_remove_profile = Some((p.id.clone(), p.name.clone(), p.worlds));
+                    self.confirm_remove_profile = Some((p.id.clone(), p.name.clone()));
                 }
             }
             ButtonId::CancelRemoveProfile => {
                 self.confirm_remove_profile = None;
             }
             ButtonId::ConfirmRemoveProfile => {
-                if let Some((id, name, _)) = self.confirm_remove_profile.take() {
+                if let Some((id, name)) = self.confirm_remove_profile.take() {
                     match self.backend.remove_profile(&id) {
                         Ok(()) => {
                             self.status_note =
@@ -1048,6 +1061,8 @@ impl MobileLauncher {
 
     fn layout(&self, ui: &mut Canvas<'_, '_>) -> Vec<HitRect> {
         let mut hits = Vec::new();
+        // The list a drag scrolls sets it as it's laid out.
+        self.scroll_max.set(0);
         let styles = &menu_style::get().settings;
         let col_success = color::hex(styles.success, 255);
         let col_warn = color::hex(styles.warn, 255);
@@ -1374,7 +1389,9 @@ impl MobileLauncher {
             let pop_x = ((ui_w - pop_w) * 0.5).round();
             if self.confirm_free_space {
                 self.draw_free_space_confirm(ui, &mut hits, pop_x, 0.0, pop_w, ui_h);
-            } else if let Some((_, ref name, worlds)) = self.confirm_remove_profile {
+            } else if let Some((ref id, ref name)) = self.confirm_remove_profile {
+                // As counted now, not when the bin was tapped.
+                let worlds = profiles.iter().find(|p| &p.id == id).map_or(0, |p| p.worlds);
                 self.draw_remove_confirm(
                     ui, &mut hits, pop_x, 0.0, pop_w, ui_h, name, worlds, col_danger,
                 );

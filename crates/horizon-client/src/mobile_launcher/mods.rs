@@ -56,21 +56,36 @@ impl MobileLauncher {
             "New Profile",
         );
 
-        let tabs_right = ix + iw - new_w - 10.0;
         let pid = self.effective_mods_profile_id(profiles);
         let mut chip_x = ix;
+        // Tabs that don't fit go on the next row: the first ends before New Profile.
+        let mut row_end = ix + iw - new_w - 10.0;
         for (i, prof) in profiles.iter().enumerate() {
-            // Its name typed in place, and Done: with the keyboard up, this row is what shows.
-            if let Some((_, typed)) = self
+            let renaming = self
                 .profile_rename
                 .as_ref()
-                .filter(|(id, _)| *id == prof.id)
-            {
-                let done_w = 72.0;
-                let field_w = (tabs_right - chip_x - 6.0 - done_w).min(260.0);
-                if field_w < 100.0 {
-                    break;
-                }
+                .filter(|(id, _)| *id == prof.id);
+            // Always show the profile's display name (not its folder id).
+            let label = prof.name.as_str();
+            let cw =
+                (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 26.0).clamp(72.0, 180.0);
+            // The modded profile shown carries its own tools in its cell: rename and delete.
+            let tools = prof.id == pid && prof.id != VANILLA;
+            let tool_w = top_btn_h;
+            let done_w = 72.0;
+            let want = match (renaming, tools) {
+                (Some(_), _) => 100.0 + 6.0 + done_w,
+                (None, true) => cw + 2.0 * tool_w,
+                (None, false) => cw,
+            };
+            if chip_x > ix && chip_x + want > row_end {
+                chip_x = ix;
+                cy += top_btn_h + 6.0;
+                row_end = ix + iw;
+            }
+            // Its name typed in place, and Done: with the keyboard up, this row is what shows.
+            if let Some((_, typed)) = renaming {
+                let field_w = (row_end - chip_x - 6.0 - done_w).min(260.0);
                 draw_input_box(
                     ui,
                     hits,
@@ -98,16 +113,6 @@ impl MobileLauncher {
                 );
                 chip_x += field_w + done_w + 12.0;
                 continue;
-            }
-            // Always show the profile's display name (not its folder id).
-            let label = prof.name.as_str();
-            let cw =
-                (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 26.0).clamp(72.0, 180.0);
-            // The modded profile shown carries its own tools in its cell: rename and delete.
-            let tools = prof.id == pid && prof.id != VANILLA;
-            let tool_w = top_btn_h;
-            if chip_x + cw + if tools { 2.0 * tool_w } else { 0.0 } > tabs_right {
-                break;
             }
             if tools {
                 draw_tab_with_tools(
@@ -394,9 +399,9 @@ impl MobileLauncher {
                     &fit_n,
                 );
                 let meta = format!("v{}  ·  {}", pm.info.version, format_size(pm.info.size));
-                let fit_m = truncate_to_fit(p, Face::Mono, 11.0, &meta, max_nw);
+                let fit_m = truncate_to_fit(p, Face::Regular, 11.0, &meta, max_nw);
                 p.text_line(
-                    Face::Mono,
+                    Face::Regular,
                     11.0,
                     16.0,
                     px + 10.0,
@@ -521,12 +526,12 @@ impl MobileLauncher {
             py,
             pw - search_btn_w - 6.0,
             search_h,
-            "",
             if self.mod_search_query.is_empty() && !self.mod_search_focused {
-                "Search Horizon mods..."
+                "Search Horizon mods"
             } else {
-                &self.mod_search_query
+                ""
             },
+            &self.mod_search_query,
             false,
             self.mod_search_focused,
         );
@@ -644,9 +649,9 @@ impl MobileLauncher {
                             &fit_s,
                         );
                         if already {
-                            let aw = p.measure(Face::Mono, 11.0, "Added");
+                            let aw = p.measure(Face::Regular, 11.0, "Added");
                             p.text_line(
-                                Face::Mono,
+                                Face::Regular,
                                 11.0,
                                 row_h,
                                 px + pw - 10.0 - aw,

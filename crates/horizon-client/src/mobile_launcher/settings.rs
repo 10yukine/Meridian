@@ -354,84 +354,108 @@ impl MobileLauncher {
         .into_iter()
         .flatten()
         .collect();
+        let error_h = if self.game_args_error.is_some() {
+            14.0
+        } else {
+            0.0
+        };
+        // The rows under the title, as a drag scrolled them: rows scrolled past and rows past the
+        // card's end aren't drawn, and how many are below sets how far a drag goes.
+        let total = if typing_args {
+            0
+        } else {
+            cells.len().div_ceil(2)
+        } + usize::from(!onboarding)
+            + 2 * usize::from(!onboarding && !typing_args);
+        let mut rows = Rows {
+            skip: if typing_args {
+                0
+            } else {
+                self.page_offset().min(total.saturating_sub(1))
+            },
+            seen: 0,
+            below: 0,
+            y: cy,
+            end: card_end,
+        };
         if !typing_args {
-            for (i, cell) in cells.iter().enumerate() {
-                let cx = inner_x + if i % 2 == 0 { 0.0 } else { half_w + gap };
-                let ccy = cy + (i / 2) as f32 * row_step;
-                if ccy + row_h > card_end {
-                    break;
-                }
-                let ctl_x = cx + half_w - 6.0 - ctl_w;
-                let ctl_y = ccy + ((row_h - ctl_h) * 0.5).round();
-                match cell {
-                    Cell::Font => {
-                        plate(ui, cx, ccy, half_w, "Launcher Font");
-                        // Modern (Geist) by default; the Minecraft pixel font once 26.3's art is
-                        // in (persisted in horizon.txt via ui_theme::preference).
-                        let pixel_font = ui_theme::pixel_font();
-                        let label = if pixel_font && ui.ro().pack_font_available() {
-                            "Pixel (Minecraft)"
-                        } else if pixel_font {
-                            "Pixel (after 26.3)"
-                        } else {
-                            "Modern (Geist)"
-                        };
-                        let tone = if pixel_font {
-                            Tone::Banner
-                        } else {
-                            Tone::Secondary
-                        };
-                        let id = ButtonId::ToggleLauncherFont;
-                        draw_button(ui, hits, id, ctl_x, ctl_y, ctl_w, ctl_h, tone, label);
-                    }
-                    // What only installing uses, offered once the game is installed and the
-                    // cache measured; after freeing, what happened.
-                    Cell::FreeSpace => {
-                        plate(ui, cx, ccy, half_w, "Free Up Space");
-                        match (&self.freed, offer) {
-                            (Some(Err(err)), _) => value(ui, cx, ccy, half_w, err, col_danger),
-                            (_, Some(bytes)) => draw_button(
-                                ui,
-                                hits,
-                                ButtonId::FreeSpace,
-                                ctl_x,
-                                ctl_y,
-                                ctl_w,
-                                ctl_h,
-                                Tone::Secondary,
-                                &format!("Free {}", format_size(bytes)),
-                            ),
-                            (Some(Ok(bytes)), None) => {
-                                let text = format!("Freed {}", format_size(*bytes));
-                                value(ui, cx, ccy, half_w, &text, col_success);
-                            }
-                            (None, None) => {}
+            for pair in cells.chunks(2) {
+                let Some(ccy) = rows.next(row_step, row_h) else {
+                    continue;
+                };
+                for (i, cell) in pair.iter().enumerate() {
+                    let cx = inner_x + i as f32 * (half_w + gap);
+                    let ctl_x = cx + half_w - 6.0 - ctl_w;
+                    let ctl_y = ccy + ((row_h - ctl_h) * 0.5).round();
+                    match cell {
+                        Cell::Font => {
+                            plate(ui, cx, ccy, half_w, "Launcher Font");
+                            // Modern (Geist) by default; the Minecraft pixel font once 26.3's art is
+                            // in (persisted in horizon.txt via ui_theme::preference).
+                            let pixel_font = ui_theme::pixel_font();
+                            let label = if pixel_font && ui.ro().pack_font_available() {
+                                "Pixel (Minecraft)"
+                            } else if pixel_font {
+                                "Pixel (after 26.3)"
+                            } else {
+                                "Modern (Geist)"
+                            };
+                            let tone = if pixel_font {
+                                Tone::Banner
+                            } else {
+                                Tone::Secondary
+                            };
+                            let id = ButtonId::ToggleLauncherFont;
+                            draw_button(ui, hits, id, ctl_x, ctl_y, ctl_w, ctl_h, tone, label);
                         }
-                    }
-                    Cell::Account => {
-                        plate(ui, cx, ccy, half_w, "Account");
-                        let text = account
-                            .as_ref()
-                            .map_or_else(|| "Not signed in".to_owned(), account_label);
-                        value(ui, cx, ccy, half_w, &text, palette::body());
-                    }
-                    Cell::Profiles => {
-                        plate(ui, cx, ccy, half_w, "Profiles");
-                        let bytes: u64 = profiles.iter().map(|p| p.size).sum();
-                        let text = format!(
-                            "{}, {}",
-                            count_label(profiles.len(), "profile", "profiles"),
-                            format_size(bytes)
-                        );
-                        value(ui, cx, ccy, half_w, &text, palette::body());
+                        // What only installing uses, offered once the game is installed and the
+                        // cache measured; after freeing, what happened.
+                        Cell::FreeSpace => {
+                            plate(ui, cx, ccy, half_w, "Free Up Space");
+                            match (&self.freed, offer) {
+                                (Some(Err(err)), _) => value(ui, cx, ccy, half_w, err, col_danger),
+                                (_, Some(bytes)) => draw_button(
+                                    ui,
+                                    hits,
+                                    ButtonId::FreeSpace,
+                                    ctl_x,
+                                    ctl_y,
+                                    ctl_w,
+                                    ctl_h,
+                                    Tone::Secondary,
+                                    &format!("Free {}", format_size(bytes)),
+                                ),
+                                (Some(Ok(bytes)), None) => {
+                                    let text = format!("Freed {}", format_size(*bytes));
+                                    value(ui, cx, ccy, half_w, &text, col_success);
+                                }
+                                (None, None) => {}
+                            }
+                        }
+                        Cell::Account => {
+                            plate(ui, cx, ccy, half_w, "Account");
+                            let text = account
+                                .as_ref()
+                                .map_or_else(|| "Not signed in".to_owned(), account_label);
+                            value(ui, cx, ccy, half_w, &text, palette::body());
+                        }
+                        Cell::Profiles => {
+                            plate(ui, cx, ccy, half_w, "Profiles");
+                            let bytes: u64 = profiles.iter().map(|p| p.size).sum();
+                            let text = format!(
+                                "{}, {}",
+                                count_label(profiles.len(), "profile", "profiles"),
+                                format_size(bytes)
+                            );
+                            value(ui, cx, ccy, half_w, &text, palette::body());
+                        }
                     }
                 }
             }
-            cy += cells.len().div_ceil(2) as f32 * row_step;
         }
 
         // The game's arguments, below everything: words, "quoted words" as one.
-        if !onboarding && cy + row_h <= card_end {
+        if !onboarding && let Some(cy) = rows.next(row_step + error_h, row_h + error_h) {
             let name = "Game Arguments";
             plate(ui, inner_x, cy, inner_w, name);
             let name_w = ui.ro().measure(Face::Medium, ui_theme::sizes().ui, name) + 30.0;
@@ -454,7 +478,6 @@ impl MobileLauncher {
                 false,
                 self.game_args_focused,
             );
-            cy += row_step;
             if let Some(err) = &self.game_args_error {
                 if let Some(p) = ui.paint() {
                     let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, inner_w);
@@ -463,78 +486,80 @@ impl MobileLauncher {
                         ui_theme::small(),
                         18.0,
                         inner_x + 14.0,
-                        cy - 4.0,
+                        cy + row_step - 4.0,
                         col_danger,
                         &fit,
                     );
                 }
-                cy += 16.0;
             }
         }
 
-        // About, underneath.
-        if !onboarding && !typing_args && cy + row_h <= card_end {
-            plate(ui, inner_x, cy, inner_w, "About");
-            let links_w = 2.0 * ctl_w.min(140.0) + 8.0;
-            let link_w = ctl_w.min(140.0);
-            let link_y = cy + ((row_h - ctl_h) * 0.5).round();
-            let right = inner_x + inner_w - 6.0;
-            draw_button(
-                ui,
-                hits,
-                ButtonId::OpenLicenses,
-                right - link_w,
-                link_y,
-                link_w,
-                ctl_h,
-                Tone::Secondary,
-                "Licenses",
-            );
-            draw_button(
-                ui,
-                hits,
-                ButtonId::OpenSourceCode,
-                right - links_w,
-                link_y,
-                link_w,
-                ctl_h,
-                Tone::Secondary,
-                "Source Code",
-            );
-            if let Some(p) = ui.paint() {
-                let name_w = p.measure(Face::Medium, ui_theme::sizes().ui, "About") + 30.0;
-                let about = concat!(
-                    "Meridian ",
-                    env!("CARGO_PKG_VERSION"),
-                    "  ·  Minecraft 26.3  ·  Horizon engine"
+        // About, underneath, and the line under it.
+        if !onboarding && !typing_args {
+            if let Some(cy) = rows.next(row_step, row_h) {
+                plate(ui, inner_x, cy, inner_w, "About");
+                let links_w = 2.0 * ctl_w.min(140.0) + 8.0;
+                let link_w = ctl_w.min(140.0);
+                let link_y = cy + ((row_h - ctl_h) * 0.5).round();
+                let right = inner_x + inner_w - 6.0;
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::OpenLicenses,
+                    right - link_w,
+                    link_y,
+                    link_w,
+                    ctl_h,
+                    Tone::Secondary,
+                    "Licenses",
                 );
-                let room = (inner_w - name_w - links_w - 20.0).max(0.0);
-                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), about, room);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    row_h,
-                    inner_x + name_w,
-                    cy,
-                    palette::body(),
-                    &fit,
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::OpenSourceCode,
+                    right - links_w,
+                    link_y,
+                    link_w,
+                    ctl_h,
+                    Tone::Secondary,
+                    "Source Code",
                 );
-                if cy + row_step + 16.0 <= card_end {
-                    let note = "Not an official Minecraft product. Not approved by or associated \
-                                with Mojang or Microsoft.";
-                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), note, inner_w);
+                if let Some(p) = ui.paint() {
+                    let name_w = p.measure(Face::Medium, ui_theme::sizes().ui, "About") + 30.0;
+                    let about = concat!(
+                        "Meridian ",
+                        env!("CARGO_PKG_VERSION"),
+                        "  ·  Minecraft 26.3  ·  Horizon engine"
+                    );
+                    let room = (inner_w - name_w - links_w - 20.0).max(0.0);
+                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), about, room);
                     p.text_line(
                         Face::Regular,
                         ui_theme::small(),
-                        18.0,
-                        inner_x + 14.0,
-                        cy + row_step - 2.0,
-                        palette::muted(),
+                        row_h,
+                        inner_x + name_w,
+                        cy,
+                        palette::body(),
                         &fit,
                     );
                 }
             }
+            if let (Some(cy), Some(p)) = (rows.next(18.0, 16.0), ui.paint()) {
+                let note = "Not an official Minecraft product. Not approved by or associated \
+                            with Mojang or Microsoft.";
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), note, inner_w);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    18.0,
+                    inner_x + 14.0,
+                    cy - 2.0,
+                    palette::muted(),
+                    &fit,
+                );
+            }
         }
+        self.scroll_max.set(rows.skip + rows.below);
     }
     /// "Free up space?": what goes, what stays, and what it costs later.
     pub(super) fn draw_free_space_confirm(
@@ -609,5 +634,33 @@ impl MobileLauncher {
             Tone::Primary,
             &format!("Free Up {size}"),
         );
+    }
+}
+
+/// Rows down a page, a drag scrolled: the first `skip` aren't drawn, nor those past `end`.
+struct Rows {
+    skip: usize,
+    seen: usize,
+    /// Rows past `end`.
+    below: usize,
+    y: f32,
+    end: f32,
+}
+
+impl Rows {
+    /// The next row's top, `step` above the one after it and `h` tall; `None` when scrolled past
+    /// or below the end.
+    fn next(&mut self, step: f32, h: f32) -> Option<f32> {
+        self.seen += 1;
+        if self.seen <= self.skip {
+            return None;
+        }
+        if self.below > 0 || self.y + h > self.end {
+            self.below += 1;
+            return None;
+        }
+        let y = self.y;
+        self.y += step;
+        Some(y)
     }
 }
