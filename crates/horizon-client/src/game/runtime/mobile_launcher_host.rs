@@ -44,8 +44,8 @@ const DRAG: f64 = 8.0;
 /// started scrolling, so it doesn't tap where it lifts.
 struct Finger {
     id: u64,
-    down_y: f64,
-    last_y: f64,
+    down: (f64, f64),
+    last: (f64, f64),
     dragging: bool,
 }
 
@@ -349,25 +349,31 @@ impl Host {
     }
 
     /// A finger past [`DRAG`] scrolls the page by as much as it moves; one that didn't taps.
-    fn touch(&mut self, event_loop: &ActiveEventLoop, phase: TouchPhase, id: u64, y: f64) {
+    fn touch(&mut self, event_loop: &ActiveEventLoop, phase: TouchPhase, id: u64, at: (f64, f64)) {
         let scale = f64::from(self.batch().scale);
+        // The page follows the finger in the launcher's own units (dp).
+        let density = f64::from(self.with_ui(|_, ui| ui.density));
         match (phase, &mut self.finger) {
             (TouchPhase::Started, _) => {
                 self.finger = Some(Finger {
                     id,
-                    down_y: y,
-                    last_y: y,
+                    down: at,
+                    last: at,
                     dragging: false,
                 });
             }
             (TouchPhase::Moved, Some(finger)) if finger.id == id => {
-                if !finger.dragging && (y - finger.down_y).abs() >= DRAG * scale {
+                let moved = (at.0 - finger.down.0).hypot(at.1 - finger.down.1);
+                if !finger.dragging && moved >= DRAG * scale {
                     finger.dragging = true;
-                    finger.last_y = y;
+                    finger.last = at;
                 }
                 if finger.dragging {
-                    self.screen.scroll(((y - finger.last_y) / scale) as f32);
-                    finger.last_y = y;
+                    self.screen.scroll(
+                        ((at.0 - finger.last.0) / density) as f32,
+                        ((at.1 - finger.last.1) / density) as f32,
+                    );
+                    finger.last = at;
                 }
             }
             (TouchPhase::Ended, Some(finger)) if finger.id == id => {
@@ -491,7 +497,7 @@ impl ApplicationHandler for Host {
             }) => {
                 self.pad_used = None;
                 self.pointer = (location.x, location.y);
-                self.touch(event_loop, phase, id, location.y);
+                self.touch(event_loop, phase, id, (location.x, location.y));
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 match event.physical_key {

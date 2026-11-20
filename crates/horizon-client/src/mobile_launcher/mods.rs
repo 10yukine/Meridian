@@ -57,35 +57,70 @@ impl MobileLauncher {
         );
 
         let pid = self.effective_mods_profile_id(profiles);
-        let mut chip_x = ix;
-        // Tabs that don't fit go on the next row: the first ends before New Profile.
-        let mut row_end = ix + iw - new_w - 10.0;
+        // The tabs keep to one row that a sideways drag scrolls, so the mods below keep their
+        // room. It ends before New Profile.
+        let view_w = iw - new_w - 10.0;
+        let tool_w = top_btn_h;
+        let done_w = 72.0;
+        let field_w = 200.0;
+        // Always show the profile's display name (not its folder id).
+        let tab_ws: Vec<f32> = profiles
+            .iter()
+            .map(|prof| {
+                (ui.ro().measure(Face::Medium, ui_theme::small(), &prof.name) + 26.0)
+                    .clamp(72.0, 180.0)
+            })
+            .collect();
+        let widths: Vec<f32> = profiles
+            .iter()
+            .zip(&tab_ws)
+            .map(|(prof, &cw)| {
+                if self
+                    .profile_rename
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == prof.id)
+                {
+                    field_w + 6.0 + done_w
+                } else if prof.id == pid && prof.id != VANILLA {
+                    cw + 2.0 * tool_w
+                } else {
+                    cw
+                }
+            })
+            .collect();
+        let max = (widths.iter().map(|w| w + 6.0).sum::<f32>() - 6.0 - view_w).max(0.0);
+        let mut scroll = self.tab_scroll.get();
+        // A tab newly shown, or opened for its name, is scrolled into view once.
+        let shown = (pid.clone(), self.profile_rename.is_some());
+        if self.tab_revealed.take().as_ref() != Some(&shown)
+            && let Some(i) = profiles.iter().position(|p| p.id == pid)
+        {
+            let left: f32 = widths[..i].iter().map(|w| w + 6.0).sum();
+            scroll = scroll.min(left).max(left + widths[i] - view_w);
+        }
+        let scroll = scroll.clamp(0.0, max);
+        self.tab_scroll.set(scroll);
+        self.tab_revealed.set(Some(shown));
+        self.scroll_max.set(max.ceil() as usize);
+        let (first_hit, first_vertex) = (hits.len(), ui.paint().map(|p| p.batch.vertices.len()));
+        let mut chip_x = ix - scroll;
         for (i, prof) in profiles.iter().enumerate() {
+            let (at, want) = (chip_x, widths[i]);
+            chip_x += want + 6.0;
+            if at + want <= ix || at >= ix + view_w {
+                continue;
+            }
+            let chip_x = at;
             let renaming = self
                 .profile_rename
                 .as_ref()
                 .filter(|(id, _)| *id == prof.id);
-            // Always show the profile's display name (not its folder id).
             let label = prof.name.as_str();
-            let cw =
-                (ui.ro().measure(Face::Medium, ui_theme::small(), label) + 26.0).clamp(72.0, 180.0);
+            let cw = tab_ws[i];
             // The modded profile shown carries its own tools in its cell: rename and delete.
             let tools = prof.id == pid && prof.id != VANILLA;
-            let tool_w = top_btn_h;
-            let done_w = 72.0;
-            let want = match (renaming, tools) {
-                (Some(_), _) => 100.0 + 6.0 + done_w,
-                (None, true) => cw + 2.0 * tool_w,
-                (None, false) => cw,
-            };
-            if chip_x > ix && chip_x + want > row_end {
-                chip_x = ix;
-                cy += top_btn_h + 6.0;
-                row_end = ix + iw;
-            }
             // Its name typed in place, and Done: with the keyboard up, this row is what shows.
             if let Some((_, typed)) = renaming {
-                let field_w = (row_end - chip_x - 6.0 - done_w).min(260.0);
                 draw_input_box(
                     ui,
                     hits,
@@ -111,7 +146,6 @@ impl MobileLauncher {
                     Tone::Primary,
                     "Done",
                 );
-                chip_x += field_w + done_w + 12.0;
                 continue;
             }
             if tools {
@@ -128,7 +162,6 @@ impl MobileLauncher {
                     top_btn_h,
                     label,
                 );
-                chip_x += cw + 2.0 * tool_w + 6.0;
                 continue;
             }
             draw_button(
@@ -146,8 +179,24 @@ impl MobileLauncher {
                 },
                 label,
             );
-            chip_x += cw + 6.0;
         }
+        // Tabs past either end are cut at the row's edges, drawing and taps alike.
+        let (x0, x1) = (ix, ix + view_w);
+        if let (Some(start), Some(p)) = (first_vertex, ui.paint()) {
+            let g = |v: f32| (v * p.density).round() / p.batch.scale;
+            let (gx0, gx1, gy0, gy1) = (g(x0), g(x1), g(y), g(y + avail_h));
+            p.batch.clip_since(start, gx0, gy0, gx1, gy1);
+        }
+        let cut: Vec<HitRect> = hits
+            .drain(first_hit..)
+            .filter_map(|mut h| {
+                let right = (h.x + h.w).min(x1);
+                h.x = h.x.max(x0);
+                h.w = right - h.x;
+                (h.w > 0.0).then_some(h)
+            })
+            .collect();
+        hits.extend(cut);
         cy += top_btn_h
             + if ultra_v {
                 4.0
@@ -725,7 +774,7 @@ impl MobileLauncher {
     }
 }
 
-/// Vanilla's note within `room` above its button: when tab rows take the space,
+/// Vanilla's note within `room` above its button: on a short screen,
 /// the badge goes first, then the explanation, then the heading.
 pub(super) fn fit_note(room: f32, mut parts: [f32; 3]) -> [f32; 3] {
     let mut i = 0;

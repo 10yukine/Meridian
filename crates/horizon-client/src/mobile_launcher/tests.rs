@@ -996,7 +996,7 @@ fn profile_dropdown_matches_bar_width_opens_upward_and_scrolls_long_lists() {
         // Scroll down via scrollbar tap + a long drag up until the final profile is visible and selectable.
         click_button(&mut launcher, size, ButtonId::ProfileScrollDown);
         assert_eq!(launcher.profile_scroll, 1);
-        launcher.scroll(-1000.0);
+        launcher.scroll(0.0, -1000.0);
         assert_hits_fit_without_overlap(&launcher, size, "profile-dropdown-scrolled-bottom");
         click_button(&mut launcher, size, ButtonId::SelectProfile(11));
         assert!(!launcher.profile_popup_open);
@@ -1344,12 +1344,12 @@ fn a_drag_scrolls_settings_rows_that_dont_fit_and_the_game_log_back() {
     let size = [914, 300];
     click_button(&mut l, size, ButtonId::OpenSettings);
     assert!(!shown(&l, size).contains(&ButtonId::OpenLicenses));
-    l.scroll(-1000.0);
+    l.scroll(0.0, -1000.0);
     let scrolled = shown(&l, size);
     assert!(scrolled.contains(&ButtonId::OpenLicenses), "{scrolled:?}");
     assert!(!scrolled.contains(&ButtonId::ToggleLauncherFont));
     assert_hits_fit_without_overlap(&l, size, "settings-scrolled");
-    l.scroll(1000.0);
+    l.scroll(0.0, 1000.0);
     assert!(shown(&l, size).contains(&ButtonId::ToggleLauncherFont));
 
     // Home starts at the log's end; a drag down goes back, as far as its first line.
@@ -1359,14 +1359,14 @@ fn a_drag_scrolls_settings_rows_that_dont_fit_and_the_game_log_back() {
     shown(&l, size);
     let back = l.scroll_max.get();
     assert!(back > 0 && back < 60, "{back}");
-    l.scroll(32.0);
+    l.scroll(0.0, 32.0);
     assert_eq!(l.page_offset(), 2);
-    l.scroll(10_000.0);
+    l.scroll(0.0, 10_000.0);
     assert_eq!(l.page_offset(), back);
 }
 
 #[test]
-fn mods_tabs_that_dont_fit_wrap_and_a_new_profiles_name_shows() {
+fn mods_tabs_scroll_sideways_on_one_row_and_a_new_profiles_name_shows() {
     let mut profiles = StubBackend::default().profiles;
     for i in 1..=9 {
         profiles.push(Profile {
@@ -1389,19 +1389,48 @@ fn mods_tabs_that_dont_fit_wrap_and_a_new_profiles_name_shows() {
         ..StubBackend::default()
     }));
     let size = [914, 411];
+    // The tabs shown, by index, and the rows they sit on.
+    let tabs = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = l.layout(&mut Canvas::Hit(ui));
+            let mut rows: Vec<f32> = Vec::new();
+            let mut shown = Vec::new();
+            for h in &hits {
+                if let ButtonId::ModManagerPickProfile(i) = h.id {
+                    shown.push(i);
+                    if !rows.contains(&h.y) {
+                        rows.push(h.y);
+                    }
+                }
+            }
+            (shown, rows.len())
+        })
+    };
     click_button(&mut l, size, ButtonId::OpenMods);
-    let tabs = shown(&l, size);
-    for i in 0..10 {
-        assert!(tabs.contains(&ButtonId::ModManagerPickProfile(i)), "tab {i}");
-    }
+    let (first, rows) = tabs(&l);
+    assert_eq!(rows, 1);
+    assert!(first.contains(&0) && !first.contains(&9), "{first:?}");
     assert_hits_fit_without_overlap(&l, size, "mods-many-tabs");
+    // A drag left brings the last tabs in; one right, the first again.
+    l.scroll(-10_000.0, 0.0);
+    let (last, rows) = tabs(&l);
+    assert_eq!(rows, 1);
+    assert!(last.contains(&9) && !last.contains(&0), "{last:?}");
+    assert_hits_fit_without_overlap(&l, size, "mods-tabs-scrolled");
+    l.scroll(10_000.0, 0.0);
+    assert!(tabs(&l).0.contains(&0));
+    // A new profile, last in the row, is scrolled to with its name field and Done.
     click_button(&mut l, size, ButtonId::OpenNewProfile);
     assert!(l.wants_text());
-    assert!(shown(&l, size).contains(&ButtonId::FocusRenameInput));
+    let ids = shown(&l, size);
+    assert!(
+        ids.contains(&ButtonId::FocusRenameInput) && ids.contains(&ButtonId::SaveRenameProfile)
+    );
+    assert_hits_fit_without_overlap(&l, size, "mods-tabs-renaming");
 }
 
 #[test]
-fn vanilla_note_drops_its_badge_then_its_explanation_when_tab_rows_take_the_room() {
+fn vanilla_note_drops_its_badge_then_its_explanation_when_room_runs_short() {
     let parts = [76.0, 36.0, 30.0];
     assert_eq!(super::mods::fit_note(200.0, parts), parts);
     assert_eq!(super::mods::fit_note(100.0, parts), [0.0, 36.0, 30.0]);

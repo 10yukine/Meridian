@@ -198,6 +198,10 @@ pub struct MobileLauncher {
     scroll_carry: f32,
     /// How far the list a drag scrolls can go, from the last layout.
     scroll_max: Cell<usize>,
+    /// How far Mods' profile tabs are scrolled sideways (UI px), and the tab last scrolled into
+    /// view (and whether it was being renamed), as laid out.
+    tab_scroll: Cell<f32>,
+    tab_revealed: Cell<Option<(String, bool)>>,
     // Mod manager state
     mods_profile_id: Option<String>,
     mods_list_page: usize,
@@ -274,6 +278,8 @@ impl MobileLauncher {
             page_scroll: (Route::Home, 0),
             scroll_carry: 0.0,
             scroll_max: Cell::new(0),
+            tab_scroll: Cell::new(0.0),
+            tab_revealed: Cell::new(None),
             mods_profile_id: None,
             mods_list_page: 0,
             mod_search_query: String::new(),
@@ -341,12 +347,19 @@ impl MobileLauncher {
         self
     }
 
-    /// A drag, `delta_y` UI pixels (positive: the finger moved down, toward earlier rows): it
-    /// scrolls the profile dropdown while that is open, else Settings' rows or Home's game log.
-    pub fn scroll(&mut self, delta_y: f32) {
+    /// A drag, `delta_x`/`delta_y` UI pixels (positive: the finger moved right/down, toward
+    /// earlier rows): it scrolls the profile dropdown while that is open, else Mods' profile
+    /// tabs sideways, Settings' rows or Home's game log.
+    pub fn scroll(&mut self, delta_x: f32, delta_y: f32) {
         let row = match (self.profile_popup_open, self.route) {
             _ if self.confirm_free_space || self.confirm_remove_profile.is_some() => return,
             (true, _) => 34.0,
+            (false, Route::Mods) => {
+                let max = self.scroll_max.get() as f32;
+                self.tab_scroll
+                    .set((self.tab_scroll.get() - delta_x).clamp(0.0, max));
+                return;
+            }
             (false, Route::Home) => 16.0,
             (false, Route::Settings) => 50.0,
             _ => return,
