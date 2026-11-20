@@ -11,49 +11,49 @@ pub(super) mod palette {
     use super::color;
 
     pub fn bg_outer() -> u32 {
-        color::hex(0x080310, 255)
+        color::hex(0x0a0a0c, 255)
     }
     pub fn rail() -> u32 {
-        color::hex(0x0b0514, 248)
+        color::hex(0x0e0e11, 248)
     }
     pub fn card() -> u32 {
-        color::hex(0x0f081c, 244)
+        color::hex(0x121215, 244)
     }
     pub fn surface() -> u32 {
-        color::hex(0x170e29, 255)
+        color::hex(0x19191c, 255)
     }
     pub fn surface_hover() -> u32 {
-        color::hex(0x211538, 255)
+        color::hex(0x242428, 255)
     }
     pub fn border() -> u32 {
-        color::hex(0x2a1e42, 220)
+        color::hex(0x2e2e33, 220)
     }
     pub fn border_subtle() -> u32 {
-        color::hex(0x211735, 190)
+        color::hex(0x222226, 190)
     }
     pub fn accent_fill() -> u32 {
-        color::hex(0x7c45ec, 255)
+        color::hex(0x6d5ed1, 255)
     }
     pub fn accent_fill_hover() -> u32 {
-        color::hex(0x8f5cff, 255)
+        color::hex(0x7a6be0, 255)
     }
     pub fn accent() -> u32 {
-        color::hex(0xa575f6, 255)
+        color::hex(0x9d90ea, 255)
     }
     pub fn accent_star() -> u32 {
-        color::hex(0xa990ff, 255)
+        color::hex(0xb1a7f2, 255)
     }
     pub fn text() -> u32 {
-        color::hex(0xffffff, 255)
+        color::hex(0xfafafa, 255)
     }
     pub fn body() -> u32 {
-        color::hex(0xebe8f2, 255)
+        color::hex(0xe4e4e7, 255)
     }
     pub fn muted() -> u32 {
-        color::hex(0x8c859e, 255)
+        color::hex(0xa1a1aa, 255)
     }
     pub fn logo_gray() -> u32 {
-        color::hex(0x706c79, 255)
+        color::hex(0x71717a, 255)
     }
 }
 
@@ -111,23 +111,6 @@ impl<'a> Canvas<'_, 'a> {
 
 pub(super) fn draw_backdrop(p: &mut Ui, w: f32, h: f32) {
     p.rounded(0.0, 0.0, w, h, 0.0, palette::bg_outer());
-    // Ultra-subtle ambient violet tint anchored gently off-center (no visible ring banding).
-    for (cx_f, cy_f, scale, alpha) in [
-        (0.18, 0.14, 0.72, 0.024),
-        (0.54, 0.44, 0.92, 0.018),
-        (0.84, 0.86, 0.68, 0.020),
-    ] {
-        let rw = w * scale;
-        let rh = h * scale;
-        p.rounded(
-            (w * cx_f - rw * 0.5).round(),
-            (h * cy_f - rh * 0.5).round(),
-            rw,
-            rh,
-            (rw.min(rh) * 0.5).max(40.0),
-            color::with_alpha(palette::accent(), alpha),
-        );
-    }
 }
 
 pub(super) fn draw_plate(ui: &mut Canvas<'_, '_>, x: f32, y: f32, w: f32, h: f32, border_col: u32) {
