@@ -123,7 +123,7 @@ fn load(url: &str) -> Option<Head> {
 }
 
 // Same face and hat coordinates as the desktop launcher (launcher/src/heads.rs).
-fn face(png: &[u8]) -> Option<Head> {
+pub(super) fn face(png: &[u8]) -> Option<Head> {
     let mut decoder = png::Decoder::new(Cursor::new(png));
     decoder.set_limits(png::Limits { bytes: 1 << 20 });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);

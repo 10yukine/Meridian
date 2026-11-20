@@ -461,6 +461,12 @@ at a pinned revision and checks each file's SHA-256; Meridian never ships it.
 at [5432370d5736](https://github.com/starling-client/starling/tree/5432370d573642041585c69b40fb045b27133488).
 Starling credits Vasysik's Horizon Android for the original Ely.by integration.
 
+`crates/meridian-launcher/src/account/skins.rs` is adapted from Starling's
+`crates/starling-account/src/skins.rs` at
+[5432370d5736](https://github.com/starling-client/starling/tree/5432370d573642041585c69b40fb045b27133488).
+Starling credits Vasysik's Horizon Android (`launcher/src/skins/cloud.rs`) for the original skin
+upload.
+
 `crates/horizon-client-render/src/touch/editor.rs` adapts the drag handling,
 preview, and save/cancel model in Starling's
 `crates/horizon-client-render/src/android_controls/editor.rs` at

@@ -22,6 +22,8 @@ const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
 const DOWNLOAD_JOBS: usize = 16;
 /// [`Real::reclaimable`] while the install cache is being measured.
 const MEASURING: u64 = u64::MAX;
+/// Where the platform's file picker leaves the chosen skin (`MeridianActivity.pickSkin`).
+const PICKED_SKIN: &str = "picked-skin.png";
 
 enum Session {
     Microsoft(account::Account, account::Secrets),
@@ -101,6 +103,7 @@ pub struct Real {
     base_ready: Arc<AtomicBool>,
     /// The install cache's bytes ([`launch::install_cache_size`]), or [`MEASURING`].
     reclaimable: Arc<AtomicU64>,
+    skin_upload: Arc<Mutex<SkinUpload>>,
     heads: heads::Cache,
     profiles: profiles::Store,
 }
@@ -129,6 +132,7 @@ impl Real {
             setup_cancel: Arc::default(),
             base_ready: Arc::new(AtomicBool::new(ready)),
             reclaimable: Arc::new(AtomicU64::new(if ready { MEASURING } else { 0 })),
+            skin_upload: Arc::default(),
             heads: heads::Cache::default(),
             profiles,
         };
@@ -518,6 +522,71 @@ impl Backend for Real {
         launch::free_install_cache(&self.root).map_err(|e| format!("Not freed: {e}"))?;
         self.reclaimable.store(0, Relaxed);
         Ok(bytes)
+    }
+
+    fn take_picked_skin(&mut self) -> Option<Result<(Vec<u8>, Head), String>> {
+        let path = self.root.join(PICKED_SKIN);
+        let file = fs::File::open(&path).ok()?;
+        let mut png = Vec::new();
+        let read = file
+            .take(account::skins::MAX_PNG as u64 + 1)
+            .read_to_end(&mut png);
+        let _ = fs::remove_file(&path);
+        Some(match read {
+            Ok(_) if png.len() <= account::skins::MAX_PNG => heads::face(&png)
+                .map(|face| (png, face))
+                .ok_or_else(|| "Choose a 64x64 PNG skin.".to_owned()),
+            Ok(_) => Err("That file is too big for a skin.".into()),
+            Err(e) => Err(format!("Could not read the file: {e}")),
+        })
+    }
+
+    fn upload_skin(&mut self, png: Vec<u8>, slim: bool) {
+        let secrets = match &self.identity.lock().unwrap().session {
+            Some(Session::Microsoft(_, secrets)) => secrets.clone(),
+            _ => {
+                *self.skin_upload.lock().unwrap() =
+                    SkinUpload::Failed("Sign in with Microsoft to upload a skin.".into());
+                return;
+            }
+        };
+        *self.skin_upload.lock().unwrap() = SkinUpload::Uploading;
+        let (identity, status) = (self.identity.clone(), self.skin_upload.clone());
+        let account_file = self.account_file.clone();
+        let spawned = std::thread::Builder::new()
+            .name("launcher-skin".into())
+            .spawn(move || {
+                let uploaded =
+                    account::skins::upload(&account::Endpoints::live(), &secrets, &png, slim);
+                let done = uploaded.and_then(|profile| {
+                    // Keep the new skin's URL with the account it was for, if it still plays.
+                    let mut state = identity.lock().unwrap();
+                    let item = match &mut state.session {
+                        Some(Session::Microsoft(current, _)) if current.uuid == profile.uuid => {
+                            *current = profile;
+                            state.session.as_ref().unwrap().remembered()
+                        }
+                        _ => return Ok(()),
+                    };
+                    let mut shelf = state.shelf.clone();
+                    if let Some(i) = shelf.active {
+                        shelf.entries[i] = item;
+                    }
+                    state.commit(shelf, account_file.as_deref())
+                });
+                *status.lock().unwrap() = match done {
+                    Ok(()) => SkinUpload::Done,
+                    Err(e) => SkinUpload::Failed(e),
+                };
+            });
+        if spawned.is_err() {
+            *self.skin_upload.lock().unwrap() =
+                SkinUpload::Failed("Could not start the upload.".into());
+        }
+    }
+
+    fn skin_upload(&self) -> SkinUpload {
+        self.skin_upload.lock().unwrap().clone()
     }
 }
 

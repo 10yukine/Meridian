@@ -169,6 +169,19 @@ pub enum ModSearch {
 /// A player's face to draw: the skin's 8×8 front with the hat layer over it, RGBA rows.
 pub type Head = [u8; 8 * 8 * 4];
 
+/// Where an Ely.by account changes its skin: Ely.by's public API takes no uploads.
+pub const ELY_SKINS: &str = "https://ely.by/skins";
+
+/// Where uploading a skin stands.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SkinUpload {
+    #[default]
+    Idle,
+    Uploading,
+    Done,
+    Failed(String),
+}
+
 /// Sensitive session data for the in-process Play handoff. This type has no Debug implementation.
 pub struct GameSession(String);
 
@@ -211,6 +224,16 @@ pub trait Backend: Send {
     /// the game stay; repairing or updating the game downloads them again.
     fn free_space(&mut self) -> Result<u64, String> {
         Err("There is nothing to free up.".into())
+    }
+    /// The skin file the platform's picker handed over since the last call: the PNG and its
+    /// face, or why it can't be a skin.
+    fn take_picked_skin(&mut self) -> Option<Result<(Vec<u8>, Head), String>> {
+        None
+    }
+    /// Makes `png` the signed-in Microsoft account's skin, on a worker: [`Self::skin_upload`].
+    fn upload_skin(&mut self, _png: Vec<u8>, _slim: bool) {}
+    fn skin_upload(&self) -> SkinUpload {
+        SkinUpload::Idle
     }
     /// Every profile, installed or offered: [`VANILLA`] first, then the modpacks.
     fn profiles(&self) -> Vec<Profile> {

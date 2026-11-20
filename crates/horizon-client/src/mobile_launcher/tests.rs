@@ -2,10 +2,20 @@ use super::widgets::{Canvas, count_label, profile_stats_line};
 use super::{Action, AuthForm, ButtonId, MobileLauncher, Route};
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
-    Account, Backend, Fake, Head, ModInfo, ModSearch, Profile, ProfileMod, ProfileState, Progress,
-    Setup, SignIn, Stage, VANILLA, profile_id, valid_offline_name,
+    Account, Backend, ELY_SKINS, Fake, Head, ModInfo, ModSearch, Profile, ProfileMod, ProfileState,
+    Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, profile_id, valid_offline_name,
 };
 use crate::ui_theme::Ui;
+use std::sync::{Arc, Mutex};
+
+/// The stub's skin side, shared with the test: the file the picker "chose", the uploads asked
+/// for, and how the last one went.
+#[derive(Default)]
+struct SkinStub {
+    picked: Option<Result<(Vec<u8>, Head), String>>,
+    uploads: Vec<(Vec<u8>, bool)>,
+    status: SkinUpload,
+}
 
 struct StubBackend {
     accounts: Vec<Account>,
@@ -18,6 +28,7 @@ struct StubBackend {
     search: ModSearch,
     /// The install cache [`Backend::free_space`] frees.
     reclaim: u64,
+    skins: Arc<Mutex<SkinStub>>,
 }
 
 impl Default for StubBackend {
@@ -64,6 +75,7 @@ impl Default for StubBackend {
                 },
             ]),
             reclaim: 0,
+            skins: Arc::default(),
         }
     }
 }
@@ -160,6 +172,17 @@ impl Backend for StubBackend {
     }
     fn free_space(&mut self) -> Result<u64, String> {
         Ok(std::mem::take(&mut self.reclaim))
+    }
+    fn take_picked_skin(&mut self) -> Option<Result<(Vec<u8>, Head), String>> {
+        self.skins.lock().unwrap().picked.take()
+    }
+    fn upload_skin(&mut self, png: Vec<u8>, slim: bool) {
+        let mut skins = self.skins.lock().unwrap();
+        skins.uploads.push((png, slim));
+        skins.status = SkinUpload::Uploading;
+    }
+    fn skin_upload(&self) -> SkinUpload {
+        self.skins.lock().unwrap().status.clone()
     }
     fn profiles(&self) -> Vec<Profile> {
         self.profiles.clone()
@@ -1078,4 +1101,75 @@ fn launcher_font_choice_persists_in_horizon_txt_across_restarts() {
 
     crate::ui_theme::set_pixel_font(false);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn skins_upload_a_chosen_png_for_microsoft_and_send_ely_to_its_website() {
+    let skins = Arc::new(Mutex::new(SkinStub::default()));
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![
+            Account::Microsoft {
+                name: "Steve".into(),
+            },
+            Account::Ely {
+                name: "Alex".into(),
+            },
+            Account::Offline {
+                name: "Notch".into(),
+            },
+        ],
+        active: Some(0),
+        setup: Setup::Ready,
+        skins: skins.clone(),
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    let ids = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui))
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    click_button(&mut l, size, ButtonId::OpenSkins);
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::PickSkin),
+        Some(Action::PickSkin)
+    );
+    // Nothing to upload until the picker hands a file over.
+    l.poll();
+    assert!(!ids(&l).contains(&ButtonId::UploadSkin));
+
+    skins.lock().unwrap().picked = Some(Ok((b"skin.png".to_vec(), [7; 8 * 8 * 4])));
+    l.poll();
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "skin-chosen");
+    }
+    click_button(&mut l, size, ButtonId::SkinArms(true));
+    click_button(&mut l, size, ButtonId::UploadSkin);
+    assert_eq!(
+        skins.lock().unwrap().uploads,
+        vec![(b"skin.png".to_vec(), true)]
+    );
+    // While it uploads there is no second Upload to tap.
+    assert!(!ids(&l).contains(&ButtonId::UploadSkin));
+    skins.lock().unwrap().status = SkinUpload::Done;
+    l.poll();
+    assert!(
+        l.skin_pick.is_none(),
+        "uploaded: the account's own head shows it"
+    );
+
+    skins.lock().unwrap().picked = Some(Err("Choose a 64x64 PNG skin.".into()));
+    l.poll();
+    assert_eq!(l.skin_error.as_deref(), Some("Choose a 64x64 PNG skin."));
+
+    l.backend.switch_account(1).unwrap();
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::OpenElySkins),
+        Some(Action::OpenUrl(ELY_SKINS.into()))
+    );
+    l.backend.switch_account(2).unwrap();
+    assert!(!ids(&l).contains(&ButtonId::PickSkin), "offline: no upload");
 }

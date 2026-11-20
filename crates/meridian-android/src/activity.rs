@@ -43,6 +43,12 @@ pub(crate) fn open_link(url: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// `MeridianActivity.pickSkin`: the system's file picker for a PNG skin; false where none opens.
+pub(crate) fn pick_skin() -> bool {
+    with_activity(|env, activity| env.call_method(activity, "pickSkin", "()Z", &[])?.z())
+        .unwrap_or(false)
+}
+
 /// `MeridianActivity.imeHeight`: how far the on-screen keyboard covers the window, in pixels.
 pub(crate) fn ime_height() -> u32 {
     with_activity(|env, activity| env.call_method(activity, "imeHeight", "()I", &[])?.i())

@@ -9,9 +9,14 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Process;
+import android.util.Log;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * The game runs in libmeridian.so (NativeActivity); this only does what the NDK cannot: hides the
@@ -25,6 +30,11 @@ public class MeridianActivity extends NativeActivity {
 
     /** How far the on-screen keyboard covers the window, in pixels; 0 when it's away. */
     private volatile int imeHeight;
+
+    private static final int PICK_SKIN = 1;
+    /** The largest skin the launcher takes (meridian-launcher's skins::MAX_PNG); one byte more
+     *  is copied, so a bigger file reads as too big rather than as a cut-off PNG. */
+    private static final int MAX_SKIN = 1024 * 1024;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -113,6 +123,55 @@ public class MeridianActivity extends NativeActivity {
         } catch (ActivityNotFoundException | SecurityException e) {
             return false;
         }
+    }
+
+    /** The system's file picker for a PNG skin; the chosen file lands in files/picked-skin.png,
+     *  where the launcher reads it. False where no picker can open. */
+    public boolean pickSkin() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("image/png");
+        if (pick.resolveActivity(getPackageManager()) == null) {
+            return false;
+        }
+        runOnUiThread(() -> {
+            try {
+                startActivityForResult(pick, PICK_SKIN);
+            } catch (ActivityNotFoundException | SecurityException e) {
+                Log.w("Meridian", "No file picker opened", e);
+            }
+        });
+        return true;
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_SKIN || result != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        Uri uri = data.getData();
+        // Off the UI thread; written beside the target and renamed, so the launcher never reads
+        // half a file.
+        new Thread(() -> {
+            File target = new File(getFilesDir(), "picked-skin.png");
+            File part = new File(getFilesDir(), "picked-skin.png.part");
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 OutputStream out = new FileOutputStream(part)) {
+                byte[] buffer = new byte[64 * 1024];
+                int total = 0;
+                for (int n; total <= MAX_SKIN && (n = in.read(buffer)) > 0; total += n) {
+                    out.write(buffer, 0, Math.min(n, MAX_SKIN + 1 - total));
+                }
+            } catch (Exception e) {
+                Log.w("Meridian", "Could not copy the chosen skin", e);
+                part.delete();
+                return;
+            }
+            if (!part.renameTo(target)) {
+                part.delete();
+            }
+        }, "skin-copy").start();
     }
 
     @Override

@@ -230,6 +230,20 @@ pub fn open_link(url: &str) -> bool {
     OPEN_LINK.get().is_some_and(|platform| platform(url))
 }
 
+/// Meridian: how the platform opens its file picker for a skin (`MeridianActivity.pickSkin`).
+static PICK_FILE: OnceLock<fn() -> bool> = OnceLock::new();
+
+/// Sets the platform's file picker; the first one set stays.
+pub fn set_pick_file(pick: fn() -> bool) {
+    let _ = PICK_FILE.set(pick);
+}
+
+/// Opens the platform's picker for a PNG skin, which leaves the chosen file in the launcher's
+/// folder (`picked-skin.png`); false where none can open.
+pub fn pick_file() -> bool {
+    PICK_FILE.get().is_some_and(|platform| platform())
+}
+
 /// Meridian: how the platform reads the on-screen keyboard's height (`MeridianActivity.imeHeight`).
 static IME_HEIGHT: OnceLock<fn() -> u32> = OnceLock::new();
 

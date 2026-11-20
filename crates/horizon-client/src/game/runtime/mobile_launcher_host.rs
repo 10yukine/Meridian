@@ -205,6 +205,11 @@ impl Host {
                     eprintln!("Meridian: no browser opened the sign-in page");
                 }
             }
+            Some(Action::PickSkin) => {
+                if !android_runtime::pick_file() {
+                    self.screen.no_file_picker();
+                }
+            }
             Some(Action::Quit) => event_loop.exit(),
             None => {}
         }
@@ -432,6 +437,7 @@ impl ApplicationHandler for Host {
         let seconds = now.duration_since(self.last_tick).as_secs_f64().min(0.1);
         self.last_tick = now;
         self.ime = android_runtime::ime_height();
+        self.screen.poll();
         self.pad_input(event_loop, seconds);
         self.prepare_game_files();
         if matches!(&self.game_files, GameFiles::Writing(job) if job.is_finished()) {

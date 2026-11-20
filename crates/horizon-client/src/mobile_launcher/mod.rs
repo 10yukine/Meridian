@@ -20,7 +20,8 @@ mod tests;
 mod widgets;
 
 use crate::launcher_backend::{
-    Account, Backend, ModSearch, Profile, ProfileState, Setup, SignIn, VANILLA, valid_profile_name,
+    Account, Backend, ELY_SKINS, Head, ModSearch, Profile, ProfileState, Setup, SignIn, SkinUpload,
+    VANILLA, valid_profile_name,
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -39,6 +40,8 @@ pub enum Action {
     Play,
     /// Open an external web link (for example Microsoft's device-code verification page).
     OpenUrl(String),
+    /// Open the platform's file picker for a PNG skin (`MobileLauncher::poll` takes the file).
+    PickSkin,
     /// Close the launcher window.
     Quit,
 }
@@ -155,6 +158,11 @@ enum ButtonId {
     FreeSpace,
     ConfirmFreeSpace,
     CancelFreeSpace,
+    // Skins
+    PickSkin,
+    SkinArms(bool),
+    UploadSkin,
+    OpenElySkins,
 }
 
 /// Interactive Meridian launcher backed by [`Backend`].
@@ -204,6 +212,14 @@ pub struct MobileLauncher {
     /// What Settings' "Free up space" did: the bytes freed, or why not.
     freed: Option<Result<u64, String>>,
     rename_modal: Option<(String, String, Option<String>)>,
+    /// The skin file chosen on Skins, and its face for the preview.
+    skin_pick: Option<(Vec<u8>, Head)>,
+    /// Upload the chosen skin with slim arms.
+    skin_slim: bool,
+    /// Why the chosen file can't be a skin, or no picker opened.
+    skin_error: Option<String>,
+    /// An upload of `skin_pick` was started and hasn't finished.
+    skin_uploading: bool,
 }
 
 #[cfg(not(test))]
@@ -262,7 +278,35 @@ impl MobileLauncher {
             confirm_free_space: false,
             freed: None,
             rename_modal: None,
+            skin_pick: None,
+            skin_slim: false,
+            skin_error: None,
+            skin_uploading: false,
         }
+    }
+
+    /// Once a frame: takes the skin file the platform's picker handed over.
+    pub fn poll(&mut self) {
+        match self.backend.take_picked_skin() {
+            Some(Ok(pick)) => {
+                self.skin_pick = Some(pick);
+                self.skin_error = None;
+            }
+            Some(Err(why)) => self.skin_error = Some(why),
+            None => {}
+        }
+        if self.skin_uploading && self.backend.skin_upload() != SkinUpload::Uploading {
+            self.skin_uploading = false;
+            // Uploaded: the account's own head shows it now.
+            if self.backend.skin_upload() == SkinUpload::Done {
+                self.skin_pick = None;
+            }
+        }
+    }
+
+    /// The platform has no file picker to open.
+    pub fn no_file_picker(&mut self) {
+        self.skin_error = Some("This device has no file picker.".into());
     }
 
     /// Bind launcher UI preferences (`horizon.txt`) to an explicit folder and load them immediately.
@@ -1004,6 +1048,20 @@ impl MobileLauncher {
                 }
             }
             ButtonId::Quit => return Some(Action::Quit),
+            ButtonId::PickSkin => {
+                self.skin_error = None;
+                return Some(Action::PickSkin);
+            }
+            ButtonId::SkinArms(slim) => self.skin_slim = slim,
+            ButtonId::UploadSkin => {
+                if let Some((png, _)) = &self.skin_pick
+                    && !self.skin_uploading
+                {
+                    self.backend.upload_skin(png.clone(), self.skin_slim);
+                    self.skin_uploading = true;
+                }
+            }
+            ButtonId::OpenElySkins => return Some(Action::OpenUrl(ELY_SKINS.into())),
         }
         None
     }
@@ -1309,7 +1367,17 @@ impl MobileLauncher {
                 col_danger,
             ),
             Route::Skins => {
-                self.draw_skins_view(ui, top_hits, main_x, main_y, main_w, main_h, &account);
+                self.draw_skins_view(
+                    ui,
+                    top_hits,
+                    main_x,
+                    main_y,
+                    main_w,
+                    main_h,
+                    &account,
+                    col_success,
+                    col_danger,
+                );
             }
             Route::Settings => self.draw_settings_view(
                 ui,

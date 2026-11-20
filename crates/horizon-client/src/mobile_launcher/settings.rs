@@ -6,10 +6,12 @@ use super::widgets::{
     truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{Account, Profile, Setup};
-use crate::ui_theme::{self, Face, color};
+use crate::launcher_backend::{Account, Profile, Setup, SkinUpload};
+use crate::ui_theme::{self, Face};
 
 impl MobileLauncher {
+    /// The account's skin: a Microsoft account uploads a PNG to its profile, an Ely.by one
+    /// changes it on ely.by, an offline one wears the default skin for its name.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_skins_view(
         &self,
@@ -20,6 +22,8 @@ impl MobileLauncher {
         w: f32,
         avail_h: f32,
         account: &Option<Account>,
+        col_success: u32,
+        col_danger: u32,
     ) {
         let compact_v = avail_h < 300.0;
         draw_plate(ui, x, y, w, avail_h, palette::border());
@@ -35,7 +39,7 @@ impl MobileLauncher {
                 ix,
                 cy,
                 palette::text(),
-                "Skins & Capes",
+                "Skin",
             );
             p.rounded(
                 x + 1.0,
@@ -50,40 +54,30 @@ impl MobileLauncher {
 
         let preview_sz = if compact_v { 120.0 } else { 180.0 };
         let head_sz = if compact_v { 72.0 } else { 104.0 };
-        let head = account.as_ref().and_then(|a| self.backend.player_head(a));
+        // The chosen file's face until it is uploaded, else the account's own.
+        let own = account.as_ref().and_then(|a| self.backend.player_head(a));
+        let head = self
+            .skin_pick
+            .as_ref()
+            .map(|(_, face)| face)
+            .or(own.as_ref());
         let name = account.as_ref().map_or("Player", account_short);
         let provider = account
             .as_ref()
             .map_or("Not signed in", account_provider_tag);
+        let tx = ix + preview_sz + 24.0;
 
         if let Some(p) = ui.paint() {
-            p.rounded(
-                ix - 3.0,
-                cy - 3.0,
-                preview_sz + 6.0,
-                preview_sz + 6.0,
-                17.0,
-                color::with_alpha(palette::accent(), 0.10),
-            );
             p.rounded(ix, cy, preview_sz, preview_sz, 14.0, palette::surface());
-            p.border(
-                ix,
-                cy,
-                preview_sz,
-                preview_sz,
-                14.0,
-                color::with_alpha(palette::accent_star(), 0.55),
-            );
+            p.border(ix, cy, preview_sz, preview_sz, 14.0, palette::border());
             draw_player_head(
                 p,
                 ix + ((preview_sz - head_sz) * 0.5).round(),
                 cy + ((preview_sz - head_sz) * 0.5).round(),
                 head_sz,
-                head.as_ref(),
+                head,
                 name,
             );
-
-            let tx = ix + preview_sz + 24.0;
             p.text_line(
                 Face::SemiBold,
                 20.0,
@@ -94,33 +88,121 @@ impl MobileLauncher {
                 name,
             );
             p.text_line(
-                Face::Mono,
+                Face::Regular,
                 ui_theme::small(),
                 18.0,
                 tx,
                 cy + 32.0,
-                palette::accent_star(),
+                palette::muted(),
                 provider,
             );
         }
 
-        let btn_x = ix + preview_sz + 24.0;
-        let btn_y = if compact_v {
-            (cy + 106.0).min(y + avail_h - 48.0)
-        } else {
-            (cy + preview_sz - 44.0).min(y + avail_h - 56.0)
+        let btn_h = if compact_v { 38.0 } else { 44.0 };
+        let mut by = cy + if compact_v { 58.0 } else { 66.0 };
+        let upload = self.backend.skin_upload();
+        let status = match account {
+            Some(Account::Microsoft { .. }) => {
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::PickSkin,
+                    tx,
+                    by,
+                    170.0,
+                    btn_h,
+                    Tone::Secondary,
+                    "Choose Skin File",
+                );
+                if self.skin_pick.is_some() {
+                    for (i, (slim, label)) in [(false, "Classic Arms"), (true, "Slim Arms")]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        draw_button(
+                            ui,
+                            hits,
+                            ButtonId::SkinArms(slim),
+                            tx + 182.0 + i as f32 * 136.0,
+                            by,
+                            128.0,
+                            btn_h,
+                            if self.skin_slim == slim {
+                                Tone::Banner
+                            } else {
+                                Tone::Ghost
+                            },
+                            label,
+                        );
+                    }
+                    by += btn_h + 10.0;
+                    if self.skin_uploading {
+                        Some(("Uploading...".to_owned(), palette::muted()))
+                    } else {
+                        draw_button(
+                            ui,
+                            hits,
+                            ButtonId::UploadSkin,
+                            tx,
+                            by,
+                            210.0,
+                            btn_h,
+                            Tone::Primary,
+                            "Upload to Microsoft",
+                        );
+                        match upload {
+                            SkinUpload::Failed(why) => Some((why, col_danger)),
+                            _ => None,
+                        }
+                    }
+                } else if upload == SkinUpload::Done {
+                    Some(("Skin updated.".to_owned(), col_success))
+                } else {
+                    None
+                }
+            }
+            Some(Account::Ely { .. }) => {
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::OpenElySkins,
+                    tx,
+                    by,
+                    210.0,
+                    btn_h,
+                    Tone::Secondary,
+                    "Change Skin on ely.by",
+                );
+                None
+            }
+            Some(Account::Offline { .. }) => {
+                // No buttons: the line goes where they would.
+                by -= btn_h + 10.0;
+                Some((
+                    "Offline accounts wear the default skin for their name.".to_owned(),
+                    palette::muted(),
+                ))
+            }
+            None => None,
         };
-        draw_button(
-            ui,
-            hits,
-            ButtonId::OpenAccountSwitcher,
-            btn_x,
-            btn_y,
-            170.0,
-            if compact_v { 38.0 } else { 44.0 },
-            Tone::Secondary,
-            "Switch Account",
-        );
+        let status = self
+            .skin_error
+            .clone()
+            .map(|why| (why, col_danger))
+            .or(status);
+        if let (Some((text, col)), Some(p)) = (status, ui.paint()) {
+            let room = (x + w - 22.0 - tx).max(0.0);
+            let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), &text, room);
+            p.text_line(
+                Face::Regular,
+                ui_theme::small(),
+                18.0,
+                tx,
+                by + btn_h + 10.0,
+                col,
+                &fit,
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
