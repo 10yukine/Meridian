@@ -350,57 +350,216 @@ fn icon_path(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32, points: &[[f32; 2]
     }
 }
 
-/// Points on a circle around `c` from `from` to `to` degrees (y down: 270 is up).
-fn arc(c: [f32; 2], r: f32, from: f32, to: f32) -> impl Iterator<Item = [f32; 2]> {
-    let steps = ((to - from).abs() / 22.5).ceil().max(1.0) as usize;
-    (0..=steps).map(move |i| {
-        let a = (from + (to - from) * i as f32 / steps as f32).to_radians();
-        [c[0] + r * a.cos(), c[1] + r * a.sin()]
-    })
+/// Tabler Icons' 24-unit outlines (3.24.0, MIT, Paweł Kuna; `THIRD_PARTY_NOTICES.md`), drawn as
+/// the rail's strokes are (`icon_path`, an 18-unit grid): each SVG path's pieces, curves and arcs
+/// as short lines ([`svg_path`]).
+fn tabler(p: &mut Ui, cx: f32, cy: f32, size: f32, paths: &[&str], col: u32) {
+    for d in paths {
+        for (points, closed) in svg_path(d) {
+            let points: Vec<[f32; 2]> = points.iter().map(|[x, y]| [x * 0.75, y * 0.75]).collect();
+            icon_path(p, cx, cy, size, col, &points, closed);
+        }
+    }
 }
 
-/// A house: its outline alone.
+/// Tabler's `home`.
 pub(super) fn draw_icon_home(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let house = [
-        [3.0, 8.0],
-        [9.0, 3.0],
-        [15.0, 8.0],
-        [15.0, 15.0],
-        [3.0, 15.0],
+    let paths = [
+        "M5 12l-2 0l9 -9l9 9l-2 0",
+        "M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7",
+        "M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6",
     ];
-    icon_path(p, cx, cy, sz, col, &house, true);
+    tabler(p, cx, cy, sz, &paths, col);
 }
 
-/// Four squares in a grid.
+/// Tabler's `puzzle`.
 pub(super) fn draw_icon_mods(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    for (x, y) in [(2.5, 2.5), (10.0, 2.5), (2.5, 10.0), (10.0, 10.0)] {
-        let square = [[x, y], [x + 5.5, y], [x + 5.5, y + 5.5], [x, y + 5.5]];
-        icon_path(p, cx, cy, sz, col, &square, true);
-    }
+    let piece = "M4 7h3a1 1 0 0 0 1 -1v-1a2 2 0 0 1 4 0v1a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0 -1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-1a2 2 0 0 0 -4 0v1a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h1a2 2 0 0 0 0 -4h-1a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1";
+    tabler(p, cx, cy, sz, &[piece], col);
 }
 
-/// A T-shirt with a round collar.
+/// Tabler's `shirt`.
 pub(super) fn draw_icon_skins(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    let mut shirt = vec![
-        [2.5, 5.2],
-        [3.7, 8.7],
-        [5.3, 8.1],
-        [5.3, 15.5],
-        [12.7, 15.5],
-    ];
-    shirt.extend([[12.7, 8.1], [14.3, 8.7], [15.5, 5.2], [11.6, 3.0]]);
-    shirt.extend(arc([9.0, 2.4], 2.7, 13.0, 167.0));
-    shirt.push([6.4, 3.0]);
-    icon_path(p, cx, cy, sz, col, &shirt, true);
+    let shirt = "M15 4l6 2v5h-3v8a1 1 0 0 1 -1 1h-10a1 1 0 0 1 -1 -1v-8h-3v-5l6 -2a3 3 0 0 0 6 0";
+    tabler(p, cx, cy, sz, &[shirt], col);
 }
 
-/// Two sliders, each line with its knob.
+/// Tabler's `settings`.
 pub(super) fn draw_icon_settings(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {
-    for (y, knob, from, to) in [(5.5, 5.0, 7.6, 16.0), (12.5, 13.0, 2.0, 10.4)] {
-        icon_path(p, cx, cy, sz, col, &[[from, y], [to, y]], false);
-        let ring: Vec<_> = arc([knob, y], 2.6, 0.0, 360.0).collect();
-        icon_path(p, cx, cy, sz, col, &ring, false);
+    let paths = [
+        "M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065z",
+        "M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0",
+    ];
+    tabler(p, cx, cy, sz, &paths, col);
+}
+
+/// An SVG path's pieces as points, each with whether it closes: the commands Tabler's outlines
+/// use (M L H V C A Z, absolute or relative, a command's letter repeated or left out), curves and
+/// arcs cut into short lines.
+pub(super) fn svg_path(d: &str) -> Vec<(Vec<[f32; 2]>, bool)> {
+    // Its letters and numbers, in order ("-.94" and ".826" are numbers; "1.5.5" is two).
+    let mut tokens: Vec<Result<char, f32>> = Vec::new();
+    let mut chars = d.char_indices().peekable();
+    while let Some(&(i, c)) = chars.peek() {
+        if c.is_ascii_alphabetic() {
+            tokens.push(Ok(c));
+            chars.next();
+        } else if c == '-' || c == '.' || c.is_ascii_digit() {
+            let mut end = i + c.len_utf8();
+            let mut dot = c == '.';
+            chars.next();
+            while let Some(&(j, n)) = chars.peek() {
+                if n.is_ascii_digit() || (n == '.' && !dot) {
+                    dot |= n == '.';
+                    end = j + 1;
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(Err(d[i..end].parse().unwrap_or(0.0)));
+        } else {
+            chars.next();
+        }
     }
+    let mut pieces: Vec<(Vec<[f32; 2]>, bool)> = Vec::new();
+    let (mut at, mut start) = ([0.0f32, 0.0], [0.0f32, 0.0]);
+    let mut command = 'M';
+    let mut i = 0;
+    let take = |i: &mut usize, n: usize| -> Option<Vec<f32>> {
+        let v: Vec<f32> = tokens
+            .get(*i..*i + n)?
+            .iter()
+            .map(|t| t.err())
+            .collect::<Option<_>>()?;
+        *i += n;
+        Some(v)
+    };
+    while i < tokens.len() {
+        if let Ok(c) = tokens[i] {
+            command = c;
+            i += 1;
+        }
+        let rel = command.is_ascii_lowercase();
+        let base = if rel { at } else { [0.0, 0.0] };
+        let line = |pieces: &mut Vec<(Vec<[f32; 2]>, bool)>, to: [f32; 2]| {
+            if let Some((points, _)) = pieces.last_mut() {
+                points.push(to);
+            }
+        };
+        match command.to_ascii_uppercase() {
+            'M' => {
+                let Some(v) = take(&mut i, 2) else { break };
+                at = [base[0] + v[0], base[1] + v[1]];
+                start = at;
+                pieces.push((vec![at], false));
+                // Numbers after a move are lines.
+                command = if rel { 'l' } else { 'L' };
+            }
+            'L' => {
+                let Some(v) = take(&mut i, 2) else { break };
+                at = [base[0] + v[0], base[1] + v[1]];
+                line(&mut pieces, at);
+            }
+            'H' => {
+                let Some(v) = take(&mut i, 1) else { break };
+                at[0] = base[0] + v[0];
+                line(&mut pieces, at);
+            }
+            'V' => {
+                let Some(v) = take(&mut i, 1) else { break };
+                at[1] = base[1] + v[0];
+                line(&mut pieces, at);
+            }
+            'C' => {
+                let Some(v) = take(&mut i, 6) else { break };
+                let p0 = at;
+                let [p1, p2, p3] = [0, 2, 4].map(|k| [base[0] + v[k], base[1] + v[k + 1]]);
+                for step in 1..=6 {
+                    let t = step as f32 / 6.0;
+                    let u = 1.0 - t;
+                    let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+                    let q =
+                        [0, 1].map(|k| w[0] * p0[k] + w[1] * p1[k] + w[2] * p2[k] + w[3] * p3[k]);
+                    line(&mut pieces, q);
+                }
+                at = p3;
+            }
+            'A' => {
+                let Some(v) = take(&mut i, 7) else { break };
+                let to = [base[0] + v[5], base[1] + v[6]];
+                for q in arc_points(at, to, v[0], v[1], v[2], v[3] != 0.0, v[4] != 0.0) {
+                    line(&mut pieces, q);
+                }
+                at = to;
+            }
+            'Z' => {
+                if let Some((_, closed)) = pieces.last_mut() {
+                    *closed = true;
+                }
+                at = start;
+                // Only a letter may follow.
+                if matches!(tokens.get(i), Some(Err(_))) {
+                    break;
+                }
+            }
+            // A command these outlines don't use: stop rather than draw it wrong.
+            _ => break,
+        }
+    }
+    pieces
+}
+
+/// SVG's elliptical arc from `from` to `to` as points after `from` (its endpoint form turned into
+/// a centre and angles, SVG 1.1 F.6.5), a point every 22.5 degrees or less.
+fn arc_points(
+    from: [f32; 2],
+    to: [f32; 2],
+    rx: f32,
+    ry: f32,
+    degrees: f32,
+    large: bool,
+    sweep: bool,
+) -> Vec<[f32; 2]> {
+    let (mut rx, mut ry) = (rx.abs(), ry.abs());
+    if rx == 0.0 || ry == 0.0 || from == to {
+        return vec![to];
+    }
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let (hx, hy) = ((from[0] - to[0]) / 2.0, (from[1] - to[1]) / 2.0);
+    let (x1, y1) = (cos * hx + sin * hy, -sin * hx + cos * hy);
+    let grow = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
+    if grow > 1.0 {
+        rx *= grow.sqrt();
+        ry *= grow.sqrt();
+    }
+    let num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1;
+    let den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
+    let k = (num / den).max(0.0).sqrt() * if large == sweep { -1.0 } else { 1.0 };
+    let (cx1, cy1) = (k * rx * y1 / ry, -k * ry * x1 / rx);
+    let (cx, cy) = (
+        cos * cx1 - sin * cy1 + (from[0] + to[0]) / 2.0,
+        sin * cx1 + cos * cy1 + (from[1] + to[1]) / 2.0,
+    );
+    let angle = |ux: f32, uy: f32| uy.atan2(ux);
+    let start = angle((x1 - cx1) / rx, (y1 - cy1) / ry);
+    let mut delta = angle((-x1 - cx1) / rx, (-y1 - cy1) / ry) - start;
+    let tau = std::f32::consts::TAU;
+    if sweep && delta < 0.0 {
+        delta += tau;
+    } else if !sweep && delta > 0.0 {
+        delta -= tau;
+    }
+    let steps = (delta.abs() / (tau / 16.0)).ceil().max(1.0) as usize;
+    (1..=steps)
+        .map(|n| {
+            let (s, c) = (start + delta * n as f32 / steps as f32).sin_cos();
+            [
+                cx + rx * c * cos - ry * s * sin,
+                cy + rx * c * sin + ry * s * cos,
+            ]
+        })
+        .collect()
 }
 
 pub(super) fn draw_icon_play(p: &mut Ui, cx: f32, cy: f32, sz: f32, col: u32) {

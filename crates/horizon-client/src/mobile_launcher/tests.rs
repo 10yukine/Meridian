@@ -1526,3 +1526,33 @@ fn a_drag_on_skins_turns_the_figure() {
     assert!(l.skin_yaw > yaw);
     assert!(l.skin_pitch > pitch && l.skin_pitch <= 0.6);
 }
+
+#[test]
+fn tabler_outlines_read_as_lines_curves_and_arcs() {
+    use super::widgets::svg_path;
+    let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+    // Relative lines after a move, and a close.
+    let pieces = svg_path("M5 12l-2 0l9 -9z");
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].0, [[5.0, 12.0], [3.0, 12.0], [12.0, 3.0]]);
+    assert!(pieces[0].1);
+    // Across and down, then a curve that ends where its last point says.
+    let pieces = svg_path("M1 1h4v4c.5 0 1 .5 1 1");
+    let points = &pieces[0].0;
+    assert!(near(points[1], [5.0, 1.0]) && near(points[2], [5.0, 5.0]));
+    assert!(near(*points.last().unwrap(), [6.0, 6.0]));
+    // Two half arcs make Tabler's settings hub: every point 3 from its centre, back at the start.
+    let pieces = svg_path("M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0");
+    let ring = &pieces[0].0;
+    assert!(ring.len() > 10);
+    for p in ring {
+        assert!(
+            ((p[0] - 12.0).hypot(p[1] - 12.0) - 3.0).abs() < 1e-3,
+            "{p:?}"
+        );
+    }
+    assert!(near(*ring.last().unwrap(), [9.0, 12.0]));
+    // Two pieces, and a stray number after a close stops the reading.
+    assert_eq!(svg_path("M0 0L1 1M2 2L3 3").len(), 2);
+    assert_eq!(svg_path("M0 0L1 1z 5").len(), 1);
+}
