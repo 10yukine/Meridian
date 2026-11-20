@@ -48,13 +48,14 @@ $ndk = if ($env:ANDROID_NDK_HOME) { $env:ANDROID_NDK_HOME } else {
 }
 $toolchain = Join-Path $ndk 'toolchains/llvm/prebuilt/windows-x86_64'
 $readelf = Join-Path $toolchain 'bin/llvm-readelf.exe'
+$strip = Join-Path $toolchain 'bin/llvm-strip.exe'
 $clang = Join-Path $toolchain 'bin/aarch64-linux-android26-clang.cmd'
 $cxx = Join-Path $toolchain 'sysroot/usr/lib/aarch64-linux-android/libc++_shared.so'
 $aapt2 = Join-Path $tools 'aapt2.exe'
 $zipalign = Join-Path $tools 'zipalign.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
 $d8 = Join-Path $tools 'd8.bat'
-foreach ($required in $aapt2, $zipalign, $apksigner, $d8, $readelf, $clang, $cxx, $platform) {
+foreach ($required in $aapt2, $zipalign, $apksigner, $d8, $readelf, $strip, $clang, $cxx, $platform) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Android SDK file is missing: $required"
     }
@@ -127,6 +128,18 @@ $signed = Join-Path $work 'signed.apk'
 $java = Join-Path $work 'libmeridian_java.so'
 $classes = Join-Path $work 'classes'
 try {
+    if ($Release) {
+        # The symbol tables (~46 MB) only name functions in crash reports, and Android keeps the
+        # library twice (in the APK and extracted): ship it without them, and keep a copy that
+        # has them next to the APK for reading crash reports.
+        $symbols = Join-Path $out 'symbols'
+        [IO.Directory]::CreateDirectory($symbols) | Out-Null
+        $named = Join-Path $symbols "libmeridian-$VersionName.so"
+        Copy-Item -LiteralPath $library -Destination $named -Force
+        $library = Join-Path $work 'libmeridian.so'
+        & $strip --strip-all -o $library $named
+        if ($LASTEXITCODE -ne 0) { throw 'llvm-strip failed.' }
+    }
     & $clang (Join-Path $PSScriptRoot 'Java-Launcher.c') -ldl -o $java
     # MeridianActivity (java/) as classes.dex, with Starling's javac and d8 flags.
     $sources = (Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'java') -Recurse -Filter *.java).FullName
