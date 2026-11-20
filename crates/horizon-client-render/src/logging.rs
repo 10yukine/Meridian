@@ -461,7 +461,9 @@ fn ours(target: &str) -> bool {
 
 impl log::Log for Logger {
     fn enabled(&self, meta: &log::Metadata) -> bool {
+        // symphonia's from WARN up: it logs two INFO lines for every sound it starts decoding.
         meta.level() <= log::Level::Info
+            && (meta.level() <= log::Level::Warn || !meta.target().starts_with("symphonia"))
     }
 
     fn log(&self, record: &log::Record) {
@@ -760,6 +762,16 @@ mod tests {
             ("wgpu_core::device", log::Level::Error, "device lost"),
             ("meridian_core::map", log::Level::Debug, "debug detail"),
             ("meridian_core::map", log::Level::Trace, "trace detail"),
+            (
+                "symphonia_format_ogg::demuxer",
+                log::Level::Info,
+                "new physical stream",
+            ),
+            (
+                "symphonia_core::probe",
+                log::Level::Warn,
+                "unsupported codec",
+            ),
         ] {
             logger.log(
                 &log::Record::builder()
@@ -782,6 +794,11 @@ mod tests {
         assert!(text.contains("[wgpu_core::device] device lost"), "{text}");
         assert!(!text.contains("debug detail"));
         assert!(!text.contains("trace detail"));
+        assert!(!text.contains("new physical stream"), "{text}");
+        assert!(
+            text.contains("[symphonia_core::probe] unsupported codec"),
+            "{text}"
+        );
     }
 
     #[test]
