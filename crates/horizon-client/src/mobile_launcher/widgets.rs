@@ -913,52 +913,25 @@ pub(super) fn draw_skin_3d(
     }
 }
 
-/// Lucide's 24-unit outlines, drawn as the rail's icons are (`icon_path`, an 18-unit grid).
-fn lucide_path(p: &mut Ui, cx: f32, cy: f32, size: f32, points: &[[f32; 2]], col: u32) {
-    let points: Vec<[f32; 2]> = points.iter().map(|[x, y]| [x * 0.75, y * 0.75]).collect();
-    icon_path(p, cx, cy, size, col, &points, false);
-}
-
-/// Lucide's `pencil`: the body, its rounded end, the point, and the band near the end.
+/// Tabler's `pencil`.
 pub(super) fn draw_icon_pencil(p: &mut Ui, cx: f32, cy: f32, size: f32, col: u32) {
-    let outline = [
-        [17.19, 2.83],
-        [3.84, 16.17],
-        [2.3, 21.4],
-        [7.0, 20.1],
-        [21.17, 6.81],
-        [22.0, 4.82],
-        [21.17, 2.83],
-        [19.18, 2.0],
-        [17.19, 2.83],
+    let paths = [
+        "M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4",
+        "M13.5 6.5l4 4",
     ];
-    lucide_path(p, cx, cy, size, &outline, col);
-    lucide_path(p, cx, cy, size, &[[15.0, 5.0], [19.0, 9.0]], col);
+    tabler(p, cx, cy, size, &paths, col);
 }
 
-/// Lucide's `trash-2`: the lid, the handle, the can, and its two slots.
+/// Tabler's `trash`.
 pub(super) fn draw_icon_trash(p: &mut Ui, cx: f32, cy: f32, size: f32, col: u32) {
-    lucide_path(p, cx, cy, size, &[[3.0, 6.0], [21.0, 6.0]], col);
-    let handle = [
-        [8.0, 6.0],
-        [8.0, 3.5],
-        [9.5, 2.0],
-        [14.5, 2.0],
-        [16.0, 3.5],
-        [16.0, 6.0],
+    let paths = [
+        "M4 7l16 0",
+        "M10 11l0 6",
+        "M14 11l0 6",
+        "M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12",
+        "M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3",
     ];
-    lucide_path(p, cx, cy, size, &handle, col);
-    let can = [
-        [19.0, 6.0],
-        [19.0, 20.5],
-        [17.5, 22.0],
-        [6.5, 22.0],
-        [5.0, 20.5],
-        [5.0, 6.0],
-    ];
-    lucide_path(p, cx, cy, size, &can, col);
-    lucide_path(p, cx, cy, size, &[[10.0, 11.0], [10.0, 17.0]], col);
-    lucide_path(p, cx, cy, size, &[[14.0, 11.0], [14.0, 17.0]], col);
+    tabler(p, cx, cy, size, &paths, col);
 }
 
 /// The shown modded profile's tab: one cell with its name, then its pencil (rename) and bin

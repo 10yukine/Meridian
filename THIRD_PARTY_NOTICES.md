@@ -186,7 +186,7 @@ trademark, used only on the button that opens Horizon's Discord server.
 
 ## Tabler Icons
 
-The mobile launcher's rail icons (`home`, `puzzle`, `shirt`, `settings`) are the outline path data of
+The mobile launcher's icons (`home`, `puzzle`, `shirt`, `settings`, `pencil`, `trash`) are the outline path data of
 [Tabler Icons](https://github.com/tabler/tabler-icons) 3.24.0, drawn as strokes in
 `crates/horizon-client/src/mobile_launcher/widgets.rs`. Copyright (c) 2020-2024 Paweł Kuna,
 under the MIT license:
