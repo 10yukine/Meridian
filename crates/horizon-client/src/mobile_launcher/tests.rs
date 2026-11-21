@@ -1594,6 +1594,52 @@ fn a_release_build_without_a_game_owner_says_why_on_the_offline_and_ely_forms() 
 }
 
 #[test]
+fn a_page_change_moves_until_it_settles_and_animations_off_changes_at_once() {
+    let signed_in = || StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    };
+    let size = [856, 384];
+    let draw = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Draw(ui));
+        })
+    };
+    // Nothing moves at startup; another page fades in, and the host draws frames meanwhile.
+    let l = MobileLauncher::new(Box::new(signed_in()));
+    draw(&l);
+    assert!(!l.animating());
+    let mut l = l;
+    click_button(&mut l, size, ButtonId::OpenMods);
+    draw(&l);
+    assert!(l.animating());
+    // Settings has the switch, and it turns motion off.
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleAnimations));
+    assert_hits_fit_without_overlap(&l, size, "settings-animations");
+    click_button(&mut l, size, ButtonId::ToggleAnimations);
+    assert!(!l.motion.on.get());
+    // Off: a page change is at once.
+    let mut still = MobileLauncher::new(Box::new(signed_in()));
+    still.motion.on.set(false);
+    click_button(&mut still, size, ButtonId::OpenMods);
+    draw(&still);
+    assert!(!still.animating());
+
+    // `changed` gives what a value was before and when it changed.
+    let cell = std::cell::Cell::new((1, 1, super::motion::long_ago()));
+    let (before, _) = super::motion::changed(&cell, 1);
+    assert_eq!(before, 1);
+    let (before, since) = super::motion::changed(&cell, 2);
+    assert_eq!((before, cell.get().0), (1, 2));
+    assert!(since.elapsed().as_secs_f32() < 1.0);
+}
+
+#[test]
 fn vanilla_note_drops_its_badge_then_its_explanation_when_room_runs_short() {
     let parts = [76.0, 36.0, 30.0];
     assert_eq!(super::mods::fit_note(200.0, parts), parts);

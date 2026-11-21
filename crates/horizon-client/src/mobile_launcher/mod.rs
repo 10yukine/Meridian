@@ -13,6 +13,7 @@ mod auth;
 mod home;
 mod install;
 mod mods;
+mod motion;
 mod settings;
 #[cfg(test)]
 mod tests;
@@ -37,6 +38,25 @@ use widgets::{
 /// About's links: the source, and the licenses of what Meridian is built from.
 const SOURCE_CODE: &str = "https://github.com/10yukine/Meridian";
 const LICENSES: &str = "https://github.com/10yukine/Meridian/blob/main/THIRD_PARTY_NOTICES.md";
+/// Where a page of the signed-in shell goes, and what it shows.
+struct Page<'a> {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    modal_x: f32,
+    modal_w: f32,
+    setup: &'a Setup,
+    profiles: &'a [Profile],
+    accounts: &'a [Account],
+    active: Option<usize>,
+    account: &'a Option<Account>,
+    col_success: u32,
+    col_danger: u32,
+}
+
+/// Settings' Animations switch, as kept in `horizon.txt`.
+const ANIMATIONS_KEY: &str = "launcherAnimations";
 /// How far sideways (dp) a finger on a Mods list moves before the list turns its page.
 const SWIPE: f32 = 40.0;
 
@@ -150,6 +170,8 @@ enum ButtonId {
     // Settings
     SettingsBack,
     ToggleLauncherFont,
+    /// Settings' Animations switch.
+    ToggleAnimations,
     /// Settings: free the install cache (asks first).
     FreeSpace,
     ConfirmFreeSpace,
@@ -212,6 +234,18 @@ pub struct MobileLauncher {
     swipe: Option<(usize, Option<f32>)>,
     /// Each Mods list's page dots panning: from where, to which page, since when.
     dots: Cell<[(f32, usize, Instant); 2]>,
+    /// The motion of changes (`motion.rs`), and each moving thing's last value, the one before
+    /// it and when it changed: the page shown, the rail's selected item, the profile pop-up, a
+    /// question over the page, the sign-in step, signing in, Mods' profile and its mod count.
+    motion: motion::Motion,
+    page_motion: Cell<(Route, Route, Instant)>,
+    rail_motion: Cell<(usize, usize, Instant)>,
+    popup_motion: Cell<(bool, bool, Instant)>,
+    dialog_motion: Cell<(bool, bool, Instant)>,
+    step_motion: Cell<(u8, u8, Instant)>,
+    shell_motion: Cell<(bool, bool, Instant)>,
+    tab_motion: Cell<(u64, u64, Instant)>,
+    added_motion: Cell<((u64, usize), (u64, usize), Instant)>,
     // Mod manager state
     mods_profile_id: Option<String>,
     mods_list_page: usize,
@@ -268,6 +302,10 @@ impl MobileLauncher {
         if let Some(dir) = &prefs_dir {
             ui_theme::load_pixel_font_pref(dir);
         }
+        let animations = prefs_dir
+            .as_deref()
+            .and_then(|dir| ui_theme::preference(dir, ANIMATIONS_KEY))
+            .is_none_or(|value| value != "off");
         Self {
             backend,
             prefs_dir,
@@ -296,7 +334,16 @@ impl MobileLauncher {
             mod_lists: Cell::new(None),
             mod_pages: Cell::new([1, 1]),
             swipe: None,
-            dots: Cell::new([(0.0, 0, Instant::now()); 2]),
+            dots: Cell::new([(0.0, 0, motion::long_ago()); 2]),
+            motion: motion::Motion::new(animations),
+            page_motion: Cell::new((Route::Home, Route::Home, motion::long_ago())),
+            rail_motion: Cell::new((0, 0, motion::long_ago())),
+            popup_motion: Cell::new((false, false, motion::long_ago())),
+            dialog_motion: Cell::new((false, false, motion::long_ago())),
+            step_motion: Cell::new((0, 0, motion::long_ago())),
+            shell_motion: Cell::new((false, false, motion::long_ago())),
+            tab_motion: Cell::new((0, 0, motion::long_ago())),
+            added_motion: Cell::new(((0, 0), (0, 0), motion::long_ago())),
             mods_profile_id: None,
             mods_list_page: 0,
             mod_search_query: String::new(),
@@ -378,8 +425,10 @@ impl MobileLauncher {
     /// frame until it stops.
     pub fn animating(&self) -> bool {
         let dots = self.dots.get();
-        dots.iter()
-            .any(|&(_, _, since)| since.elapsed().as_secs_f32() < mods::DOTS_SECS)
+        self.motion.running()
+            || dots
+                .iter()
+                .any(|&(_, _, since)| since.elapsed().as_secs_f32() < mods::DOTS_SECS)
     }
 
     /// Where list `list`'s page dots are: at `page`, or panning there, eased, after it turned.
@@ -773,6 +822,17 @@ impl MobileLauncher {
                 self.confirm_free_space = false;
                 self.freed = Some(self.backend.free_space());
             }
+            ButtonId::ToggleAnimations => {
+                let on = !self.motion.on.get();
+                self.motion.on.set(on);
+                if let Some(dir) = &self.prefs_dir {
+                    ui_theme::set_preference(
+                        dir,
+                        ANIMATIONS_KEY,
+                        Some(if on { "on" } else { "off" }),
+                    );
+                }
+            }
             ButtonId::ToggleLauncherFont => {
                 let next = !ui_theme::pixel_font();
                 if let Some(dir) = &self.prefs_dir {
@@ -848,8 +908,7 @@ impl MobileLauncher {
                 self.clear_ely_secrets();
                 // A release build without a game owner on the phone: why, at once (the backend
                 // refuses the account too).
-                self.offline_error =
-                    (!self.backend.game_allowed()).then(|| NEEDS_OWNER.to_owned());
+                self.offline_error = (!self.backend.game_allowed()).then(|| NEEDS_OWNER.to_owned());
                 self.auth_form = Some(AuthForm::Offline);
                 self.status_note = None;
             }
@@ -1216,9 +1275,43 @@ impl MobileLauncher {
         let setup = self.backend.setup();
         let sign_in = self.backend.sign_in();
         let profiles = self.backend.profiles();
+        // Into the launcher after signing in: the whole screen zooms in (0.30 s).
+        let (was_onboarding, shell_since) = motion::changed(&self.shell_motion, onboarding);
+        let shell_start = motion::mark(ui);
 
         if onboarding {
+            // Each sign-in step slides in 18 dp from its side (deeper from the right) while the
+            // top bar stays.
+            let progress = matches!(
+                sign_in,
+                SignIn::Starting | SignIn::Code { .. } | SignIn::Failed(_)
+            ) && (account.is_none() || self.adding_account);
+            let step: u8 = if self.route == Route::Settings {
+                3
+            } else if progress {
+                2
+            } else if self.auth_form.is_some() {
+                1
+            } else {
+                0
+            };
+            let (from_step, step_since) = motion::changed(&self.step_motion, step);
             self.draw_onboarding_top_bar(ui, &mut hits, ui_w, pad, top_h);
+            let card_start = motion::mark(ui);
+            let slid = self.motion.ease(step_since, 0.0, 0.24);
+            let side = if step >= from_step { 18.0 } else { -18.0 };
+            let slide = |ui: &mut Canvas<'_, '_>| {
+                motion::shape(
+                    ui,
+                    card_start,
+                    slid,
+                    side * (1.0 - slid),
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                );
+            };
             let v_margin = if kb_h {
                 4.0
             } else if short_h {
@@ -1244,6 +1337,7 @@ impl MobileLauncher {
                     col_success,
                     col_danger,
                 );
+                slide(ui);
                 return hits;
             }
             match &sign_in {
@@ -1259,6 +1353,7 @@ impl MobileLauncher {
                         content_h,
                         &sign_in,
                     );
+                    slide(ui);
                     return hits;
                 }
                 _ => {}
@@ -1292,6 +1387,7 @@ impl MobileLauncher {
                     !accounts.is_empty() && self.adding_account,
                 ),
             }
+            slide(ui);
             return hits;
         }
 
@@ -1380,96 +1476,68 @@ impl MobileLauncher {
             &mut hits
         };
 
-        match self.route {
-            Route::Install => match setup {
-                Setup::Running(ref progress) => self.draw_setup_running(
-                    ui,
-                    top_hits,
-                    modal_x,
-                    main_y,
-                    modal_w,
-                    main_h,
-                    progress,
-                    col_success,
-                ),
-                Setup::Failed { stage, ref error } => self.draw_setup_failed(
-                    ui, top_hits, modal_x, main_y, modal_w, main_h, stage, error, col_danger,
-                ),
-                Setup::Needed | Setup::Ready => self.draw_home(
-                    ui,
-                    top_hits,
-                    main_x,
-                    main_y,
-                    main_w,
-                    main_h,
-                    &setup,
-                    &profiles,
-                    col_success,
-                    col_danger,
-                ),
-            },
-            Route::AccountSwitcher => self.draw_account_switcher(
-                ui,
-                top_hits,
-                main_x,
-                main_y,
-                main_w,
-                main_h,
-                &accounts,
-                active_idx,
-                col_success,
-            ),
-            Route::Mods => self.draw_mods_view(
-                ui,
-                top_hits,
-                main_x,
-                main_y,
-                main_w,
-                main_h,
-                &profiles,
-                col_success,
-                col_danger,
-            ),
-            Route::Skins => {
-                self.draw_skins_view(
-                    ui,
-                    top_hits,
-                    main_x,
-                    main_y,
-                    main_w,
-                    main_h,
-                    &account,
-                    col_success,
-                    col_danger,
-                );
-            }
-            Route::Settings => self.draw_settings_view(
-                ui,
-                top_hits,
-                main_x,
-                main_y,
-                main_w,
-                main_h,
-                false,
-                &setup,
-                col_success,
-                col_danger,
-            ),
-            Route::Home => self.draw_home(
-                ui,
-                top_hits,
-                main_x,
-                main_y,
-                main_w,
-                main_h,
-                &setup,
-                &profiles,
-                col_success,
-                col_danger,
-            ),
+        let page = Page {
+            x: main_x,
+            y: main_y,
+            w: main_w,
+            h: main_h,
+            modal_x,
+            modal_w,
+            setup: &setup,
+            profiles: &profiles,
+            accounts: &accounts,
+            active: active_idx,
+            account: &account,
+            col_success,
+            col_danger,
+        };
+        // Changing pages fades through: the old page fades out (0.10 s, drifting 6 dp), then the
+        // new one fades in (0.26 s) rising 12 dp from the side it sits on in the rail. Home and
+        // its install card zoom instead; Accounts comes up from the dock.
+        let (before, since) = motion::changed(&self.page_motion, self.route);
+        let rank = |route: Route| match route {
+            Route::Home | Route::Install => 0,
+            Route::Mods => 1,
+            Route::Skins => 2,
+            Route::Settings => 3,
+            Route::AccountSwitcher => 4,
+        };
+        let down = rank(self.route) >= rank(before);
+        let zoom = matches!(
+            (before, self.route),
+            (Route::Home, Route::Install) | (Route::Install, Route::Home)
+        );
+        let (cx, cy) = (main_x + main_w * 0.5, main_y + main_h * 0.5);
+        let out = self.motion.ease(since, 0.0, 0.10);
+        if before != self.route && out < 1.0 && matches!(ui, Canvas::Draw(_)) {
+            let start = motion::mark(ui);
+            self.draw_page(before, ui, &mut Vec::new(), &page);
+            self.scroll_max.set(0);
+            let drift = if down { -6.0 } else { 6.0 } * out;
+            let (dy, scale) = if zoom {
+                (0.0, 1.0 - 0.03 * out)
+            } else {
+                (drift, 1.0)
+            };
+            motion::shape(ui, start, 1.0 - out, 0.0, dy, scale, cx, cy);
         }
+        let shown = self.motion.ease(since, 0.07, 0.26);
+        let start = motion::mark(ui);
+        self.draw_page(self.route, ui, top_hits, &page);
+        let rise = (1.0 - shown) * if down { 12.0 } else { -12.0 };
+        let (dy, scale) = if zoom {
+            (0.0, 0.97 + 0.03 * shown)
+        } else {
+            (rise, 1.0)
+        };
+        motion::shape(ui, start, shown, 0.0, dy, scale, cx, cy);
 
+        let (_, dialog_since) = motion::changed(&self.dialog_motion, popup);
+        let (_, popup_since) = motion::changed(&self.popup_motion, self.profile_popup_open);
+        let entered = was_onboarding && !onboarding;
         if popup {
+            // A question zooms in (0.96 to 1, opaque a third of the way) while the dim eases in.
+            let shown = self.motion.ease(dialog_since, 0.0, 0.24);
             // Everything drawn so far blurs (the host turns the blur on for a frame that marks
             // where it ends), dimmed under the question, which sits in the middle of the screen.
             if let Some(p) = ui.paint() {
@@ -1480,9 +1548,10 @@ impl MobileLauncher {
                     ui_w,
                     ui_h,
                     0.0,
-                    color::with_alpha(palette::bg_outer(), 0.55),
+                    color::with_alpha(palette::bg_outer(), 0.55 * shown),
                 );
             }
+            let card_start = motion::mark(ui);
             let pop_w = modal_w.min(ui_w - 32.0);
             let pop_x = ((ui_w - pop_w) * 0.5).round();
             if self.confirm_free_space {
@@ -1497,9 +1566,17 @@ impl MobileLauncher {
                     ui, &mut hits, pop_x, 0.0, pop_w, ui_h, name, worlds, col_danger,
                 );
             }
+            let (cx, cy) = (ui_w * 0.5, ui_h * 0.5);
+            let scale = 0.96 + 0.04 * shown;
+            motion::shape(ui, card_start, shown * 3.0, 0.0, 0.0, scale, cx, cy);
+            if entered {
+                self.enter_shell(ui, shell_start, shell_since, ui_w, ui_h);
+            }
             return hits;
         }
         if self.profile_popup_open {
+            // The pop-up rises out of the profile pill: 10 dp up, 0.97 to 1 from its bottom edge.
+            let start = motion::mark(ui);
             self.draw_profile_popup(
                 ui,
                 &mut hits,
@@ -1513,8 +1590,136 @@ impl MobileLauncher {
                 col_success,
                 col_danger,
             );
+            let shown = self.motion.ease(popup_since, 0.0, 0.20);
+            let (cx, cy) = (prof_x + prof_w * 0.5, ui_h - bottom_h);
+            let rise = 10.0 * (1.0 - shown);
+            motion::shape(ui, start, shown, 0.0, rise, 0.97 + 0.03 * shown, cx, cy);
+        }
+        if entered {
+            self.enter_shell(ui, shell_start, shell_since, ui_w, ui_h);
         }
         hits
+    }
+
+    /// Into the launcher after signing in: everything since `start` zooms from 0.985 to 1.
+    fn enter_shell(&self, ui: &mut Canvas<'_, '_>, start: usize, since: Instant, w: f32, h: f32) {
+        let shown = self.motion.ease(since, 0.0, 0.30);
+        motion::shape(
+            ui,
+            start,
+            1.0,
+            0.0,
+            0.0,
+            0.985 + 0.015 * shown,
+            w * 0.5,
+            h * 0.5,
+        );
+    }
+
+    /// One page of the signed-in shell, `route`'s, in `a`'s place.
+    fn draw_page(
+        &self,
+        route: Route,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        a: &Page<'_>,
+    ) {
+        match route {
+            Route::Install => match a.setup {
+                Setup::Running(progress) => self.draw_setup_running(
+                    ui,
+                    hits,
+                    a.modal_x,
+                    a.y,
+                    a.modal_w,
+                    a.h,
+                    progress,
+                    a.col_success,
+                ),
+                Setup::Failed { stage, error } => self.draw_setup_failed(
+                    ui,
+                    hits,
+                    a.modal_x,
+                    a.y,
+                    a.modal_w,
+                    a.h,
+                    *stage,
+                    error,
+                    a.col_danger,
+                ),
+                Setup::Needed | Setup::Ready => self.draw_home(
+                    ui,
+                    hits,
+                    a.x,
+                    a.y,
+                    a.w,
+                    a.h,
+                    a.setup,
+                    a.profiles,
+                    a.col_success,
+                    a.col_danger,
+                ),
+            },
+            Route::AccountSwitcher => self.draw_account_switcher(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                a.accounts,
+                a.active,
+                a.col_success,
+            ),
+            Route::Mods => self.draw_mods_view(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                a.profiles,
+                a.col_success,
+                a.col_danger,
+            ),
+            Route::Skins => {
+                self.draw_skins_view(
+                    ui,
+                    hits,
+                    a.x,
+                    a.y,
+                    a.w,
+                    a.h,
+                    a.account,
+                    a.col_success,
+                    a.col_danger,
+                );
+            }
+            Route::Settings => self.draw_settings_view(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                false,
+                a.setup,
+                a.col_success,
+                a.col_danger,
+            ),
+            Route::Home => self.draw_home(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                a.setup,
+                a.profiles,
+                a.col_success,
+                a.col_danger,
+            ),
+        }
     }
 
     fn draw_onboarding_top_bar(
@@ -1678,11 +1883,24 @@ impl MobileLauncher {
                 self.route == Route::Settings,
             ),
         ];
+        // The selection slides from the item it left (0.26 s); icons and labels recolour at once.
+        let selected = nav_items.iter().position(|item| item.3).unwrap_or(0);
+        let (left, since) = motion::changed(&self.rail_motion, selected);
+        let first_y = sy;
+        let mut piece = None;
         for (id, icon, label, active) in nav_items {
-            draw_rail_item(
+            let drawn = draw_rail_item(
                 ui, hits, id, item_x, sy, item_w, item_h, active, icon, label,
             );
+            piece = piece.or(drawn);
             sy += item_h + gap;
+        }
+        let slid = self.motion.ease(since, 0.0, 0.26);
+        if let (Some(range), Some(p)) = (piece, ui.paint())
+            && slid < 1.0
+        {
+            let dy = (left as f32 - selected as f32) * (item_h + gap) * (1.0 - slid);
+            motion::shape_range(p, range, 1.0, 0.0, dy, 1.0, 0.0, first_y);
         }
     }
 

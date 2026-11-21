@@ -45,6 +45,13 @@ impl MobileLauncher {
             .as_ref()
             .map_or("Not signed in", account_provider_tag);
         let tx = ix + tile_w + 24.0;
+        // Opening Skins turns the figure in to where it rests (0.9 s).
+        let (page, _, since) = self.page_motion.get();
+        let turned = if page == super::Route::Skins {
+            self.motion.ease(since, 0.0, 0.9)
+        } else {
+            1.0
+        };
 
         if let Some(p) = ui.paint() {
             if let Some((skin, slim)) = &skin {
@@ -55,7 +62,7 @@ impl MobileLauncher {
                     texel,
                     skin,
                     *slim,
-                    self.skin_yaw,
+                    self.skin_yaw - 1.4 * (1.0 - turned),
                     self.skin_pitch,
                 );
             } else {
@@ -257,7 +264,7 @@ impl MobileLauncher {
 
         // One list: each row's name on the left, its control in one column on the right that
         // every row shares.
-        let row_h: f32 = if compact_v { 40.0 } else { 46.0 };
+        let row_h: f32 = if compact_v { 38.0 } else { 42.0 };
         let ctl_h: f32 = if compact_v { 30.0 } else { 34.0 };
         let col_w = (inner_w * 0.42).clamp(200.0, 320.0);
         let col_x = inner_x + inner_w - col_w;
@@ -327,7 +334,7 @@ impl MobileLauncher {
         };
         // The rows under the title, as a drag scrolled them: rows scrolled past and rows past the
         // card's end aren't drawn, and how many are below sets how far a drag goes.
-        let total = usize::from(!typing_args)
+        let total = 2 * usize::from(!typing_args)
             + usize::from(!onboarding)
             + usize::from(free_shown)
             + 4 * usize::from(full);
@@ -343,15 +350,18 @@ impl MobileLauncher {
             end: card_end,
         };
 
-        // Modern or Pixel, side by side: the one not chosen takes the tap.
-        if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
-            name(ui, cy, row_h, "Launcher Font");
-            let pixel = ui_theme::pixel_font();
+        // Two choices side by side, `right` chosen when true: the one not chosen takes the tap.
+        let switch = |ui: &mut Canvas<'_, '_>,
+                      hits: &mut Vec<HitRect>,
+                      cy: f32,
+                      id: ButtonId,
+                      labels: [&str; 2],
+                      right: bool| {
             let (by, half) = (ctl_y(cy), col_w * 0.5);
             if let Some(p) = ui.paint() {
                 p.rounded(col_x, by, col_w, ctl_h, 10.0, palette::surface());
                 p.border(col_x, by, col_w, ctl_h, 10.0, palette::border());
-                let chosen_x = col_x + if pixel { half } else { 0.0 };
+                let chosen_x = col_x + if right { half } else { 0.0 };
                 let chosen = color::with_alpha(palette::accent(), 0.26);
                 p.rounded(
                     chosen_x + 3.0,
@@ -361,8 +371,8 @@ impl MobileLauncher {
                     7.0,
                     chosen,
                 );
-                for (i, label) in ["Modern", "Pixel"].into_iter().enumerate() {
-                    let ink = if (i == 1) == pixel {
+                for (i, label) in labels.into_iter().enumerate() {
+                    let ink = if (i == 1) == right {
                         palette::text()
                     } else {
                         palette::muted()
@@ -372,13 +382,32 @@ impl MobileLauncher {
                     p.text_line(Face::Medium, ui_size, ctl_h, lx, by, ink, label);
                 }
             }
+            let x = col_x + if right { 0.0 } else { half };
             hits.push(HitRect {
-                id: ButtonId::ToggleLauncherFont,
-                x: col_x + if pixel { 0.0 } else { half },
+                id,
+                x,
                 y: by,
                 w: half,
                 h: ctl_h,
             });
+        };
+        if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
+            name(ui, cy, row_h, "Launcher Font");
+            let pixel = ui_theme::pixel_font();
+            switch(
+                ui,
+                hits,
+                cy,
+                ButtonId::ToggleLauncherFont,
+                ["Modern", "Pixel"],
+                pixel,
+            );
+        }
+        // Moving pages, pop-ups and lists (`motion.rs`); off, everything changes at once.
+        if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
+            name(ui, cy, row_h, "Animations");
+            let off = !self.motion.on.get();
+            switch(ui, hits, cy, ButtonId::ToggleAnimations, ["On", "Off"], off);
         }
 
         // The game's arguments: words, "quoted words" as one; why they were refused, under them.

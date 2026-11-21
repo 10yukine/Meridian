@@ -358,6 +358,9 @@ impl MobileLauncher {
         }
         self.mod_lists.set(Some((cy, right_x - pane_gap * 0.5)));
 
+        // Another profile's tab: its panes fade up 8 dp (0.22 s).
+        let (_, tab_since) = super::motion::changed(&self.tab_motion, tab_key(&pid));
+        let panes_start = super::motion::mark(ui);
         self.draw_profile_mods_pane(ui, hits, ix, cy, pane_w, pane_h, &pid, compact_v);
         self.draw_registry_pane(
             ui,
@@ -371,6 +374,9 @@ impl MobileLauncher {
             col_success,
             col_danger,
         );
+        let shown = self.motion.ease(tab_since, 0.0, 0.22);
+        let rise = 8.0 * (1.0 - shown);
+        super::motion::shape(ui, panes_start, shown, 0.0, rise, 1.0, 0.0, 0.0);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -467,10 +473,15 @@ impl MobileLauncher {
 
         let rem_w = 78.0;
         let tog_w = 50.0;
+        // A mod just added: its row slides in 16 dp from the registry's side (0.32 s).
+        let now = (tab_key(pid), mods.len());
+        let (before, added_since) = super::motion::changed(&self.added_motion, now);
+        let added = (before.0 == now.0 && now.1 == before.1 + 1).then(|| now.1 - 1);
         for (i, pm) in mods.iter().enumerate().skip(start).take(end - start) {
             if py + row_h > rows_limit + 0.5 {
                 break;
             }
+            let row_start = super::motion::mark(ui);
             if let Some(p) = ui.paint() {
                 p.rounded(px, py + row_h - 1.0, pw, 1.0, 0.0, palette::border_subtle());
                 let max_nw = (pw - rem_w - tog_w - 26.0).max(46.0);
@@ -524,6 +535,11 @@ impl MobileLauncher {
                 },
                 if pm.enabled { "ON" } else { "OFF" },
             );
+            if added == Some(i) {
+                let shown = self.motion.ease(added_since, 0.0, 0.32);
+                let slide = 16.0 * (1.0 - shown);
+                super::motion::shape(ui, row_start, shown, slide, 0.0, 1.0, 0.0, 0.0);
+            }
             py += row_h;
         }
 
@@ -747,6 +763,14 @@ impl MobileLauncher {
             }
         }
     }
+}
+
+/// A profile's id as a number, so a change of profile can be told apart from a frame to the next.
+fn tab_key(pid: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    pid.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The page dots' strip at the bottom of a list that doesn't fit.

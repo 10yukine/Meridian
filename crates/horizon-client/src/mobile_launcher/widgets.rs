@@ -1143,9 +1143,11 @@ pub(super) fn draw_rail_item(
     active: bool,
     icon: RailIcon,
     label: &str,
-) {
+) -> Option<std::ops::Range<usize>> {
     let hit = HitRect { id, x, y, w, h };
+    let mut piece = None;
     if let Some(p) = ui.paint() {
+        let piece_start = p.batch.vertices.len();
         let hovered = hit.contains(p.cursor);
         let (fill, bdr, ink) = if active {
             (
@@ -1184,6 +1186,8 @@ pub(super) fn draw_rail_item(
                 1.5,
                 palette::accent_star(),
             );
+            // The selection (glow, plate, edge and mark), which slides between items.
+            piece = Some(piece_start..p.batch.vertices.len());
         }
         let icon_only = h < 36.0;
         let compact = h < 48.0;
@@ -1223,6 +1227,7 @@ pub(super) fn draw_rail_item(
         }
     }
     hits.push(hit);
+    piece
 }
 
 pub(super) fn count_label(n: usize, singular: &str, plural: &str) -> String {
