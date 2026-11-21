@@ -67,7 +67,14 @@ pub(crate) fn download_game(
     let libraries = manifest["libraries"]
         .as_array()
         .ok_or("The version file has no libraries")?;
-    for library in libraries.iter().filter(|l| allowed(l, os)) {
+    // A phone runs no desktop native code: preparing does without it there.
+    let wanted = |l: &Value| {
+        !(cfg!(target_os = "android")
+            && l["name"]
+                .as_str()
+                .is_some_and(horizon_prepare::artifacts::desktop_native))
+    };
+    for library in libraries.iter().filter(|l| allowed(l, os) && wanted(l)) {
         // Before 1.19 a library's natives for this system are a classifier of its own.
         let native = native_classifier(library, os)
             .map(|key| &library["downloads"]["classifiers"][key.as_str()]);

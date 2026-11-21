@@ -944,12 +944,24 @@ fn client_library_artifacts(manifest: &Value) -> Result<Vec<(&str, &Value)>, Str
 /// (`EventLoopGroupHolder.remote` asks `KQueue.isAvailable()`, then `Epoll.isAvailable()`), and
 /// Prism Launcher never downloads them (#1487). Preparing imports one when the launcher has it.
 fn runs_without(name: &str) -> bool {
+    if cfg!(target_os = "android") && desktop_native(name) {
+        return true;
+    }
     let mut parts = name.split(':');
     parts.next() == Some("io.netty")
         && parts
             .next()
             .is_some_and(|artifact| artifact.starts_with("netty-transport-native-"))
         && parts.nth(1).is_some()
+}
+
+/// Meridian: a library of a desktop's native code (`org.lwjgl:lwjgl:3.4.3:natives-linux`,
+/// `com.mojang:jtracy:1.14.38:natives-linux`). A phone's Java loads none of it (Android's LWJGL
+/// would be its own build), so Meridian's launcher doesn't download them there.
+pub fn desktop_native(name: &str) -> bool {
+    name.split(':')
+        .nth(3)
+        .is_some_and(|classifier| classifier.starts_with("natives-"))
 }
 
 /// A relative path with only normal components and forward slashes, from a manifest or bundle.
@@ -2360,6 +2372,19 @@ mod tests {
             .collect();
         for name in ["the official launcher", "ATLauncher", "the CurseForge app"] {
             assert!(launchers.contains(&name), "{name}");
+        }
+    }
+
+    #[test]
+    fn desktop_natives_are_the_natives_classifiers() {
+        assert!(desktop_native("org.lwjgl:lwjgl:3.4.3:natives-linux"));
+        assert!(desktop_native("com.mojang:jtracy:1.14.38:natives-linux"));
+        for name in [
+            "org.lwjgl:lwjgl:3.4.3",
+            "io.netty:netty-transport-native-epoll:4.2.16.Final:linux-x86_64",
+            "com.mojang:jtracy-natives-macos:1.14.38",
+        ] {
+            assert!(!desktop_native(name), "{name}");
         }
     }
 
