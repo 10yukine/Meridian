@@ -1,15 +1,20 @@
 # Meridian
 
-An unofficial Android port of [Horizon](https://github.com/horizon-rust/horizon), the Rust reimplementation of Minecraft: Java Edition.
+**An unofficial Android port of Horizon, the Rust reimplementation of Minecraft: Java Edition.**
 
-**Status:** early work. Nothing playable yet. The first goal is an arm64 APK that opens the title screen, enters a local world with touch controls, and keeps the save when you switch apps and come back.
+Meridian brings Horizon to phones with a touch-first launcher and on-screen game controls. Android is the current focus. iOS is a possibility, with no release timeline.
 
-## Credits
+> [!IMPORTANT]
+> **Microsoft sign-in approval is pending.** We’ve submitted Meridian’s application to Microsoft for Minecraft sign-in access and are awaiting approval. Meridian is an independent project and has no affiliation with Microsoft or Mojang.
 
-Meridian is a fork of Horizon and builds on its work.
+## Development status
 
-Not affiliated with Mojang, Microsoft or the Horizon project. You need your own copy of Minecraft: Java Edition; this repository contains no Mojang files.
+Meridian is in active development. Android development builds can open the launcher and reach the game’s title screen on tested ARM64 phones. The launcher already supports profiles and on-device game setup. We’re continuing work on touch controls, the launcher UI, and gameplay on mobile.
 
-## License
+## Build from source
 
-LGPL-3.0-or-later, as inherited from Horizon. See [LICENSE](LICENSE), [LICENSES](LICENSES) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The [Android build guide](packaging/android/README.md) covers the Rust and Android SDK prerequisites, how to build an ARM64 APK, and how to prepare game files from your own Minecraft: Java Edition installation. Meridian requires those game files and does not redistribute them.
+
+## Upstream and licensing
+
+Meridian is built on [Horizon](https://github.com/horizon-rust/horizon). It inherits Horizon’s LGPL-3.0-or-later license. See the [license](LICENSE), [additional licenses](LICENSES), and [third-party notices](THIRD_PARTY_NOTICES.md).
