@@ -21,7 +21,8 @@ mod widgets;
 
 use crate::launcher_backend::{
     Account, Backend, ELY_SKINS, Language, LanguageDownload, ModSearch, NEEDS_OWNER, PickedSkin,
-    Profile, ProfileState, Setup, SignIn, SkinUpload, VANILLA, i18n,
+    Profile, ProfileState, Setup, SignIn, SkinUpload, VANILLA,
+    i18n::{self, tr, trf},
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -470,7 +471,8 @@ impl MobileLauncher {
 
     /// The platform has no file picker to open.
     pub fn no_file_picker(&mut self) {
-        self.skin_error = Some("This device has no file picker.".into());
+        self.sync_language();
+        self.skin_error = Some(tr("This device has no file picker.").into());
     }
 
     /// Bind launcher UI preferences (`horizon.txt`) to an explicit folder and load them immediately.
@@ -720,15 +722,16 @@ impl MobileLauncher {
     }
 
     fn submit_ely(&mut self) {
+        self.sync_language();
         let user = self.ely_username.trim().to_owned();
         if user.is_empty() {
             self.ely_field = ElyField::Username;
-            self.ely_error = Some("Enter your Ely.by username or email.".to_owned());
+            self.ely_error = Some(tr("Enter your Ely.by username or email.").to_owned());
             return;
         }
         if self.ely_password.is_empty() {
             self.ely_field = ElyField::Password;
-            self.ely_error = Some("Enter your Ely.by password.".to_owned());
+            self.ely_error = Some(tr("Enter your Ely.by password.").to_owned());
             return;
         }
         let result = self
@@ -801,6 +804,7 @@ impl MobileLauncher {
     }
 
     fn handle_button(&mut self, id: ButtonId) -> Option<Action> {
+        self.sync_language();
         if self.adding_account && self.backend.accounts().len() > self.accounts_before_add {
             self.adding_account = false;
             self.auth_form = None;
@@ -855,11 +859,12 @@ impl MobileLauncher {
                 }
             }
             ButtonId::LanguageScrollUp => {
-                self.language_scroll = self.language_scroll.saturating_sub(4);
+                let max_scroll = self.scroll_max.get();
+                self.language_scroll = self.language_scroll.min(max_scroll).saturating_sub(4);
             }
             ButtonId::LanguageScrollDown => {
-                let max_idx = Language::ALL.len().saturating_sub(1);
-                self.language_scroll = (self.language_scroll + 4).min(max_idx);
+                let max_scroll = self.scroll_max.get();
+                self.language_scroll = (self.language_scroll + 4).min(max_scroll);
             }
             ButtonId::ToggleProfilePicker => {
                 self.confirm_remove_profile = None;
@@ -965,7 +970,8 @@ impl MobileLauncher {
                 self.clear_ely_secrets();
                 // A release build without a game owner on the phone: why, at once (the backend
                 // refuses the account too).
-                self.offline_error = (!self.backend.game_allowed()).then(|| NEEDS_OWNER.to_owned());
+                self.offline_error =
+                    (!self.backend.game_allowed()).then(|| tr(NEEDS_OWNER).to_owned());
                 self.auth_form = Some(AuthForm::Offline);
                 self.status_note = None;
             }
@@ -975,7 +981,8 @@ impl MobileLauncher {
             ButtonId::OpenElyEntry => {
                 self.drop_stale_sign_in();
                 self.offline_error = None;
-                self.ely_error = (!self.backend.game_allowed()).then(|| NEEDS_OWNER.to_owned());
+                self.ely_error =
+                    (!self.backend.game_allowed()).then(|| tr(NEEDS_OWNER).to_owned());
                 self.ely_field = ElyField::Username;
                 self.clear_ely_secrets();
                 self.auth_form = Some(AuthForm::Ely);
@@ -1019,7 +1026,7 @@ impl MobileLauncher {
             }
             ButtonId::OpenBrowserUrl => {
                 if let SignIn::Code { url, .. } = self.backend.sign_in() {
-                    self.status_note = Some(format!("Open {url} and enter the code."));
+                    self.status_note = Some(trf("Open {url} and enter the code.", &[("url", &url)]));
                     return Some(Action::OpenUrl(url));
                 }
             }
@@ -1240,8 +1247,10 @@ impl MobileLauncher {
                 if let Some((id, name)) = self.confirm_remove_profile.take() {
                     match self.backend.remove_profile(&id) {
                         Ok(()) => {
-                            self.status_note =
-                                Some(format!("Removed {name} and its saved worlds."));
+                            self.status_note = Some(trf(
+                                "Removed {name} and its saved worlds.",
+                                &[("name", &name)],
+                            ));
                         }
                         Err(err) => {
                             self.status_note = Some(err);
@@ -1807,8 +1816,9 @@ impl MobileLauncher {
         let tight_top = top_h < 40.0;
         let btn_h = (top_h - if tight_top { 6.0 } else { 10.0 }).clamp(26.0, 42.0);
         let btn_y = ((top_h - btn_h) * 0.5).round();
+        let settings_label = tr("Settings");
         let settings_w =
-            (ui.ro().measure(Face::Medium, ui_theme::body(), "Settings") + 24.0).max(86.0);
+            (ui.ro().measure(Face::Medium, ui_theme::body(), settings_label) + 24.0).max(86.0);
         if let Some(p) = ui.paint() {
             p.rounded(0.0, 0.0, ui_w, top_h, 0.0, palette::rail());
             p.rounded(0.0, top_h - 1.0, ui_w, 1.0, 0.0, palette::border_subtle());
@@ -1822,7 +1832,7 @@ impl MobileLauncher {
                 pad + badge_sz + 10.0,
                 0.0,
                 palette::text(),
-                "Meridian Launcher",
+                tr("Meridian Launcher"),
             );
             let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
             let vw = p.measure(Face::Regular, ui_theme::small(), ver);
@@ -1849,7 +1859,7 @@ impl MobileLauncher {
             } else {
                 Tone::Ghost
             },
-            "Settings",
+            settings_label,
         );
     }
 
@@ -1935,25 +1945,25 @@ impl MobileLauncher {
             (
                 ButtonId::GoHome,
                 RailIcon::Home,
-                "Home",
+                tr("Home"),
                 matches!(page, Route::Home | Route::Install),
             ),
             (
                 ButtonId::OpenMods,
                 RailIcon::Mods,
-                "Mods",
+                tr("Mods"),
                 page == Route::Mods,
             ),
             (
                 ButtonId::OpenSkins,
                 RailIcon::Skins,
-                "Skins",
+                tr("Skins"),
                 self.route == Route::Skins,
             ),
             (
                 ButtonId::OpenSettings,
                 RailIcon::Settings,
-                "Settings",
+                tr("Settings"),
                 self.route == Route::Settings,
             ),
         ];
@@ -2024,7 +2034,7 @@ impl MobileLauncher {
         };
         let (acct_name, acct_sub) = match account {
             Some(a) => (account_short(a), account_provider_tag(a)),
-            None => ("Account", "Not signed in"),
+            None => (tr("Account"), tr("Not signed in")),
         };
         if let Some(p) = ui.paint() {
             let active = self.route == Route::AccountSwitcher;
@@ -2109,7 +2119,7 @@ impl MobileLauncher {
             .iter()
             .find(|p| p.id == selected_id)
             .or_else(|| profiles.first());
-        let sel_name = selected.map_or("Vanilla", |p| p.name.as_str());
+        let sel_name = selected.map_or(tr("Vanilla"), |p| p.name.as_str());
         let sel_id = selected.map_or(VANILLA, |p| p.id.as_str());
         let sel_state = selected.map_or(ProfileState::Available, |p| {
             effective_profile_state(p, setup)
@@ -2156,10 +2166,8 @@ impl MobileLauncher {
 
             let summary = match (&sel_state, selected) {
                 (ProfileState::Installing(prog), _) => {
-                    format!(
-                        "Installing {}%",
-                        (stage_fraction(prog) * 100.0).round() as u32
-                    )
+                    let pct = (stage_fraction(prog) * 100.0).round() as u32;
+                    trf("Installing {pct}%", &[("pct", &pct.to_string())])
                 }
                 (_, Some(prof)) => profile_stats_line(prof),
                 _ => "...".to_owned(),
@@ -2215,7 +2223,7 @@ impl MobileLauncher {
                 by,
                 play_w,
                 bar_h,
-                "Pick Account",
+                tr("Pick Account"),
                 false,
             );
         } else if sel_id == VANILLA || !base_ready {
@@ -2229,9 +2237,9 @@ impl MobileLauncher {
                     play_w,
                     bar_h,
                     if sel_id == VANILLA {
-                        "Install Game"
+                        tr("Install Game")
                     } else {
-                        "Install Base Game"
+                        tr("Install Base Game")
                     },
                     false,
                 ),
@@ -2246,7 +2254,10 @@ impl MobileLauncher {
                         play_w,
                         bar_h,
                         Tone::Banner,
-                        &format!("{} {pct}%", stage_name(prog.stage)),
+                        &trf(
+                            "{stage} {pct}%",
+                            &[("stage", stage_name(prog.stage)), ("pct", &pct.to_string())],
+                        ),
                     );
                 }
                 Setup::Failed { .. } => draw_button(
@@ -2258,7 +2269,7 @@ impl MobileLauncher {
                     play_w,
                     bar_h,
                     Tone::Danger,
-                    "Retry Install",
+                    tr("Retry Install"),
                 ),
                 Setup::Ready => draw_play_button(
                     ui,
@@ -2268,7 +2279,7 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    "Play",
+                    tr("Play"),
                     true,
                 ),
             }
@@ -2282,7 +2293,7 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    "Install Profile",
+                    tr("Install Profile"),
                     false,
                 ),
                 ProfileState::Installing(ref prog) => {
@@ -2301,16 +2312,19 @@ impl MobileLauncher {
                                 color::with_alpha(palette::accent_fill(), 0.78),
                             );
                         }
-                        let txt = format!("Installing {pct}%...");
-                        let tw = p.measure(Face::SemiBold, 14.0, &txt);
+                        let txt = trf("Installing {pct}%...", &[("pct", &pct.to_string())]);
+                        let room = (play_w - 16.0).max(16.0);
+                        let sz = p.fit(Face::SemiBold, 14.0, &txt, room);
+                        let fit = truncate_to_fit(p, Face::SemiBold, sz, &txt, room);
+                        let tw = p.measure(Face::SemiBold, sz, &fit);
                         p.text_line(
                             Face::SemiBold,
-                            14.0,
+                            sz,
                             bar_h,
                             play_x + ((play_w - tw) * 0.5).round(),
                             by,
                             palette::text(),
-                            &txt,
+                            &fit,
                         );
                     }
                 }
@@ -2323,7 +2337,7 @@ impl MobileLauncher {
                     play_w,
                     bar_h,
                     Tone::Danger,
-                    "Retry Install",
+                    tr("Retry Install"),
                 ),
                 ProfileState::Installed => draw_play_button(
                     ui,
@@ -2333,7 +2347,7 @@ impl MobileLauncher {
                     by,
                     play_w,
                     bar_h,
-                    "Play",
+                    tr("Play"),
                     true,
                 ),
             }

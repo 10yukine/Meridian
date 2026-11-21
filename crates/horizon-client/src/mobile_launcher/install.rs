@@ -5,7 +5,10 @@ use super::widgets::{
     stage_heading, stage_index, stage_name, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{Progress, Stage};
+use crate::launcher_backend::{
+    Progress, Stage,
+    i18n::{tr, trf},
+};
 use crate::ui_theme::{self, Face};
 
 impl MobileLauncher {
@@ -52,8 +55,8 @@ impl MobileLauncher {
         let pill_w = (inner_w - pill_gap * 3.0) / 4.0;
         let pill_h = if compact_v { 28.0 } else { 36.0 };
         if let Some(p) = ui.paint() {
-            for (i, label) in ["Check", "Download", "Verify", "Prepare"]
-                .iter()
+            for (i, label) in [tr("Check"), tr("Download"), tr("Verify"), tr("Prepare")]
+                .into_iter()
                 .enumerate()
             {
                 let px = inner_x + i as f32 * (pill_w + pill_gap);
@@ -73,7 +76,6 @@ impl MobileLauncher {
                     p.rounded(px, cy, pill_w, pill_h, 8.0, bg);
                 }
                 p.border(px, cy, pill_w, pill_h, 8.0, bdr);
-                let label = crate::launcher_backend::i18n::tr(label);
                 let tw = p.measure(Face::Medium, ui_theme::small(), label);
                 p.text_line(
                     Face::Medium,
@@ -151,7 +153,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Secondary,
-            "Hide to Home",
+            tr("Hide to Home"),
         );
         draw_button(
             ui,
@@ -162,7 +164,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Danger,
-            "Cancel",
+            tr("Cancel"),
         );
     }
 
@@ -200,7 +202,10 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                &format!("Install stopped at {}", stage_name(stage)),
+                &trf(
+                    "Install stopped at {stage}",
+                    &[("stage", stage_name(stage))],
+                ),
             );
             cy += if compact_v { 30.0 } else { 36.0 };
             for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, error, inner_w)
@@ -232,7 +237,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Primary,
-            "Retry Install",
+            tr("Retry Install"),
         );
         draw_button(
             ui,
@@ -243,7 +248,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Secondary,
-            "Back to Home",
+            tr("Back to Home"),
         );
     }
 }

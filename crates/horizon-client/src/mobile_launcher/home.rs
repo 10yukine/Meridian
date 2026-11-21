@@ -2,12 +2,14 @@
 //! Remove profile modal.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, count_label, draw_button, draw_plate, effective_profile_state,
-    log_levels, palette, profile_badge_parts, profile_stats_line, stage_fraction, truncate_to_fit,
-    wrap_lines,
+    Canvas, HitRect, Tone, draw_button, draw_plate, effective_profile_state, log_levels, palette,
+    profile_badge_parts, profile_stats_line, stage_fraction, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{Profile, ProfileState, Setup, VANILLA};
+use crate::launcher_backend::{
+    Profile, ProfileState, Setup, VANILLA,
+    i18n::{tr, trf},
+};
 use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
@@ -31,7 +33,7 @@ impl MobileLauncher {
             .iter()
             .find(|p| p.id == selected_id)
             .or_else(|| profiles.first());
-        let sel_name = selected.map_or("Vanilla", |p| p.name.as_str());
+        let sel_name = selected.map_or(tr("Vanilla"), |p| p.name.as_str());
         let sel_state = selected.map_or(ProfileState::Available, |p| {
             effective_profile_state(p, setup)
         });
@@ -157,7 +159,7 @@ impl MobileLauncher {
                 prog_w,
                 btn_h,
                 Tone::Banner,
-                "View progress",
+                tr("View progress"),
             );
         }
         let log_end = if installing {
@@ -198,11 +200,8 @@ impl MobileLauncher {
         }
         let col_warn = color::hex(crate::menu_style::get().settings.warn, 255);
         let lines = self.backend.game_log(profile);
-        let title = crate::launcher_backend::i18n::tr("Game log");
-        let label_w = ui
-            .ro()
-            .measure(Face::SemiBold, ui_theme::small(), title)
-            + 16.0;
+        let title = tr("Game log");
+        let label_w = ui.ro().measure(Face::SemiBold, ui_theme::small(), title) + 16.0;
         if let Some(p) = ui.paint() {
             p.text_line(
                 Face::SemiBold,
@@ -215,8 +214,7 @@ impl MobileLauncher {
             );
         }
         let mut cx = x + label_w;
-        for (level, name) in [(0, "All"), (1, "Warnings"), (2, "Errors")] {
-            let shown_name = crate::launcher_backend::i18n::tr(name);
+        for (level, shown_name) in [(0, tr("All")), (1, tr("Warnings")), (2, tr("Errors"))] {
             let cw = ui.ro().measure(Face::Medium, ui_theme::small(), shown_name) + 22.0;
             draw_button(
                 ui,
@@ -231,7 +229,7 @@ impl MobileLauncher {
                 } else {
                     Tone::Ghost
                 },
-                name,
+                shown_name,
             );
             cx += cw + 6.0;
         }
@@ -245,7 +243,11 @@ impl MobileLauncher {
                 88.0,
                 head_h,
                 Tone::Secondary,
-                if self.log_copied { "Copied" } else { "Copy" },
+                if self.log_copied {
+                    tr("Copied")
+                } else {
+                    tr("Copy")
+                },
             );
         }
         let box_y = y + head_h + 4.0;
@@ -266,9 +268,9 @@ impl MobileLauncher {
         };
         if shown.is_empty() {
             let empty = if lines.is_empty() {
-                "The game's log shows here once you play."
+                tr("The game's log shows here once you play.")
             } else {
-                "Nothing at this level."
+                tr("Nothing at this level.")
             };
             p.text_line(
                 Face::Regular,
@@ -452,12 +454,12 @@ impl MobileLauncher {
                 );
 
                 let right_meta = match &state {
-                    ProfileState::Installing(prog) => format!(
-                        "Installing {}%",
-                        (stage_fraction(prog) * 100.0).round() as u32
-                    ),
-                    ProfileState::Failed(_) => "Failed".to_owned(),
-                    ProfileState::Available => "Needs install".to_owned(),
+                    ProfileState::Installing(prog) => {
+                        let pct = (stage_fraction(prog) * 100.0).round() as u32;
+                        trf("Installing {pct}%", &[("pct", &pct.to_string())])
+                    }
+                    ProfileState::Failed(_) => tr("Failed").to_owned(),
+                    ProfileState::Available => tr("Needs install").to_owned(),
                     ProfileState::Installed => profile_stats_line(profile),
                 };
                 let meta_col = if is_selected {
@@ -614,7 +616,6 @@ impl MobileLauncher {
         let inner_x = x + 24.0;
         let inner_w = w - 48.0;
         let mut cy = cy_top + if compact_v { 12.0 } else { 22.0 };
-        let world_phrase = count_label(worlds, "saved world", "saved worlds");
 
         if let Some(p) = ui.paint() {
             p.text_line(
@@ -628,13 +629,17 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                &format!("Delete \"{name}\"?"),
+                &trf("Delete \"{name}\"?", &[("name", name)]),
             );
             cy += if compact_v { 28.0 } else { 38.0 };
-            let body = if worlds == 0 {
-                "Everything in it is deleted for good. Vanilla worlds stay.".to_owned()
-            } else {
-                format!("Its mods and {world_phrase} are deleted for good. Vanilla worlds stay.")
+            let body = match worlds {
+                0 => tr("Everything in it is deleted for good. Vanilla worlds stay.").to_owned(),
+                1 => tr("Its mods and 1 saved world are deleted for good. Vanilla worlds stay.")
+                    .to_owned(),
+                _ => trf(
+                    "Its mods and {count} saved worlds are deleted for good. Vanilla worlds stay.",
+                    &[("count", &worlds.to_string())],
+                ),
             };
             for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, &body, inner_w)
                 .into_iter()
@@ -665,7 +670,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Secondary,
-            "Keep Profile",
+            tr("Keep Profile"),
         );
         draw_button(
             ui,
@@ -677,9 +682,9 @@ impl MobileLauncher {
             btn_h,
             Tone::Danger,
             if worlds == 0 {
-                "Delete Profile"
+                tr("Delete Profile")
             } else {
-                "Delete Profile & Worlds"
+                tr("Delete Profile & Worlds")
             },
         );
     }

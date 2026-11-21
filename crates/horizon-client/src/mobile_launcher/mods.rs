@@ -5,7 +5,10 @@ use super::widgets::{
     format_size, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{ModSearch, Profile, VANILLA};
+use crate::launcher_backend::{
+    ModSearch, Profile, VANILLA,
+    i18n::{tr, trf},
+};
 use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
@@ -54,7 +57,7 @@ impl MobileLauncher {
             new_w,
             top_btn_h,
             Tone::Secondary,
-            "New Profile",
+            tr("New Profile"),
         );
 
         let pid = self.effective_mods_profile_id(profiles);
@@ -174,7 +177,7 @@ impl MobileLauncher {
                     done_w,
                     top_btn_h,
                     Tone::Primary,
-                    "Done",
+                    tr("Done"),
                 );
                 continue;
             }
@@ -250,7 +253,7 @@ impl MobileLauncher {
             let rem_h = (y + avail_h - cy).max(0.0);
             let center_x = x + w * 0.5;
             let badge_sz = if compact_v { 44.0 } else { 58.0 };
-            let sub = "Mods go in their own profiles, so Vanilla worlds stay untouched.";
+            let sub = tr("Mods go in their own profiles, so Vanilla worlds stay untouched.");
             let sub_max = (iw - 40.0).min(460.0);
             let mut sub_lines: Vec<String> =
                 wrap_lines(ui.ro(), Face::Regular, ui_theme::small(), sub, sub_max)
@@ -290,7 +293,7 @@ impl MobileLauncher {
                 ey += badge_h;
 
                 if heading_h > 0.0 {
-                    let heading = "Vanilla plays without mods";
+                    let heading = tr("Vanilla plays without mods");
                     let h_sz = if compact_v { 17.0 } else { 19.0 };
                     let hw = p.measure(Face::SemiBold, h_sz, heading);
                     p.text_line(
@@ -327,7 +330,7 @@ impl MobileLauncher {
                 cta_w,
                 cta_h,
                 Tone::Primary,
-                "Create Modded Profile",
+                tr("Create Modded Profile"),
             );
             return;
         }
@@ -403,7 +406,10 @@ impl MobileLauncher {
                 px,
                 py,
                 palette::text(),
-                &format!("Profile Mods ({})", mods.len()),
+                &trf(
+                    "Profile Mods ({count})",
+                    &[("count", &mods.len().to_string())],
+                ),
             );
         }
         py += 24.0;
@@ -432,7 +438,7 @@ impl MobileLauncher {
                     color::with_alpha(palette::accent_star(), 0.45),
                 );
                 draw_icon_box(p, cx, by + sz * 0.5, sz * 0.48, palette::accent_star());
-                let title = "No mods in this profile yet";
+                let title = tr("No mods in this profile yet");
                 let tw = p.measure(Face::Medium, 13.5, title);
                 p.text_line(
                     Face::Medium,
@@ -443,7 +449,7 @@ impl MobileLauncher {
                     palette::text(),
                     title,
                 );
-                let sub = "Add them from Horizon's registry.";
+                let sub = tr("Add them from Horizon's registry.");
                 let sw = p.measure(Face::Regular, ui_theme::small(), sub);
                 p.text_line(
                     Face::Regular,
@@ -518,7 +524,7 @@ impl MobileLauncher {
                 rem_w,
                 bh,
                 Tone::Danger,
-                "Remove",
+                tr("Remove"),
             );
             draw_button(
                 ui,
@@ -533,7 +539,7 @@ impl MobileLauncher {
                 } else {
                     Tone::Secondary
                 },
-                if pm.enabled { "ON" } else { "OFF" },
+                if pm.enabled { tr("ON") } else { tr("OFF") },
             );
             if added == Some(i) {
                 let shown = self.motion.ease(added_since, 0.0, 0.32);
@@ -584,7 +590,7 @@ impl MobileLauncher {
                     px,
                     py,
                     palette::text(),
-                    "Horizon Registry",
+                    tr("Horizon Registry"),
                 );
             }
             py += 22.0;
@@ -607,7 +613,7 @@ impl MobileLauncher {
             pw - search_btn_w - 6.0,
             search_h,
             if self.mod_search_query.is_empty() && !self.mod_search_focused {
-                "Search Horizon mods"
+                tr("Search Horizon mods")
             } else {
                 ""
             },
@@ -624,7 +630,7 @@ impl MobileLauncher {
             search_btn_w,
             search_h,
             Tone::Primary,
-            "Find",
+            tr("Find"),
         );
         py += search_h + 6.0;
 
@@ -645,7 +651,7 @@ impl MobileLauncher {
                         px,
                         py + 6.0,
                         palette::muted(),
-                        "Searching Horizon registry...",
+                        tr("Searching Horizon registry..."),
                     );
                 }
             }
@@ -673,7 +679,7 @@ impl MobileLauncher {
                             px,
                             py + 6.0,
                             palette::muted(),
-                            "No mods matched.",
+                            tr("No mods matched."),
                         );
                     }
                     return;
@@ -721,7 +727,8 @@ impl MobileLauncher {
                             &fit_s,
                         );
                         if already {
-                            let aw = p.measure(Face::Regular, 11.0, "Added");
+                            let added_lbl = tr("Added");
+                            let aw = p.measure(Face::Regular, 11.0, added_lbl);
                             p.text_line(
                                 Face::Regular,
                                 11.0,
@@ -729,7 +736,7 @@ impl MobileLauncher {
                                 px + pw - 10.0 - aw,
                                 py,
                                 col_success,
-                                "Added",
+                                added_lbl,
                             );
                         }
                     }
@@ -743,7 +750,7 @@ impl MobileLauncher {
                             64.0,
                             30.0,
                             Tone::Primary,
-                            "+ Add",
+                            tr("+ Add"),
                         );
                     }
                     py += row_h;

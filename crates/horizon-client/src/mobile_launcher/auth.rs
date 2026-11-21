@@ -5,7 +5,7 @@ use super::widgets::{
     draw_north_star_badge, draw_plate, draw_player_head, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, ElyField, MobileLauncher};
-use crate::launcher_backend::{Account, NOT_APPROVED, SignIn, valid_offline_name};
+use crate::launcher_backend::{Account, NOT_APPROVED, SignIn, i18n::tr, valid_offline_name};
 use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
@@ -51,7 +51,7 @@ impl MobileLauncher {
                 92.0,
                 if compact_v { 36.0 } else { 40.0 },
                 Tone::Ghost,
-                "Back",
+                tr("Back"),
             );
         }
 
@@ -70,7 +70,7 @@ impl MobileLauncher {
                 title_x,
                 cy,
                 palette::text(),
-                "Sign in to Meridian",
+                tr("Sign in to Meridian"),
             );
         }
         cy += title_block;
@@ -84,7 +84,7 @@ impl MobileLauncher {
             inner_w,
             btn_h,
             Tone::Primary,
-            "Sign in with Microsoft",
+            tr("Sign in with Microsoft"),
         );
         cy += btn_h + gap;
 
@@ -97,7 +97,7 @@ impl MobileLauncher {
             inner_w,
             btn_h,
             Tone::Secondary,
-            "Play Offline",
+            tr("Play Offline"),
         );
         cy += btn_h + gap;
 
@@ -113,7 +113,7 @@ impl MobileLauncher {
                 half_w,
                 sub_h,
                 Tone::Secondary,
-                "Sign in with Ely.by",
+                tr("Sign in with Ely.by"),
             );
             draw_button(
                 ui,
@@ -124,7 +124,7 @@ impl MobileLauncher {
                 half_w,
                 sub_h,
                 Tone::Ghost,
-                "Hide more options",
+                tr("Hide more options"),
             );
         } else {
             draw_button(
@@ -137,7 +137,7 @@ impl MobileLauncher {
                 inner_w,
                 if compact_v { 38.0 } else { 42.0 },
                 Tone::Ghost,
-                "More options",
+                tr("More options"),
             );
         }
     }
@@ -157,7 +157,7 @@ impl MobileLauncher {
         let feedback = self.offline_error.as_deref().or(if valid {
             None
         } else {
-            Some("Enter 1-16 letters, digits, or underscores.")
+            Some(tr("Enter 1-16 letters, digits, or underscores."))
         });
         // The rule is a hint until a name is turned down: red only for an error.
         let feedback_col = if self.offline_error.is_some() {
@@ -189,7 +189,7 @@ impl MobileLauncher {
                     inner_x,
                     cy,
                     palette::text(),
-                    "Choose Offline Name",
+                    tr("Choose Offline Name"),
                 );
             }
             draw_button(
@@ -201,7 +201,7 @@ impl MobileLauncher {
                 86.0,
                 hdr_h,
                 Tone::Secondary,
-                "Back",
+                tr("Back"),
             );
             cy += hdr_h + 6.0;
 
@@ -216,7 +216,7 @@ impl MobileLauncher {
                 cy,
                 inner_w - confirm_w - 10.0,
                 row_h,
-                "Player Name",
+                tr("Player Name"),
                 &self.offline_name,
                 false,
                 true,
@@ -230,7 +230,7 @@ impl MobileLauncher {
                 confirm_w,
                 row_h,
                 Tone::Primary,
-                "Continue Offline",
+                tr("Continue Offline"),
             );
             cy += row_h + 4.0;
             if let Some(msg) = feedback
@@ -278,7 +278,7 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                "Choose Offline Name",
+                tr("Choose Offline Name"),
             );
             if !compact_v {
                 p.text_line(
@@ -288,7 +288,7 @@ impl MobileLauncher {
                     inner_x,
                     cy + 32.0,
                     palette::muted(),
-                    "1 to 16 characters: A-Z, a-z, 0-9, or underscore.",
+                    tr("1 to 16 characters: A-Z, a-z, 0-9, or underscore."),
                 );
             }
         }
@@ -302,7 +302,7 @@ impl MobileLauncher {
             cy,
             inner_w,
             field_h,
-            "Player Name",
+            tr("Player Name"),
             &self.offline_name,
             false,
             true,
@@ -336,7 +336,7 @@ impl MobileLauncher {
             inner_w - back_w - 12.0,
             eff_btn_h,
             Tone::Primary,
-            "Continue Offline",
+            tr("Continue Offline"),
         );
         draw_button(
             ui,
@@ -347,7 +347,7 @@ impl MobileLauncher {
             back_w,
             eff_btn_h,
             Tone::Secondary,
-            "Back",
+            tr("Back"),
         );
     }
 
@@ -382,6 +382,7 @@ impl MobileLauncher {
 
             let mut cy = cy_top + pad_y;
             if let Some(p) = ui.paint() {
+                let ely_title = tr("Sign in with Ely.by");
                 p.text_line(
                     Face::SemiBold,
                     18.5,
@@ -389,10 +390,10 @@ impl MobileLauncher {
                     inner_x,
                     cy,
                     palette::text(),
-                    "Sign in with Ely.by",
+                    ely_title,
                 );
                 if let Some(err) = &self.ely_error {
-                    let title_w = p.measure(Face::SemiBold, 18.5, "Sign in with Ely.by");
+                    let title_w = p.measure(Face::SemiBold, 18.5, ely_title);
                     let err_room = (inner_w - title_w - 16.0).max(80.0);
                     let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, err_room);
                     let ew = p.measure(Face::Regular, ui_theme::small(), &fit);
@@ -422,7 +423,7 @@ impl MobileLauncher {
                 cy,
                 user_w,
                 field_h,
-                "Username",
+                tr("Username"),
                 &self.ely_username,
                 false,
                 self.ely_field == ElyField::Username,
@@ -435,7 +436,7 @@ impl MobileLauncher {
                 cy,
                 pass_w,
                 field_h,
-                "Password",
+                tr("Password"),
                 &self.ely_password,
                 true,
                 self.ely_field == ElyField::Password,
@@ -448,7 +449,7 @@ impl MobileLauncher {
                 cy,
                 otp_w,
                 field_h,
-                "2FA (Opt)",
+                tr("2FA (Opt)"),
                 &self.ely_otp,
                 false,
                 self.ely_field == ElyField::Otp,
@@ -466,7 +467,7 @@ impl MobileLauncher {
                 inner_w - back_w - 10.0,
                 eff_btn_h,
                 Tone::Primary,
-                "Sign In",
+                tr("Sign In"),
             );
             draw_button(
                 ui,
@@ -477,7 +478,7 @@ impl MobileLauncher {
                 back_w,
                 eff_btn_h,
                 Tone::Secondary,
-                "Back",
+                tr("Back"),
             );
             return;
         }
@@ -510,7 +511,7 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                "Sign in with Ely.by",
+                tr("Sign in with Ely.by"),
             );
         }
         cy += hdr_step;
@@ -523,7 +524,7 @@ impl MobileLauncher {
             cy,
             inner_w,
             field_h,
-            "Username / Email",
+            tr("Username / Email"),
             &self.ely_username,
             false,
             self.ely_field == ElyField::Username,
@@ -539,7 +540,7 @@ impl MobileLauncher {
             cy,
             half_w,
             field_h,
-            "Password",
+            tr("Password"),
             &self.ely_password,
             true,
             self.ely_field == ElyField::Password,
@@ -552,7 +553,7 @@ impl MobileLauncher {
             cy,
             half_w,
             field_h,
-            "2FA Code (Optional)",
+            tr("2FA Code (Optional)"),
             &self.ely_otp,
             false,
             self.ely_field == ElyField::Otp,
@@ -586,7 +587,7 @@ impl MobileLauncher {
             inner_w - back_w - 10.0,
             eff_btn_h,
             Tone::Primary,
-            "Sign In",
+            tr("Sign In"),
         );
         draw_button(
             ui,
@@ -597,7 +598,7 @@ impl MobileLauncher {
             back_w,
             eff_btn_h,
             Tone::Secondary,
-            "Back",
+            tr("Back"),
         );
     }
 
@@ -621,10 +622,12 @@ impl MobileLauncher {
         let not_approved = matches!(sign_in, SignIn::Failed(e) if e == NOT_APPROVED);
         let (title, body) = match sign_in {
             SignIn::Failed(_) if not_approved => (
-                "Microsoft sign-in isn't available yet",
-                "Mojang hasn't approved Meridian's sign-in yet. Play with an offline account until then.",
+                tr("Microsoft sign-in isn't available yet"),
+                tr(
+                    "Mojang hasn't approved Meridian's sign-in yet. Play with an offline account until then.",
+                ),
             ),
-            SignIn::Failed(err) => ("Sign-in failed", err.as_str()),
+            SignIn::Failed(err) => (tr("Sign-in failed"), err.as_str()),
             _ => ("", ""),
         };
         let lines: Vec<String> =
@@ -659,7 +662,7 @@ impl MobileLauncher {
                         inner_x,
                         cy,
                         palette::text(),
-                        "Connecting...",
+                        tr("Connecting..."),
                     );
                 }
                 cy += 56.0;
@@ -672,7 +675,7 @@ impl MobileLauncher {
                     160.0,
                     48.0,
                     Tone::Secondary,
-                    "Cancel",
+                    tr("Cancel"),
                 );
             }
             SignIn::Code { url, code } => {
@@ -688,7 +691,7 @@ impl MobileLauncher {
                         inner_x,
                         cy,
                         palette::text(),
-                        "Enter this code in your browser",
+                        tr("Enter this code in your browser"),
                     );
                 }
                 cy += if compact_v { 30.0 } else { 38.0 };
@@ -736,7 +739,7 @@ impl MobileLauncher {
                     inner_w - cancel_w - 10.0,
                     btn_h,
                     Tone::Primary,
-                    "Open microsoft.com/link",
+                    tr("Open microsoft.com/link"),
                 );
                 draw_button(
                     ui,
@@ -747,7 +750,7 @@ impl MobileLauncher {
                     cancel_w,
                     btn_h,
                     Tone::Secondary,
-                    "Cancel",
+                    tr("Cancel"),
                 );
             }
             SignIn::Failed(_) => {
@@ -780,9 +783,9 @@ impl MobileLauncher {
                 let btn_y = cy + 38.0 + lines.len() as f32 * 20.0 + 20.0;
                 let half_w = (inner_w - 12.0) * 0.5;
                 let (go, go_label) = if not_approved {
-                    (ButtonId::OpenOfflineEntry, "Use Offline Account")
+                    (ButtonId::OpenOfflineEntry, tr("Use Offline Account"))
                 } else {
-                    (ButtonId::RetrySignIn, "Try Again")
+                    (ButtonId::RetrySignIn, tr("Try Again"))
                 };
                 draw_button(
                     ui,
@@ -804,7 +807,7 @@ impl MobileLauncher {
                     half_w,
                     48.0,
                     Tone::Secondary,
-                    "Back",
+                    tr("Back"),
                 );
             }
             SignIn::Idle | SignIn::Done(_) => {}
@@ -839,7 +842,7 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                "Accounts",
+                tr("Accounts"),
             );
             p.rounded(
                 x + 1.0,
@@ -859,7 +862,7 @@ impl MobileLauncher {
             156.0,
             hdr_h,
             Tone::Primary,
-            "+ Add account",
+            tr("+ Add account"),
         );
         cy += hdr_h + if compact_v { 10.0 } else { 20.0 };
 
@@ -944,11 +947,12 @@ impl MobileLauncher {
                 rem_w,
                 act_h,
                 Tone::Danger,
-                "Sign out",
+                tr("Sign out"),
             );
             if is_active {
                 if let Some(p) = ui.paint() {
-                    let aw = p.measure(Face::Medium, ui_theme::small(), "Active");
+                    let active_label = tr("Active");
+                    let aw = p.measure(Face::Medium, ui_theme::small(), active_label);
                     p.text_line(
                         Face::Medium,
                         ui_theme::small(),
@@ -956,7 +960,7 @@ impl MobileLauncher {
                         inner_x + inner_w - 22.0 - rem_w - aw,
                         ay,
                         col_success,
-                        "Active",
+                        active_label,
                     );
                 }
             } else {
@@ -969,7 +973,7 @@ impl MobileLauncher {
                     92.0,
                     act_h,
                     Tone::Secondary,
-                    "Use",
+                    tr("Use"),
                 );
             }
             cy += item_h + gap;
@@ -987,7 +991,7 @@ impl MobileLauncher {
                     82.0,
                     34.0,
                     Tone::Secondary,
-                    "Prev",
+                    tr("Prev"),
                 );
             }
             if page + 1 < total_pages {
@@ -1000,7 +1004,7 @@ impl MobileLauncher {
                     82.0,
                     34.0,
                     Tone::Secondary,
-                    "Next",
+                    tr("Next"),
                 );
             }
         }

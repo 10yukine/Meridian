@@ -530,7 +530,7 @@ impl Language {
             Self::Persian => "Persian",
             Self::Catalan => "Catalan",
             Self::Estonian => "Estonian",
-            Self::Latvian => "Latviešu",
+            Self::Latvian => "Latvian",
             Self::Slovenian => "Slovenian",
             Self::Serbian => "Serbian",
             Self::Icelandic => "Icelandic",
@@ -583,8 +583,11 @@ impl Language {
         }
     }
 
-    /// Phase 1: whether the launcher's bundled Geist faces cover this language's script without
-    /// loading the prepared pack's font sheets.
+    /// Phase 1: whether the launcher's bundled Geist faces cover this language's script and
+    /// alphabet without loading the prepared pack's font sheets.
+    // ponytail: Phase 1 marks the 24 languages Geist lacks as unavailable so no missing-glyph
+    // boxes are drawn; Phase 2 lifts this gate once `mobile_launcher_host` loads the prepared
+    // pack's Unifont sheets (`use_full_atlas`) for non-Geist scripts.
     pub fn bundled_font_supported(self) -> bool {
         !matches!(
             self,
@@ -605,9 +608,12 @@ impl Language {
                 | Self::Lao
                 | Self::Kannada
                 | Self::Hawaiian
+                | Self::Igbo
                 | Self::Yiddish
+                | Self::Yoruba
                 | Self::Bashkir
                 | Self::Chuvash
+                | Self::Sakha
                 | Self::Silesian
         )
     }
@@ -707,10 +713,7 @@ impl Language {
     }
 
     pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|l| *l == self)
-            .unwrap_or(0)
+        Self::ALL.iter().position(|l| *l == self).unwrap_or(0)
     }
 
     /// Parses a language code (e.g. `fr`, `fr-CH`, `pt-BR`, or `pt_BR.UTF-8`)
@@ -798,7 +801,8 @@ fn checks_out(entry: &Entry, bytes: &[u8]) -> bool {
 }
 
 fn pack_path(root: &Path, language: Language) -> std::path::PathBuf {
-    root.join(LANG_DIR).join(format!("{}.json", language.code()))
+    root.join(LANG_DIR)
+        .join(format!("{}.json", language.code()))
 }
 
 /// Whether `language` is already verified on disk in `root` (always true for English).
@@ -813,6 +817,30 @@ pub fn is_cached(root: &Path, language: Language) -> bool {
     file.take(entry.size + 1).read_to_end(&mut bytes).is_ok() && checks_out(entry, &bytes)
 }
 
+/// Bitmask (`1u128 << lang.index()`) of languages already verified on disk in `root`, so callers
+/// do not open and hash language tables on every UI frame.
+pub fn cached_mask(root: &Path) -> u128 {
+    let mut mask = 1u128 << Language::English.index();
+    let Ok(entries) = fs::read_dir(root.join(LANG_DIR)) else {
+        return mask;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(code) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let Some(lang) = Language::ALL.into_iter().find(|l| l.code() == code)
+            && is_cached(root, lang)
+        {
+            mask |= 1u128 << lang.index();
+        }
+    }
+    mask
+}
+
 /// Loads `language`'s table from `<root>/launcher-lang/<code>.json` after checking its size and
 /// SHA-256 against the pinned manifest.
 pub fn load_from_disk(root: &Path, language: Language) -> Result<(), String> {
@@ -820,8 +848,7 @@ pub fn load_from_disk(root: &Path, language: Language) -> Result<(), String> {
         return Ok(());
     };
     let path = pack_path(root, language);
-    let file = fs::File::open(&path)
-        .map_err(|e| format!("{}: {e}", language.name()))?;
+    let file = fs::File::open(&path).map_err(|e| format!("{}: {e}", language.name()))?;
     let mut bytes = Vec::new();
     file.take(entry.size + 1)
         .read_to_end(&mut bytes)
@@ -1062,7 +1089,10 @@ mod tests {
     #[test]
     fn language_parsing_and_game_code_mapping() {
         assert_eq!(Language::parse("fr-CH"), Some(Language::French));
-        assert_eq!(Language::parse("pt_BR.UTF-8"), Some(Language::PortugueseBrazil));
+        assert_eq!(
+            Language::parse("pt_BR.UTF-8"),
+            Some(Language::PortugueseBrazil)
+        );
         assert_eq!(Language::parse("pt-PT"), Some(Language::Portuguese));
         assert_eq!(Language::parse("nb-NO"), Some(Language::Norwegian));
         assert_eq!(Language::French.game_code(), Some("fr_fr"));

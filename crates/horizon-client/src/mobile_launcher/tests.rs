@@ -1782,9 +1782,16 @@ fn tabler_outlines_read_as_lines_curves_and_arcs() {
 #[test]
 fn language_picker_lists_all_87_languages_and_falls_back_until_loaded() {
     for lang in Language::ALL {
+        let extra = match lang {
+            Language::Igbo => "ṅ",
+            Language::Yoruba => "ṣṢǹ",
+            Language::Sakha => "ҥҕ",
+            _ => "",
+        };
         assert_eq!(
             lang.bundled_font_supported(),
-            crate::ui_theme::bundled_font_covers(lang.name()),
+            crate::ui_theme::bundled_font_covers(lang.name())
+                && crate::ui_theme::bundled_font_covers(extra),
             "{lang:?} ({})",
             lang.name()
         );
@@ -1819,9 +1826,14 @@ fn language_picker_lists_all_87_languages_and_falls_back_until_loaded() {
     assert!(top_ids.contains(&ButtonId::SelectLanguage(1)));
     assert!(!top_ids.contains(&ButtonId::SelectLanguage(Language::Chinese.index())));
 
-    // Scroll to the bottom of the 87-language list and back up.
+    // Scroll to the bottom of the 87-language list and back up; Down never overshoots `scroll_max`.
     l.scroll(0.0, -10_000.0);
     assert!(shown(&l, size).contains(&ButtonId::SelectLanguage(Language::Venetian.index())));
+    let max_scroll = l.scroll_max.get();
+    click_button(&mut l, size, ButtonId::LanguageScrollDown);
+    assert_eq!(l.language_scroll, max_scroll);
+    click_button(&mut l, size, ButtonId::LanguageScrollUp);
+    assert!(l.language_scroll < max_scroll);
     l.scroll(0.0, 10_000.0);
     assert!(shown(&l, size).contains(&ButtonId::SelectLanguage(0)));
 
@@ -1831,16 +1843,25 @@ fn language_picker_lists_all_87_languages_and_falls_back_until_loaded() {
     assert_eq!(l.backend().language(), Language::French);
     assert_eq!(i18n::tr("Settings"), "Settings");
 
-    // Once verified and loaded, the UI thread switches to French.
+    // Once verified and loaded, the UI thread switches to French and every shell screen fits.
     i18n::load_table_bytes(
         Language::French,
-        br#"{"Settings":"Param\u00e8tres","Home":"Accueil","Play":"Jouer"}"#,
+        br#"{"Settings":"Param\u00e8tres","Home":"Accueil","Play":"Jouer","Language":"Langue","Game log":"Journal du jeu","All":"Tout","Copy":"Copier","Sign out":"Se d\u00e9connecter"}"#,
     )
     .unwrap();
     shown(&l, size);
     assert_eq!(i18n::tr("Settings"), "Paramètres");
     assert_eq!(i18n::tr("Play"), "Jouer");
-    assert_hits_fit_without_overlap(&l, size, "settings-in-french");
+    for (btn, label) in [
+        (ButtonId::OpenSettings, "settings-in-french"),
+        (ButtonId::GoHome, "home-in-french"),
+        (ButtonId::OpenMods, "mods-in-french"),
+        (ButtonId::OpenSkins, "skins-in-french"),
+        (ButtonId::OpenAccountSwitcher, "accounts-in-french"),
+    ] {
+        click_button(&mut l, size, btn);
+        assert_hits_fit_without_overlap(&l, size, label);
+    }
 
     // While a language pack downloads, `moving()` is true; a failed download fits on Settings.
     let downloading = MobileLauncher::new(Box::new(StubBackend {
@@ -1861,4 +1882,5 @@ fn language_picker_lists_all_87_languages_and_falls_back_until_loaded() {
     }));
     click_button(&mut failed, size, ButtonId::OpenSettings);
     assert_hits_fit_without_overlap(&failed, size, "settings-language-failed");
+    i18n::set(Language::English);
 }

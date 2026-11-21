@@ -7,7 +7,7 @@ use super::widgets::{
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{
     Account, Language, LanguageDownload, Setup, SkinUpload,
-    i18n::{self, tr},
+    i18n::{self, tr, trf},
 };
 use crate::ui_theme::{self, Face, color};
 
@@ -43,10 +43,10 @@ impl MobileLauncher {
             .as_ref()
             .map(|pick| (pick.skin.clone(), self.skin_slim))
             .or_else(|| account.as_ref().and_then(|a| self.backend.player_skin(a)));
-        let name = account.as_ref().map_or("Player", account_short);
+        let name = account.as_ref().map_or(tr("Player"), account_short);
         let provider = account
             .as_ref()
-            .map_or("Not signed in", account_provider_tag);
+            .map_or(tr("Not signed in"), account_provider_tag);
         let tx = ix + tile_w + 24.0;
         // Opening Skins turns the figure in to where it rests (0.9 s).
         let (page, _, since) = self.page_motion.get();
@@ -114,10 +114,10 @@ impl MobileLauncher {
                     170.0,
                     btn_h,
                     Tone::Secondary,
-                    "Choose Skin File",
+                    tr("Choose Skin File"),
                 );
                 if self.skin_pick.is_some() {
-                    for (i, (slim, label)) in [(false, "Classic Arms"), (true, "Slim Arms")]
+                    for (i, (slim, label)) in [(false, tr("Classic Arms")), (true, tr("Slim Arms"))]
                         .into_iter()
                         .enumerate()
                     {
@@ -139,7 +139,7 @@ impl MobileLauncher {
                     }
                     by += btn_h + 10.0;
                     if self.skin_uploading {
-                        Some(("Putting it on...".to_owned(), palette::muted()))
+                        Some((tr("Putting it on...").to_owned(), palette::muted()))
                     } else {
                         draw_button(
                             ui,
@@ -150,7 +150,7 @@ impl MobileLauncher {
                             170.0,
                             btn_h,
                             Tone::Primary,
-                            "Use This Skin",
+                            tr("Use This Skin"),
                         );
                         match upload {
                             SkinUpload::Failed(why) => Some((why, col_danger)),
@@ -158,7 +158,7 @@ impl MobileLauncher {
                         }
                     }
                 } else if upload == SkinUpload::Done {
-                    Some(("Skin updated.".to_owned(), col_success))
+                    Some((tr("Skin updated.").to_owned(), col_success))
                 } else {
                     None
                 }
@@ -173,7 +173,7 @@ impl MobileLauncher {
                     210.0,
                     btn_h,
                     Tone::Secondary,
-                    "Change Skin on ely.by",
+                    tr("Change Skin on ely.by"),
                 );
                 None
             }
@@ -249,7 +249,7 @@ impl MobileLauncher {
                 96.0,
                 hdr_h,
                 Tone::Secondary,
-                "Back",
+                tr("Back"),
             );
             if let Some(p) = ui.paint() {
                 p.text_line(
@@ -289,7 +289,7 @@ impl MobileLauncher {
                     inner_x,
                     cy,
                     palette::text(),
-                    tr(text),
+                    text,
                 );
             }
         };
@@ -309,12 +309,7 @@ impl MobileLauncher {
                        items: &[(ButtonId, &str)]| {
             let mut bx = inner_x + inner_w;
             for &(id, label) in items.iter().rev() {
-                let shown = if id == ButtonId::ToggleLanguagePicker {
-                    label
-                } else {
-                    tr(label)
-                };
-                let bw = (ui.ro().measure(Face::Medium, ui_size, shown) + 32.0).max(84.0);
+                let bw = (ui.ro().measure(Face::Medium, ui_size, label) + 32.0).max(84.0);
                 bx -= bw;
                 draw_button(
                     ui,
@@ -386,15 +381,17 @@ impl MobileLauncher {
                     chosen,
                 );
                 for (i, label) in labels.into_iter().enumerate() {
-                    let label = tr(label);
                     let ink = if (i == 1) == right {
                         palette::text()
                     } else {
                         palette::muted()
                     };
-                    let tw = p.measure(Face::Medium, ui_size, label);
+                    let room = (half - 10.0).max(16.0);
+                    let font_size = p.fit(Face::Medium, ui_size, label, room);
+                    let fit = truncate_to_fit(p, Face::Medium, font_size, label, room);
+                    let tw = p.measure(Face::Medium, font_size, &fit);
                     let lx = col_x + i as f32 * half + ((half - tw) * 0.5).round();
-                    p.text_line(Face::Medium, ui_size, ctl_h, lx, by, ink, label);
+                    p.text_line(Face::Medium, font_size, ctl_h, lx, by, ink, &fit);
                 }
             }
             let x = col_x + if right { 0.0 } else { half };
@@ -407,7 +404,7 @@ impl MobileLauncher {
             });
         };
         if !typing_args && let Some(cy) = rows.next(row_h + lang_err_h, row_h + lang_err_h) {
-            name(ui, cy, row_h + lang_err_h, "Language");
+            name(ui, cy, row_h + lang_err_h, tr("Language"));
             let chosen = self.backend.language();
             let label = match &lang_status {
                 LanguageDownload::Downloading(lang) => format!("{}...", lang.name()),
@@ -437,27 +434,34 @@ impl MobileLauncher {
             }
         }
         if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
-            name(ui, cy, row_h, "Launcher Font");
+            name(ui, cy, row_h, tr("Launcher Font"));
             let pixel = ui_theme::pixel_font();
             switch(
                 ui,
                 hits,
                 cy,
                 ButtonId::ToggleLauncherFont,
-                ["Modern", "Pixel"],
+                [tr("Modern"), tr("Pixel")],
                 pixel,
             );
         }
         // Moving pages, pop-ups and lists (`motion.rs`); off, everything changes at once.
         if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
-            name(ui, cy, row_h, "Animations");
+            name(ui, cy, row_h, tr("Animations"));
             let off = !self.motion.on.get();
-            switch(ui, hits, cy, ButtonId::ToggleAnimations, ["On", "Off"], off);
+            switch(
+                ui,
+                hits,
+                cy,
+                ButtonId::ToggleAnimations,
+                [tr("On"), tr("Off")],
+                off,
+            );
         }
 
         // The game's arguments: words, "quoted words" as one; why they were refused, under them.
         if !onboarding && let Some(cy) = rows.next(row_h + error_h, row_h + error_h) {
-            name(ui, cy, row_h + error_h, "Game Arguments");
+            name(ui, cy, row_h + error_h, tr("Game Arguments"));
             let saved = self.backend.game_args();
             let text = if self.game_args_focused {
                 self.game_args_draft.as_str()
@@ -472,7 +476,7 @@ impl MobileLauncher {
                 ctl_y(cy),
                 col_w,
                 ctl_h,
-                if text.is_empty() { "None" } else { "" },
+                if text.is_empty() { tr("None") } else { "" },
                 text,
                 false,
                 self.game_args_focused,
@@ -498,15 +502,15 @@ impl MobileLauncher {
         // What only installing uses, offered once the game is installed and the cache measured;
         // after freeing, what happened.
         if free_shown && let Some(cy) = rows.next(row_h, row_h) {
-            name(ui, cy, row_h, "Free Up Space");
+            name(ui, cy, row_h, tr("Free Up Space"));
             match (&self.freed, offer) {
                 (Some(Err(err)), _) => value(ui, cy, err, col_danger),
                 (_, Some(bytes)) => {
-                    let label = format!("Free {}", format_size(bytes));
+                    let label = trf("Free {size}", &[("size", &format_size(bytes))]);
                     buttons(ui, hits, cy, &[(ButtonId::FreeSpace, label.as_str())]);
                 }
                 (Some(Ok(bytes)), None) => {
-                    let text = format!("Freed {}", format_size(*bytes));
+                    let text = trf("Freed {size}", &[("size", &format_size(*bytes))]);
                     value(ui, cy, &text, col_success);
                 }
                 (None, None) => {}
@@ -515,7 +519,7 @@ impl MobileLauncher {
 
         if full {
             if let Some(cy) = rows.next(row_h, row_h) {
-                name(ui, cy, row_h, "Version");
+                name(ui, cy, row_h, tr("Version"));
                 let version = concat!(
                     "Meridian ",
                     env!("CARGO_PKG_VERSION"),
@@ -524,20 +528,22 @@ impl MobileLauncher {
                 value(ui, cy, version, palette::body());
             }
             if let Some(cy) = rows.next(row_h, row_h) {
-                name(ui, cy, row_h, "Open Source");
+                name(ui, cy, row_h, tr("Open Source"));
                 let links = [
-                    (ButtonId::OpenSourceCode, "Source Code"),
-                    (ButtonId::OpenLicenses, "Licenses"),
+                    (ButtonId::OpenSourceCode, tr("Source Code")),
+                    (ButtonId::OpenLicenses, tr("Licenses")),
                 ];
                 buttons(ui, hits, cy, &links);
             }
             if let Some(cy) = rows.next(row_h, row_h) {
-                name(ui, cy, row_h, "Quit Launcher");
-                buttons(ui, hits, cy, &[(ButtonId::Quit, "Quit")]);
+                name(ui, cy, row_h, tr("Quit Launcher"));
+                buttons(ui, hits, cy, &[(ButtonId::Quit, tr("Quit"))]);
             }
             if let (Some(cy), Some(p)) = (rows.next(22.0, 20.0), ui.paint()) {
-                let note = "Not an official Minecraft product. Not approved by or associated \
-                            with Mojang or Microsoft.";
+                let note = tr(
+                    "Not an official Minecraft product. Not approved by or associated \
+                            with Mojang or Microsoft.",
+                );
                 let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), note, inner_w);
                 p.text_line(
                     Face::Regular,
@@ -580,13 +586,14 @@ impl MobileLauncher {
                 inner_x,
                 cy,
                 palette::text(),
-                &format!("Free up {size}?"),
+                &trf("Free up {size}?", &[("size", &size)]),
             );
             cy += if compact_v { 30.0 } else { 40.0 };
-            let body = "Deletes the download cache and Java, which only installing uses. Your worlds and profiles stay. An update downloads them again."
-                .to_owned();
+            let body = tr(
+                "Deletes the download cache and Java, which only installing uses. Your worlds and profiles stay. An update downloads them again.",
+            );
             let lines = ((btn_y - 8.0 - cy) / 20.0).floor().max(0.0) as usize;
-            for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, &body, inner_w)
+            for (i, line) in wrap_lines(p, Face::Regular, ui_theme::sizes().ui, body, inner_w)
                 .into_iter()
                 .take(lines)
                 .enumerate()
@@ -612,7 +619,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Secondary,
-            "Keep Files",
+            tr("Keep Files"),
         );
         draw_button(
             ui,
@@ -623,7 +630,7 @@ impl MobileLauncher {
             half_w,
             btn_h,
             Tone::Primary,
-            &format!("Free Up {size}"),
+            &trf("Free Up {size}", &[("size", &size)]),
         );
     }
 
@@ -650,8 +657,7 @@ impl MobileLauncher {
         let list_avail = (max_card_h - pad * 2.0 - hdr_h - 10.0).max(row_h);
         let max_rows = ((list_avail + row_gap) / step).floor().max(1.0) as usize;
         let shown_rows = max_rows.min(Language::ALL.len());
-        let card_h =
-            (pad * 2.0 + hdr_h + 10.0 + shown_rows as f32 * step - row_gap).min(avail_h);
+        let card_h = (pad * 2.0 + hdr_h + 10.0 + shown_rows as f32 * step - row_gap).min(avail_h);
         let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
         draw_plate(ui, x, cy_top, w, card_h, palette::border());
 
@@ -681,7 +687,7 @@ impl MobileLauncher {
             done_w,
             hdr_h,
             Tone::Secondary,
-            "Done",
+            tr("Done"),
         );
         if Language::ALL.len() > shown_rows {
             let nav_w = 60.0;
@@ -696,7 +702,7 @@ impl MobileLauncher {
                 nav_w,
                 hdr_h,
                 Tone::Ghost,
-                "Up",
+                tr("Up"),
             );
             draw_button(
                 ui,
@@ -707,7 +713,7 @@ impl MobileLauncher {
                 nav_w,
                 hdr_h,
                 Tone::Ghost,
-                "Down",
+                tr("Down"),
             );
         }
 

@@ -3,6 +3,7 @@
 use super::ButtonId;
 use crate::launcher_backend::{
     Account, Head, Profile, ProfileState, Progress, Setup, Stage, VANILLA,
+    i18n::{tr, trf},
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -705,7 +706,6 @@ pub(super) fn draw_input_box(
         p.border(x, y, w, h, 9.0, bdr);
         let mut tx = x + 12.0;
         if !label.is_empty() {
-            let label = crate::launcher_backend::i18n::tr(label);
             p.text_line(
                 Face::Medium,
                 ui_theme::small(),
@@ -1071,14 +1071,6 @@ pub(super) fn draw_button(
         if let Some(b) = border {
             p.border(x, y, w, h, radius, b);
         }
-        let label = if matches!(
-            id,
-            ButtonId::ToggleLanguagePicker | ButtonId::ModManagerPickProfile(_)
-        ) {
-            label
-        } else {
-            crate::launcher_backend::i18n::tr(label)
-        };
         let room = (w - 16.0).max(16.0);
         let font_size = p.fit(Face::Medium, ui_theme::sizes().ui, label, room);
         let label = truncate_to_fit(p, Face::Medium, font_size, label, room);
@@ -1103,7 +1095,6 @@ pub(super) fn draw_play_button(
 ) {
     let hit = HitRect { id, x, y, w, h };
     if let Some(p) = ui.paint() {
-        let label = crate::launcher_backend::i18n::tr(label);
         let hovered = hit.contains(p.cursor);
         let fill = if hovered {
             palette::accent_fill_hover()
@@ -1122,7 +1113,8 @@ pub(super) fn draw_play_button(
         let icon_span = if with_play_icon { 18.0 } else { 0.0 };
         let room = (w - 22.0 - icon_span).max(24.0);
         let font_size = p.fit(Face::SemiBold, 15.0, label, room);
-        let tw = p.measure(Face::SemiBold, font_size, label);
+        let label = truncate_to_fit(p, Face::SemiBold, font_size, label, room);
+        let tw = p.measure(Face::SemiBold, font_size, &label);
         let total_w = tw + icon_span;
         let start_x = x + ((w - total_w) * 0.5).round();
         if with_play_icon {
@@ -1135,7 +1127,7 @@ pub(super) fn draw_play_button(
             start_x + icon_span,
             y,
             palette::text(),
-            label,
+            &label,
         );
     }
     hits.push(hit);
@@ -1222,9 +1214,10 @@ pub(super) fn draw_rail_item(
             RailIcon::Settings => draw_icon_settings(p, icon_cx, icon_cy, icon_sz, icon_col),
         }
         if !icon_only {
-            let label = crate::launcher_backend::i18n::tr(label);
-            let lbl_sz = if compact { 9.0 } else { 9.5 };
-            let lw = p.measure(Face::Medium, lbl_sz, label);
+            let room = (w - 4.0).max(16.0);
+            let lbl_sz = p.fit(Face::Medium, if compact { 9.0 } else { 9.5 }, label, room);
+            let label = truncate_to_fit(p, Face::Medium, lbl_sz, label, room);
+            let lw = p.measure(Face::Medium, lbl_sz, &label);
             let ly = y + h - if compact { 14.0 } else { 16.0 };
             p.text_line(
                 Face::Medium,
@@ -1233,7 +1226,7 @@ pub(super) fn draw_rail_item(
                 x + ((w - lw) * 0.5).round(),
                 ly,
                 ink,
-                label,
+                &label,
             );
         }
     }
@@ -1252,8 +1245,8 @@ pub(super) fn count_label(n: usize, singular: &str, plural: &str) -> String {
 pub(super) fn profile_stats_line(profile: &Profile) -> String {
     let counts = format!(
         "{}, {}",
-        count_label(profile.mods, "mod", "mods"),
-        count_label(profile.worlds, "world", "worlds")
+        count_label(profile.mods, tr("mod"), tr("mods")),
+        count_label(profile.worlds, tr("world"), tr("worlds"))
     );
     match profile.size {
         0 => counts,
@@ -1300,12 +1293,14 @@ pub(super) fn profile_badge_parts(
     col_success: u32,
     col_danger: u32,
 ) -> (String, u32) {
-    use crate::launcher_backend::i18n::tr;
     match state {
         ProfileState::Available => (tr("Needs install").to_owned(), palette::accent_star()),
         ProfileState::Installing(p) => {
             let pct = (stage_fraction(p) * 100.0).round() as u32;
-            (format!("{} {pct}%", tr("Installing")), palette::accent())
+            (
+                trf("Installing {pct}%", &[("pct", &pct.to_string())]),
+                palette::accent(),
+            )
         }
         ProfileState::Installed if selected => (tr("Ready").to_owned(), col_success),
         ProfileState::Installed => (tr("Installed").to_owned(), palette::muted()),
@@ -1322,7 +1317,6 @@ pub(super) fn account_short(account: &Account) -> &str {
 }
 
 pub(super) fn account_provider_tag(account: &Account) -> &'static str {
-    use crate::launcher_backend::i18n::tr;
     match account {
         Account::Microsoft { .. } => "Microsoft",
         Account::Ely { .. } => "Ely.by",
@@ -1332,7 +1326,7 @@ pub(super) fn account_provider_tag(account: &Account) -> &'static str {
 
 pub(super) fn format_size(bytes: u64) -> String {
     if bytes == 0 {
-        crate::launcher_backend::i18n::tr("Base game").to_owned()
+        tr("Base game").to_owned()
     } else if bytes >= 1_000_000 {
         format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else {
@@ -1350,7 +1344,6 @@ pub(super) fn stage_index(stage: Stage) -> usize {
 }
 
 pub(super) fn stage_name(stage: Stage) -> &'static str {
-    use crate::launcher_backend::i18n::tr;
     match stage {
         Stage::Check => tr("Check"),
         Stage::Download => tr("Download"),
@@ -1360,7 +1353,6 @@ pub(super) fn stage_name(stage: Stage) -> &'static str {
 }
 
 pub(super) fn stage_heading(stage: Stage) -> &'static str {
-    use crate::launcher_backend::i18n::tr;
     match stage {
         Stage::Check => tr("Checking installed game files"),
         Stage::Download => tr("Downloading Minecraft 26.3 resources"),
@@ -1390,7 +1382,14 @@ pub(super) fn format_progress_stats(progress: &Progress, frac: f32) -> (String, 
             let right = if progress.bytes_per_second > 0 && progress.total > progress.done {
                 let speed = progress.bytes_per_second as f64 / 1_000_000.0;
                 let eta = (progress.total - progress.done) / progress.bytes_per_second.max(1);
-                format!("{pct}%  ·  {speed:.1} MB/s  ·  {eta} s left")
+                trf(
+                    "{pct}%  ·  {speed} MB/s  ·  {eta} s left",
+                    &[
+                        ("pct", &pct.to_string()),
+                        ("speed", &format!("{speed:.1}")),
+                        ("eta", &eta.to_string()),
+                    ],
+                )
             } else {
                 format!("{pct}%")
             };
@@ -1398,17 +1397,29 @@ pub(super) fn format_progress_stats(progress: &Progress, frac: f32) -> (String, 
         }
         Stage::Prepare => {
             let left = if progress.total > 0 {
-                format!("Step {} of {}", progress.done, progress.total)
+                trf(
+                    "Step {done} of {total}",
+                    &[
+                        ("done", &progress.done.to_string()),
+                        ("total", &progress.total.to_string()),
+                    ],
+                )
             } else {
-                "Running preparer...".to_owned()
+                tr("Running preparer...").to_owned()
             };
             (left, format!("{pct}%"))
         }
         Stage::Check | Stage::Verify => {
             let left = if progress.total > 0 {
-                format!("{} / {} files", progress.done, progress.total)
+                trf(
+                    "{done} / {total} files",
+                    &[
+                        ("done", &progress.done.to_string()),
+                        ("total", &progress.total.to_string()),
+                    ],
+                )
             } else {
-                "Scanning files...".to_owned()
+                tr("Scanning files...").to_owned()
             };
             (left, format!("{pct}%"))
         }

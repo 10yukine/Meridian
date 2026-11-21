@@ -246,7 +246,7 @@ pub fn bundled_font_covers(text: &str) -> bool {
     };
     text.chars().all(|ch| {
         ch.is_whitespace()
-            || [Face::Regular, Face::Medium, Face::SemiBold]
+            || [Face::Regular, Face::Medium, Face::SemiBold, Face::Mono]
                 .into_iter()
                 .all(|face| fonts.face(face).glyph_id(ch).0 != 0)
     })

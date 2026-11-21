@@ -116,6 +116,7 @@ pub struct Real {
     skin_upload: Arc<Mutex<SkinUpload>>,
     language: Arc<Mutex<Language>>,
     language_download: Arc<Mutex<LanguageDownload>>,
+    language_cached: Arc<Mutex<u128>>,
     log_tail: Mutex<Option<LogTail>>,
     heads: heads::Cache,
     profiles: profiles::Store,
@@ -141,6 +142,7 @@ impl Real {
         let saved_lang = i18n::saved_language(&root);
         let lang_ready =
             saved_lang == Language::English || i18n::load_from_disk(&root, saved_lang).is_ok();
+        let lang_cached = i18n::cached_mask(&root);
         i18n::set(if lang_ready {
             saved_lang
         } else {
@@ -159,12 +161,13 @@ impl Real {
             skin_upload: Arc::default(),
             language: Arc::new(Mutex::new(saved_lang)),
             language_download: Arc::default(),
+            language_cached: Arc::new(Mutex::new(lang_cached)),
             log_tail: Mutex::default(),
             heads: heads::Cache::default(),
             profiles,
             release: crate::RELEASE,
         };
-        if !lang_ready && backend.account_file.is_some() {
+        if !lang_ready {
             backend.fetch_language(saved_lang);
         }
         if ready {
@@ -256,10 +259,14 @@ impl Real {
         let root = self.root.clone();
         let chosen = self.language.clone();
         let status = self.language_download.clone();
+        let cached = self.language_cached.clone();
         let spawned = std::thread::Builder::new()
             .name("launcher-language".into())
             .spawn(move || {
                 let result = i18n::fetch(&root, language);
+                if result.is_ok() {
+                    *cached.lock().unwrap() |= 1u128 << language.index();
+                }
                 if *chosen.lock().unwrap() != language {
                     return;
                 }
@@ -767,9 +774,11 @@ impl Backend for Real {
         let _ = i18n::save_language(&self.root, language);
         *self.language.lock().unwrap() = language;
         if language == Language::English || i18n::load_from_disk(&self.root, language).is_ok() {
+            *self.language_cached.lock().unwrap() |= 1u128 << language.index();
             *self.language_download.lock().unwrap() = LanguageDownload::Idle;
             i18n::set(language);
         } else {
+            *self.language_cached.lock().unwrap() &= !(1u128 << language.index());
             i18n::set(Language::English);
             self.fetch_language(language);
         }
@@ -780,7 +789,9 @@ impl Backend for Real {
     }
 
     fn language_cached(&self, language: Language) -> bool {
-        i18n::is_cached(&self.root, language)
+        language == Language::English
+            || i18n::is_loaded(language)
+            || (*self.language_cached.lock().unwrap() & (1u128 << language.index())) != 0
     }
 }
 
