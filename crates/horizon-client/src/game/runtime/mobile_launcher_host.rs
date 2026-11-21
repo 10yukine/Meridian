@@ -626,6 +626,11 @@ impl ApplicationHandler for Host {
         } else {
             1000
         };
+        // A motion starts while a frame draws, after that frame's wait was set: its next frame is
+        // due in 16 ms, not after the idle second.
+        if next == 16 {
+            self.next_frame = self.next_frame.min(now + Duration::from_millis(16));
+        }
         if self.dirty || now >= self.next_frame {
             if let Some(window) = &self.window {
                 window.request_redraw();
