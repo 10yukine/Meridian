@@ -37,6 +37,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Serves a diagnostic ZIP to the app the player shares it with (java/,
+             DiagnosticsProvider); the authority is the package's, rewritten for release. -->
+        <provider
+            android:name="io.github.u10yukine.meridian.DiagnosticsProvider"
+            android:authorities="io.github.u10yukine.meridian.dev.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true" />
         <!-- Between the launcher's process and the game's: waits for one to end, starts the
              other (java/, RestartActivity). -->
         <activity

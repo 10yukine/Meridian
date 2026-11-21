@@ -683,6 +683,17 @@ impl Backend for Real {
         launch::save_game_args(&self.root, text)
     }
 
+    fn export_diagnostics(&mut self, extras: &[(&str, String)]) -> Result<PathBuf, String> {
+        let players: Vec<String> = self.accounts().into_iter().map(|a| match a {
+            Account::Microsoft { name } | Account::Ely { name } | Account::Offline { name } => name,
+        })
+            .collect();
+        let profiles: Vec<String> =
+            self.profiles().into_iter().filter(|p| p.id != VANILLA).map(|p| p.name).collect();
+        let hide = diagnostics::Hide { players: &players, profiles: &profiles };
+        diagnostics::export(&self.root, extras, &hide)
+    }
+
     fn game_log(&self, profile: &str) -> Vec<String> {
         // Every profile's game logs into the shared home: the log there is the last played
         // one's (Vanilla's, from before the launcher kept which that was).

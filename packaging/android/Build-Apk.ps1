@@ -159,8 +159,11 @@ try {
         $null = $xml.manifest.SetAttribute('versionName', $android, $VersionName)
         $null = $xml.manifest.application.SetAttribute('label', $android, 'Meridian')
         $null = $xml.manifest.application.SetAttribute('debuggable', $android, 'false')
+        # The diagnostics provider's authority is the package's own (DiagnosticsProvider.java).
+        $null = $xml.manifest.application.provider.SetAttribute('authorities', $android, 'io.github.u10yukine.meridian.diagnostics')
         $manifest = Join-Path $work 'AndroidManifest.xml'
         $xml.Save($manifest)
+        if ((Get-Content -LiteralPath $manifest -Raw) -match '\.dev\b') { throw 'The release manifest still names the .dev package.' }
     }
     $resources = Join-Path $work 'res.zip'
     & $aapt2 compile --dir (Join-Path $PSScriptRoot 'res') -o $resources

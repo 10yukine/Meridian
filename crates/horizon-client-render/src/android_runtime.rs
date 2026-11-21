@@ -271,5 +271,32 @@ pub fn ime_height() -> u32 {
     IME_HEIGHT.get().map_or(0, |platform| platform())
 }
 
+/// Meridian: how the platform shares a file (`MeridianActivity.shareFile`).
+static SHARE_FILE: OnceLock<fn(&str) -> bool> = OnceLock::new();
+
+/// Sets the platform's share sheet; the first one set stays.
+pub fn set_share_file(share: fn(&str) -> bool) {
+    let _ = SHARE_FILE.set(share);
+}
+
+/// Offers the file at `path` (a diagnostic ZIP) to the platform's share sheet; false where none can.
+pub fn share_file(path: &str) -> bool {
+    SHARE_FILE.get().is_some_and(|platform| platform(path))
+}
+
+/// Meridian: how the platform reports why the app's earlier processes ended
+/// (`MeridianActivity.exitReasons`).
+static EXIT_REASONS: OnceLock<fn() -> String> = OnceLock::new();
+
+/// Sets the platform's exit history; the first one set stays.
+pub fn set_exit_reasons(reasons: fn() -> String) {
+    let _ = EXIT_REASONS.set(reasons);
+}
+
+/// Why the app's earlier processes ended, one per line; empty where the platform keeps no record.
+pub fn exit_reasons() -> String {
+    EXIT_REASONS.get().map_or_else(String::new, |platform| platform())
+}
+
 #[cfg(test)]
 mod tests;

@@ -289,6 +289,11 @@ pub trait Backend: Send {
     fn game_log(&self, _profile: &str) -> Vec<String> {
         Vec::new()
     }
+    /// Writes the diagnostic ZIP (the game's log tail, its crash reports and the platform's
+    /// `extras`) and returns its path, for the player to share.
+    fn export_diagnostics(&mut self, _extras: &[(&str, String)]) -> Result<std::path::PathBuf, String> {
+        Err("Diagnostics are unavailable in this launcher.".into())
+    }
     /// Every profile, installed or offered: [`VANILLA`] first, then the modpacks.
     fn profiles(&self) -> Vec<Profile> {
         vec![Profile {
@@ -426,6 +431,7 @@ mod tests {
 }
 mod account;
 pub mod controls_art;
+pub mod diagnostics;
 mod ely;
 pub mod launch;
 mod mojang;

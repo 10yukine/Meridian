@@ -85,6 +85,8 @@ fn android_main(app: AndroidApp) {
     horizon_client_render::android_runtime::set_pick_file(activity::pick_skin);
     horizon_client_render::android_runtime::set_copy_text(activity::copy_text);
     horizon_client_render::android_runtime::set_ime_height(activity::ime_height);
+    horizon_client_render::android_runtime::set_share_file(activity::share_file);
+    horizon_client_render::android_runtime::set_exit_reasons(activity::exit_reasons);
     // The launcher and the game each run in a process of their own (winit makes one event loop
     // per process); `launch.json` says which this one is (docs/launcher-spec.md, "Hand-off").
     let launch = launch::take(&home);

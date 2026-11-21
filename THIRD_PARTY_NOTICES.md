@@ -461,6 +461,11 @@ Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
 `crates/horizon-client-render/src/android_runtime.rs` and `android_runtime/tests/` are adapted from the
 input part of Starling's `crates/horizon-client-render/src/android_runtime.rs` at the same commit.
 
+`crates/meridian-launcher/src/diagnostics.rs` is adapted from the diagnostic export and redaction of
+Starling's `crates/horizon-client/src/diagnostics.rs` at v0.9.0 (MIT, Copyright (c) 2026 Ludovic Marie
+and the Horizon contributors), and `packaging/android/java/.../MeridianActivity.java`'s `exitReasons`
+from its Android exit-history report (`diagnostics/exit_reports.rs`).
+
 `packaging/android/java/io/github/u10yukine/meridian/MeridianActivity.java` and
 `crates/meridian-android/src/activity.rs` adapt the pointer capture, link opening and restart of
 Starling's `packaging/android/java/io/github/juanluci/starling/StarlingActivity.java` and its

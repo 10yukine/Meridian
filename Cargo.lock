@@ -3542,6 +3542,7 @@ dependencies = [
  "tar",
  "ureq",
  "xz4rust",
+ "zip",
 ]
 
 [[package]]

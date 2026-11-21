@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 package io.github.u10yukine.meridian;
 
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
 import android.app.NativeActivity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -135,6 +137,58 @@ public class MeridianActivity extends NativeActivity {
                 clipboard.setPrimaryClip(ClipData.newPlainText("Meridian game log", text));
             }
         });
+    }
+
+    /**
+     * Why this app's earlier processes ended (Android 11 and newer; empty before), one per line:
+     * the OS's own record, for a diagnostic report. Reason, status, importance, time and the
+     * system's description only: no traces.
+     */
+    public String exitReasons() {
+        if (Build.VERSION.SDK_INT < 30) {
+            return "";
+        }
+        ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        if (manager == null) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        for (ApplicationExitInfo info : manager.getHistoricalProcessExitReasons(getPackageName(), 0, 10)) {
+            text.append("time=").append(info.getTimestamp())
+                    .append(" reason=").append(info.getReason())
+                    .append(" status=").append(info.getStatus())
+                    .append(" importance=").append(info.getImportance())
+                    .append(" description=").append(info.getDescription())
+                    .append('\n');
+        }
+        return text.toString();
+    }
+
+    /**
+     * Offers the diagnostic ZIP at {@code path} to the system's share sheet, through
+     * {@link DiagnosticsProvider}. False where the file isn't one it serves.
+     */
+    public boolean shareFile(final String path) {
+        File file = new File(path);
+        Uri uri = DiagnosticsProvider.uriFor(this, file);
+        if (uri == null) {
+            return false;
+        }
+        Intent send = new Intent(Intent.ACTION_SEND)
+                .setType("application/zip")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .setClipData(ClipData.newRawUri(file.getName(), uri))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        final Intent chooser = Intent.createChooser(send, "Share diagnostics")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        runOnUiThread(() -> {
+            try {
+                startActivity(chooser);
+            } catch (ActivityNotFoundException | SecurityException e) {
+                Log.w("Meridian", "No share target opened", e);
+            }
+        });
+        return true;
     }
 
     /** The system's file picker for a PNG skin; the chosen file lands in files/picked-skin.png,

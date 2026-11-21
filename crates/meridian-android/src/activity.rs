@@ -3,7 +3,7 @@
 //! Calls into `MeridianActivity` (`packaging/android/java`), for what the NDK can't do. Adapted
 //! from Starling's `with_activity` and `capture_pointer` (`crates/horizon-client/src/android.rs`)
 //! at 5432370d5736.
-use jni::objects::{JObject, JValue};
+use jni::objects::{JObject, JString, JValue};
 
 /// Runs `f` with the activity on the calling thread, which stays attached to the VM. None before
 /// the game starts, or when the call threw (the exception is logged and cleared).
@@ -67,6 +67,29 @@ pub(crate) fn copy_text(text: &str) {
 pub(crate) fn ime_height() -> u32 {
     with_activity(|env, activity| env.call_method(activity, "imeHeight", "()I", &[])?.i())
         .map_or(0, |pixels| pixels.max(0) as u32)
+}
+
+/// `MeridianActivity.exitReasons`: why the app's earlier processes ended, for a diagnostic report.
+pub(crate) fn exit_reasons() -> String {
+    with_activity(|env, activity| {
+        let text = env.call_method(activity, "exitReasons", "()Ljava/lang/String;", &[])?.l()?;
+        if text.is_null() {
+            return Ok(String::new());
+        }
+        Ok(env.get_string(&JString::from(text))?.into())
+    })
+    .unwrap_or_default()
+}
+
+/// `MeridianActivity.shareFile`: the share sheet for the diagnostic ZIP at `path`; false where the
+/// activity won't serve it.
+pub(crate) fn share_file(path: &str) -> bool {
+    with_activity(|env, activity| {
+        let path = env.new_string(path)?;
+        env.call_method(activity, "shareFile", "(Ljava/lang/String;)Z", &[JValue::Object(&path)])?
+            .z()
+    })
+    .unwrap_or(false)
 }
 
 /// `MeridianActivity.restart`: the app starts again in a fresh process once this one ends.
