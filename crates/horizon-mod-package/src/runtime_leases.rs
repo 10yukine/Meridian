@@ -421,7 +421,9 @@ pub fn write_completion(directory: &Path) -> io::Result<()> {
 
 /// Registers and holds the units a game started from `executable` leases by itself: what the
 /// launcher's launch and the dedicated server's supervisor both need where the game takes no
-/// holder. The claims must live as long as the game.
+/// holder. The claims must live as long as the game. Where `holder` is: not on Android (Meridian),
+/// which builds `runtime-process` without it.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub fn lease_units(
     executable: &Path,
     selection: &crate::selection::LaunchArguments,
