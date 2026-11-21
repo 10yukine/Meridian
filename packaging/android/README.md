@@ -29,6 +29,8 @@ pwsh -File packaging/android/Build-Apk.ps1 -Release -VersionCode 1 -VersionName 
 
 `-Release` builds the non-debuggable `io.github.u10yukine.meridian` package using the Rust `release` profile by default and writes `target/android/meridian-release-arm64-v8a.apk`. The build reads the passwords from the environment and verifies the APK signature and 16 KB alignment. Keep the release keystore and passwords outside the repository. Use the same signing key and increase the version code for app updates.
 
+Release builds follow Minecraft's EULA: they download the game, and make offline and Ely.by accounts, only after a Microsoft account that owns Minecraft: Java Edition has signed in on the phone. Development builds (`-Profile fast` without `-Release`) skip this check so the app can be tested before Microsoft approves sign-in.
+
 When `CARGO_TARGET_DIR` is set, both builds use that target directory for native builds and default APK output.
 
 ## Prepare game files on the PC

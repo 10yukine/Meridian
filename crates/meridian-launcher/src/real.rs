@@ -117,6 +117,8 @@ pub struct Real {
     log_tail: Mutex<Option<LogTail>>,
     heads: heads::Cache,
     profiles: profiles::Store,
+    /// [`crate::RELEASE`], kept here so tests can be a release build.
+    release: bool,
 }
 
 impl Real {
@@ -148,6 +150,7 @@ impl Real {
             log_tail: Mutex::default(),
             heads: heads::Cache::default(),
             profiles,
+            release: crate::RELEASE,
         };
         if ready {
             measure_install_cache(&backend.root, &backend.reclaimable);
@@ -271,6 +274,9 @@ impl Backend for Real {
     }
 
     fn sign_in_ely(&mut self, username: &str, password: &str, otp: &str) -> Result<(), String> {
+        if !self.game_allowed() {
+            return Err(crate::NEEDS_OWNER.into());
+        }
         let username = username.to_owned();
         let password = password.to_owned();
         let otp = otp.to_owned();
@@ -284,6 +290,9 @@ impl Backend for Real {
     }
 
     fn sign_in_offline(&mut self, name: &str) -> Result<Account, String> {
+        if !self.game_allowed() {
+            return Err(crate::NEEDS_OWNER.into());
+        }
         if !valid_offline_name(name) {
             return Err("Use 1 to 16 letters, digits or underscores.".into());
         }
@@ -296,6 +305,10 @@ impl Backend for Real {
         )?;
         state.session = None;
         Ok(account)
+    }
+
+    fn game_allowed(&self) -> bool {
+        crate::game_allowed(self.release, &self.accounts())
     }
 
     fn accounts(&self) -> Vec<Account> {
@@ -456,6 +469,14 @@ impl Backend for Real {
         if matches!(self.setup(), Setup::Running(_))
             || (id == VANILLA && self.base_ready.load(Relaxed))
         {
+            return;
+        }
+        // Mojang's files come down only where someone who owns the game signed in.
+        if !self.base_ready.load(Relaxed) && !self.game_allowed() {
+            *self.setup.lock().unwrap() = Setup::Failed {
+                stage: Stage::Check,
+                error: crate::NEEDS_OWNER.into(),
+            };
             return;
         }
         let entry = match self.profiles.begin(id) {
@@ -753,6 +774,54 @@ mod log_tests {
         assert_eq!(backend.game_log("pack"), ["[2] modded run"]);
         assert!(backend.game_log(VANILLA).is_empty());
         drop(backend);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_release_build_needs_a_game_owner_before_offline_play_or_downloads() {
+        let microsoft = Account::Microsoft {
+            name: "Owner".into(),
+        };
+        let offline = Account::Offline {
+            name: "Steve".into(),
+        };
+        assert!(crate::game_allowed(false, &[]));
+        assert!(!crate::game_allowed(true, &[]));
+        assert!(!crate::game_allowed(true, std::slice::from_ref(&offline)));
+        assert!(crate::game_allowed(true, &[offline, microsoft]));
+
+        let root = std::env::temp_dir().join(format!("meridian-owner-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // A release build on a phone nobody who owns the game signed in on: no offline or
+        // Ely.by account, and no download.
+        let mut release = Real::with_store(root.clone(), None);
+        release.release = true;
+        assert!(!release.game_allowed());
+        assert_eq!(
+            release.sign_in_offline("Steve"),
+            Err(crate::NEEDS_OWNER.to_owned())
+        );
+        assert_eq!(
+            release.sign_in_ely("steve", "secret", ""),
+            Err(crate::NEEDS_OWNER.to_owned())
+        );
+        assert!(release.accounts().is_empty());
+        release.install_profile(VANILLA);
+        assert_eq!(
+            release.setup(),
+            Setup::Failed {
+                stage: Stage::Check,
+                error: crate::NEEDS_OWNER.to_owned(),
+            }
+        );
+        drop(release);
+        // A development build stays open.
+        let mut dev = Real::with_store(root.clone(), None);
+        dev.release = false;
+        assert!(dev.game_allowed());
+        assert!(dev.sign_in_offline("Steve").is_ok());
+        drop(dev);
         let _ = fs::remove_dir_all(root);
     }
 }

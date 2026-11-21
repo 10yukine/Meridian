@@ -15,6 +15,27 @@ pub enum Account {
     Offline { name: String },
 }
 
+/// A release build (`Build-Apk.ps1 -Release` sets `MERIDIAN_RELEASE`). Release builds follow
+/// Minecraft's EULA, as Amethyst does: the game downloads, and offline and Ely.by accounts are
+/// made, only on a phone where a Microsoft account that owns Minecraft: Java Edition signed in.
+/// Development builds stay open for testing.
+pub const RELEASE: bool = option_env!("MERIDIAN_RELEASE").is_some();
+
+/// Why a release build won't download the game or make an offline or Ely.by account yet.
+/// One line: it shows where the offline and Ely.by forms show their errors, and on the install.
+pub const NEEDS_OWNER: &str =
+    "First sign in with a Microsoft account that owns Minecraft: Java Edition.";
+
+/// Whether this phone may download the game and make offline or Ely.by accounts: always in a
+/// development build; in a release build once a Microsoft account is on it (signing in with
+/// Microsoft checks the account owns the game).
+pub fn game_allowed(release: bool, accounts: &[Account]) -> bool {
+    !release
+        || accounts
+            .iter()
+            .any(|account| matches!(account, Account::Microsoft { .. }))
+}
+
 /// Microsoft's device-code sign-in, as the screen shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SignIn {
@@ -214,6 +235,10 @@ pub trait Backend: Send {
     fn sign_in(&self) -> SignIn;
     /// Makes `name` the offline account, or says why it can't be (see [`valid_offline_name`]).
     fn sign_in_offline(&mut self, name: &str) -> Result<Account, String>;
+    /// [`game_allowed`] for this build and phone.
+    fn game_allowed(&self) -> bool {
+        true
+    }
     fn sign_out(&mut self);
     /// Stops a sign-in in progress, or forgets one that failed; the accounts stay.
     fn dismiss_sign_in(&mut self);

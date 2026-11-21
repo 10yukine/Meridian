@@ -71,9 +71,12 @@ if (!$LibraryPath) {
     }
     $previousNdk = $env:ANDROID_NDK_HOME
     $previousClientId = $env:HORIZON_MSA_CLIENT_ID
+    $previousRelease = $env:MERIDIAN_RELEASE
     Push-Location -LiteralPath $root
     try {
         $env:ANDROID_NDK_HOME = $ndk
+        # Release builds follow Minecraft's EULA (meridian-launcher RELEASE); dev builds stay open.
+        $env:MERIDIAN_RELEASE = if ($Release) { '1' } else { $null }
         if ($null -eq $previousClientId) {
             $env:HORIZON_MSA_CLIENT_ID = 'a3834636-8758-4bc7-9767-35c8ccc9d45d'
         } elseif ([string]::IsNullOrWhiteSpace($previousClientId)) {
@@ -83,6 +86,7 @@ if (!$LibraryPath) {
     } finally {
         $env:ANDROID_NDK_HOME = $previousNdk
         $env:HORIZON_MSA_CLIENT_ID = $previousClientId
+        $env:MERIDIAN_RELEASE = $previousRelease
         Pop-Location
     }
     $LibraryPath = Join-Path $cargoOutput "aarch64-linux-android/$Profile/libmeridian.so"

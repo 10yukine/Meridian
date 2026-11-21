@@ -34,6 +34,8 @@ struct StubBackend {
     log: Vec<String>,
     /// The game's arguments, as kept.
     args: String,
+    /// [`Backend::game_allowed`]: false is a release build no game owner signed in on.
+    allowed: bool,
 }
 
 impl Default for StubBackend {
@@ -83,6 +85,7 @@ impl Default for StubBackend {
             skins: Arc::default(),
             log: Vec::new(),
             args: String::new(),
+            allowed: true,
         }
     }
 }
@@ -141,6 +144,9 @@ impl Backend for StubBackend {
     }
     fn sign_in(&self) -> SignIn {
         self.sign_in.clone()
+    }
+    fn game_allowed(&self) -> bool {
+        self.allowed
     }
     fn sign_in_offline(&mut self, name: &str) -> Result<Account, String> {
         if !valid_offline_name(name) {
@@ -1553,6 +1559,38 @@ fn mods_lists_turn_pages_by_swipe_and_show_dots_instead_of_buttons() {
     assert_eq!(panning.len(), 6);
     assert!(panning[0].0 == 5 && panning[0].1 < 0.5 && panning[5].0 == 10);
     assert!(panning[2].2 == 0.5 && panning[3].2 == 0.5);
+}
+
+#[test]
+fn a_release_build_without_a_game_owner_says_why_on_the_offline_and_ely_forms() {
+    use crate::launcher_backend::NEEDS_OWNER;
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        allowed: false,
+        ..StubBackend::default()
+    }));
+    // The A14's and the A32's screens: the reason shows whole, without an ellipsis.
+    for size in [[856, 384], [914, 411]] {
+        l.handle_button(ButtonId::OpenOfflineEntry);
+        assert_eq!(l.offline_error.as_deref(), Some(NEEDS_OWNER));
+        assert_hits_fit_without_overlap(&l, size, "offline-needs-owner");
+        let room = with_ui(size, (0.0, 0.0), |ui| {
+            ui.measure(
+                crate::ui_theme::Face::Regular,
+                crate::ui_theme::small(),
+                NEEDS_OWNER,
+            )
+        });
+        assert!(room < size[0] as f32 - 160.0, "{size:?}: {room}");
+        l.handle_button(ButtonId::CancelOffline);
+        l.handle_button(ButtonId::OpenElyEntry);
+        assert_eq!(l.ely_error.as_deref(), Some(NEEDS_OWNER));
+        assert_hits_fit_without_overlap(&l, size, "ely-needs-owner");
+        l.handle_button(ButtonId::CancelEly);
+    }
+    // A development build (or a phone an owner signed in on): the forms open clean.
+    let mut open = MobileLauncher::new(Box::new(StubBackend::default()));
+    open.handle_button(ButtonId::OpenOfflineEntry);
+    assert_eq!(open.offline_error, None);
 }
 
 #[test]

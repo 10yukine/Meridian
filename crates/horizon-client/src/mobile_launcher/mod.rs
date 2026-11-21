@@ -19,8 +19,8 @@ mod tests;
 mod widgets;
 
 use crate::launcher_backend::{
-    Account, Backend, ELY_SKINS, ModSearch, PickedSkin, Profile, ProfileState, Setup, SignIn,
-    SkinUpload, VANILLA,
+    Account, Backend, ELY_SKINS, ModSearch, NEEDS_OWNER, PickedSkin, Profile, ProfileState, Setup,
+    SignIn, SkinUpload, VANILLA,
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -846,7 +846,10 @@ impl MobileLauncher {
                 self.drop_stale_sign_in();
                 self.ely_error = None;
                 self.clear_ely_secrets();
-                self.offline_error = None;
+                // A release build without a game owner on the phone: why, at once (the backend
+                // refuses the account too).
+                self.offline_error =
+                    (!self.backend.game_allowed()).then(|| NEEDS_OWNER.to_owned());
                 self.auth_form = Some(AuthForm::Offline);
                 self.status_note = None;
             }
@@ -856,7 +859,7 @@ impl MobileLauncher {
             ButtonId::OpenElyEntry => {
                 self.drop_stale_sign_in();
                 self.offline_error = None;
-                self.ely_error = None;
+                self.ely_error = (!self.backend.game_allowed()).then(|| NEEDS_OWNER.to_owned());
                 self.ely_field = ElyField::Username;
                 self.clear_ely_secrets();
                 self.auth_form = Some(AuthForm::Ely);
