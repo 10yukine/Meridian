@@ -6,7 +6,7 @@
 //! that process plays.
 use super::*;
 use horizon_client::launcher_backend::{
-    Account, Real, Setup, controls_art,
+    Account, Real, Setup, VANILLA, controls_art, diagnostics,
     launch::{self, Launch},
 };
 use horizon_client::mobile_launcher::{Action, MobileLauncher};
@@ -81,6 +81,8 @@ struct Host {
     /// Play was pressed and the hand-off written.
     play: bool,
     game_files: GameFiles,
+    diagnostics_export:
+        Option<std::thread::JoinHandle<std::result::Result<std::path::PathBuf, String>>>,
     play_requested_at: Option<Instant>,
     started: Instant,
     shown: bool,
@@ -137,6 +139,7 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
         settings,
         play: false,
         game_files: GameFiles::Pending,
+        diagnostics_export: None,
         play_requested_at: None,
         started,
         shown: false,
@@ -263,6 +266,7 @@ impl Host {
                     eprintln!("Meridian: no clipboard to copy the game log to");
                 }
             }
+            Some(Action::ExportDiagnostics) => self.start_diagnostics_export(),
             Some(Action::PickSkin) => {
                 if !android_runtime::pick_file() {
                     self.screen.no_file_picker();
@@ -363,6 +367,87 @@ impl Host {
                 GameFiles::Done
             }
         };
+    }
+
+    /// Writes the redacted diagnostics ZIP off the UI thread so large crash reports don't drop
+    /// frames. JNI calls (`exit_reasons`, `share_file`) stay on this thread so the short-lived
+    /// worker never attaches permanently to the JVM.
+    fn start_diagnostics_export(&mut self) {
+        if self.diagnostics_export.is_some() {
+            return;
+        }
+        let root = self.root.clone();
+        let exits = android_runtime::exit_reasons();
+        let backend = self.screen.backend();
+        let players: Vec<String> = backend
+            .accounts()
+            .into_iter()
+            .map(|a| match a {
+                Account::Microsoft { name } | Account::Ely { name } | Account::Offline { name } => {
+                    name
+                }
+            })
+            .collect();
+        let profiles: Vec<String> = backend
+            .profiles()
+            .into_iter()
+            .filter(|p| p.id != VANILLA)
+            .map(|p| p.name)
+            .collect();
+        // ponytail: mirrors `Real::export_diagnostics` so ZIP I/O runs off the UI thread without
+        // locking `MobileLauncher`'s `Box<dyn Backend>`; unify if `Backend` gains an async export.
+        let job = std::thread::Builder::new()
+            .name("Meridian diagnostics".into())
+            .spawn(move || {
+                let extras = if exits.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![("android-exits.txt", exits)]
+                };
+                let hide = diagnostics::Hide {
+                    players: &players,
+                    profiles: &profiles,
+                };
+                diagnostics::export(&root, &extras, &hide)
+            });
+        match job {
+            Ok(job) => self.diagnostics_export = Some(job),
+            Err(error) => self
+                .screen
+                .diagnostics_saved(Err(format!("Could not start export: {error}"))),
+        }
+    }
+
+    fn poll_diagnostics_export(&mut self) {
+        if !self
+            .diagnostics_export
+            .as_ref()
+            .is_some_and(|job| job.is_finished())
+        {
+            return;
+        }
+        let Some(job) = self.diagnostics_export.take() else {
+            return;
+        };
+        let exported = job
+            .join()
+            .unwrap_or_else(|_| Err("Diagnostics export stopped unexpectedly.".into()));
+        let outcome = match exported {
+            Ok(path) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "diagnostics.zip".into());
+                if path.to_str().is_some_and(android_runtime::share_file) {
+                    Ok(name)
+                } else {
+                    Err("Couldn't open the share sheet".into())
+                }
+            }
+            Err(error) => Err(error),
+        };
+        self.screen.diagnostics_saved(outcome);
+        self.dirty = true;
     }
 
     /// The selected profile with the account's session or offline name, for the next process.
@@ -597,6 +682,7 @@ impl ApplicationHandler for Host {
         self.dirty |= ime != self.ime;
         self.ime = ime;
         self.dirty |= self.screen.poll();
+        self.poll_diagnostics_export();
         self.pad_input(event_loop, seconds);
         self.prepare_game_files();
         if matches!(&self.game_files, GameFiles::Writing(job) if job.is_finished()) {
@@ -618,7 +704,8 @@ impl ApplicationHandler for Host {
             .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
         let working = self.screen.moving()
             || self.play_requested_at.is_some()
-            || matches!(self.game_files, GameFiles::Writing(_));
+            || matches!(self.game_files, GameFiles::Writing(_))
+            || self.diagnostics_export.is_some();
         let next = if pad_moving || self.screen.animating() {
             16
         } else if working {

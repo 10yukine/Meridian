@@ -71,6 +71,9 @@ pub enum Action {
     PickSkin,
     /// Put this on the clipboard (Copy on the game log).
     CopyText(String),
+    /// Export redacted diagnostics (game log, crash reports, platform exits) and open the share
+    /// sheet ([`MobileLauncher::diagnostics_saved`] takes the outcome).
+    ExportDiagnostics,
     /// Close the launcher window.
     Quit,
 }
@@ -184,10 +187,11 @@ enum ButtonId {
     // Home's game log
     LogLevel(u8),
     CopyLog,
-    // Settings: the game's arguments, About's links
+    // Settings: the game's arguments, About's links, diagnostics export
     FocusGameArgs,
     OpenSourceCode,
     OpenLicenses,
+    ExportDiagnostics,
 }
 
 /// Interactive Meridian launcher backed by [`Backend`].
@@ -281,6 +285,10 @@ pub struct MobileLauncher {
     game_args_focused: bool,
     game_args_draft: String,
     game_args_error: Option<String>,
+    /// Settings' Diagnostics export is running on a host worker.
+    diagnostics_exporting: bool,
+    /// What Settings' last Diagnostics export did: the shared ZIP's file name, or why not.
+    diagnostics: Option<Result<String, String>>,
 }
 
 #[cfg(not(test))]
@@ -365,6 +373,8 @@ impl MobileLauncher {
             game_args_focused: false,
             game_args_draft: String::new(),
             game_args_error: None,
+            diagnostics_exporting: false,
+            diagnostics: None,
         }
     }
 
@@ -398,8 +408,8 @@ impl MobileLauncher {
         changed
     }
 
-    /// Whether the screen changes without input: an install, a sign-in or a skin upload under
-    /// way. The host draws ten frames a second then, and one otherwise.
+    /// Whether the screen changes without input: an install, a sign-in, a skin upload or a
+    /// diagnostics export under way. The host draws ten frames a second then, and one otherwise.
     pub fn moving(&self) -> bool {
         matches!(self.backend.setup(), Setup::Running(_))
             || matches!(
@@ -407,11 +417,18 @@ impl MobileLauncher {
                 SignIn::Starting | SignIn::Code { .. }
             )
             || self.skin_uploading
+            || self.diagnostics_exporting
             || self
                 .backend
                 .profiles()
                 .iter()
                 .any(|p| matches!(p.state, ProfileState::Installing(_)))
+    }
+
+    /// Records how the host's diagnostics export ended: the shared ZIP's file name, or why not.
+    pub fn diagnostics_saved(&mut self, result: Result<String, String>) {
+        self.diagnostics_exporting = false;
+        self.diagnostics = Some(result);
     }
 
     /// Play stopped on the game's arguments: Settings shows why, under them.
@@ -560,6 +577,10 @@ impl MobileLauncher {
 
     pub fn backend(&self) -> &dyn Backend {
         &*self.backend
+    }
+
+    pub fn backend_mut(&mut self) -> &mut dyn Backend {
+        &mut *self.backend
     }
 
     fn is_onboarding(&self, accounts: &[Account]) -> bool {
@@ -1217,6 +1238,13 @@ impl MobileLauncher {
             }
             ButtonId::OpenSourceCode => return Some(Action::OpenUrl(SOURCE_CODE.into())),
             ButtonId::OpenLicenses => return Some(Action::OpenUrl(LICENSES.into())),
+            ButtonId::ExportDiagnostics => {
+                if !self.diagnostics_exporting {
+                    self.diagnostics_exporting = true;
+                    self.diagnostics = None;
+                    return Some(Action::ExportDiagnostics);
+                }
+            }
             ButtonId::CopyLog => {
                 let lines = self.backend.game_log(&self.backend.selected_profile());
                 let shown: Vec<&str> = lines

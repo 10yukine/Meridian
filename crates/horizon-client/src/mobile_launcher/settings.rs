@@ -299,11 +299,13 @@ impl MobileLauncher {
                 p.text_line(Face::Regular, ui_theme::small(), row_h, tx, cy, ink, &fit);
             }
         };
-        // Buttons at the column's right end, each as wide as its label.
+        // Buttons at the column's right end, each as wide as its label; returns the leftmost
+        // button's left edge.
         let buttons = |ui: &mut Canvas<'_, '_>,
                        hits: &mut Vec<HitRect>,
                        cy: f32,
-                       items: &[(ButtonId, &str)]| {
+                       items: &[(ButtonId, &str)]|
+         -> f32 {
             let mut bx = inner_x + inner_w;
             for &(id, label) in items.iter().rev() {
                 let bw = (ui.ro().measure(Face::Medium, ui_size, label) + 32.0).max(84.0);
@@ -321,6 +323,7 @@ impl MobileLauncher {
                 );
                 bx -= 8.0;
             }
+            bx + 8.0
         };
 
         let reclaim = self.backend.reclaimable().filter(|&bytes| bytes > 0);
@@ -337,7 +340,7 @@ impl MobileLauncher {
         let total = 2 * usize::from(!typing_args)
             + usize::from(!onboarding)
             + usize::from(free_shown)
-            + 4 * usize::from(full);
+            + 5 * usize::from(full);
         let mut rows = Rows {
             skip: if typing_args {
                 0
@@ -490,6 +493,33 @@ impl MobileLauncher {
                 name(ui, cy, row_h, "Quit Launcher");
                 buttons(ui, hits, cy, &[(ButtonId::Quit, "Quit")]);
             }
+            if let Some(cy) = rows.next(row_h, row_h) {
+                name(ui, cy, row_h, "Diagnostics");
+                if self.diagnostics_exporting {
+                    value(ui, cy, "Exporting...", palette::muted());
+                } else {
+                    let btn_x = buttons(ui, hits, cy, &[(ButtonId::ExportDiagnostics, "Export")]);
+                    if let Some(result) = &self.diagnostics
+                        && let Some(p) = ui.paint()
+                    {
+                        let (text, ok) = diagnostics_status(result);
+                        let ink = if ok { col_success } else { col_danger };
+                        let left = inner_x + p.measure(Face::Medium, ui_size, "Diagnostics") + 16.0;
+                        let room = (btn_x - 12.0 - left).max(0.0);
+                        let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), &text, room);
+                        let tw = p.measure(Face::Regular, ui_theme::small(), &fit);
+                        p.text_line(
+                            Face::Regular,
+                            ui_theme::small(),
+                            row_h,
+                            btn_x - 12.0 - tw,
+                            cy,
+                            ink,
+                            &fit,
+                        );
+                    }
+                }
+            }
             if let (Some(cy), Some(p)) = (rows.next(22.0, 20.0), ui.paint()) {
                 let note = "Not an official Minecraft product. Not approved by or associated \
                             with Mojang or Microsoft.";
@@ -580,6 +610,15 @@ impl MobileLauncher {
             Tone::Primary,
             &format!("Free Up {size}"),
         );
+    }
+}
+
+/// Status text for Settings' Diagnostics row: `(text, ok)` where `ok` uses the success colour
+/// and `false` uses the danger colour.
+pub(super) fn diagnostics_status(result: &Result<String, String>) -> (String, bool) {
+    match result {
+        Ok(file) => (format!("Shared {file}"), true),
+        Err(err) => (err.clone(), false),
     }
 }
 

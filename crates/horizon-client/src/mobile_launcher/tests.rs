@@ -1765,3 +1765,108 @@ fn tabler_outlines_read_as_lines_curves_and_arcs() {
     assert_eq!(svg_path("M0 0L1 1M2 2L3 3").len(), 2);
     assert_eq!(svg_path("M0 0L1 1z 5").len(), 1);
 }
+
+#[test]
+fn settings_diagnostics_row_requests_export_and_shows_outcome() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let draw = |l: &MobileLauncher, size: [u32; 2]| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Draw(ui));
+        });
+    };
+
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    for size in [[856, 384], [914, 411], [1040, 700]] {
+        assert_hits_fit_without_overlap(&l, size, "settings-diagnostics");
+        let (quit_y, diag_y) = with_ui(size, (0.0, 0.0), |ui| {
+            let hits = l.layout(&mut Canvas::Hit(ui));
+            let quit = hits.iter().find(|h| h.id == ButtonId::Quit).unwrap();
+            let diag = hits
+                .iter()
+                .find(|h| h.id == ButtonId::ExportDiagnostics)
+                .unwrap();
+            (quit.y, diag.y)
+        });
+        assert!(
+            diag_y > quit_y,
+            "{size:?}: Diagnostics must sit after Quit Launcher"
+        );
+    }
+
+    // Tapping Export requests the host action, marks moving() while running, and ignores repeats.
+    assert!(!l.moving());
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportDiagnostics),
+        Some(Action::ExportDiagnostics)
+    );
+    assert!(l.moving());
+    assert!(!shown(&l, size).contains(&ButtonId::ExportDiagnostics));
+    assert_eq!(l.handle_button(ButtonId::ExportDiagnostics), None);
+    draw(&l, size);
+
+    // Success outcome: "Shared <file name>", moving() clears, and Export is available again.
+    l.diagnostics_saved(Ok("meridian-diagnostics-123.zip".into()));
+    assert!(!l.moving());
+    assert_eq!(
+        super::settings::diagnostics_status(l.diagnostics.as_ref().unwrap()),
+        ("Shared meridian-diagnostics-123.zip".into(), true)
+    );
+    assert!(shown(&l, size).contains(&ButtonId::ExportDiagnostics));
+    for size in [[856, 384], [914, 411], [1040, 700]] {
+        draw(&l, size);
+        assert_hits_fit_without_overlap(&l, size, "settings-diagnostics-shared");
+    }
+
+    // Share-sheet failure outcome: error message shown in danger colour.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportDiagnostics),
+        Some(Action::ExportDiagnostics)
+    );
+    l.diagnostics_saved(Err("Couldn't open the share sheet".into()));
+    assert!(!l.moving());
+    assert_eq!(
+        super::settings::diagnostics_status(l.diagnostics.as_ref().unwrap()),
+        ("Couldn't open the share sheet".into(), false)
+    );
+    draw(&l, size);
+
+    // Mock backend's default Err reaches the row with its message intact.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportDiagnostics),
+        Some(Action::ExportDiagnostics)
+    );
+    let default_err = l.backend_mut().export_diagnostics(&[]).unwrap_err();
+    assert_eq!(default_err, "Diagnostics are unavailable in this launcher.");
+    l.diagnostics_saved(Err(default_err.clone()));
+    assert!(!l.moving());
+    assert_eq!(
+        super::settings::diagnostics_status(l.diagnostics.as_ref().unwrap()),
+        (default_err, false)
+    );
+    draw(&l, size);
+
+    // On the A14 with Free Up Space visible too, scrolling Settings reveals Diagnostics cleanly.
+    let mut with_free = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        reclaim: 500_000_000,
+        ..StubBackend::default()
+    }));
+    let a14 = [856, 384];
+    click_button(&mut with_free, a14, ButtonId::OpenSettings);
+    shown(&with_free, a14);
+    with_free.scroll(0.0, -200.0);
+    assert!(shown(&with_free, a14).contains(&ButtonId::ExportDiagnostics));
+    assert_hits_fit_without_overlap(&with_free, a14, "settings-diagnostics-scrolled");
+}
