@@ -20,8 +20,8 @@ mod tests;
 mod widgets;
 
 use crate::launcher_backend::{
-    Account, Backend, ELY_SKINS, ModSearch, NEEDS_OWNER, PickedSkin, Profile, ProfileState, Setup,
-    SignIn, SkinUpload, VANILLA,
+    Account, Backend, ELY_SKINS, Language, LanguageDownload, ModSearch, NEEDS_OWNER, PickedSkin,
+    Profile, ProfileState, Setup, SignIn, SkinUpload, VANILLA, i18n,
 };
 use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
@@ -184,10 +184,15 @@ enum ButtonId {
     // Home's game log
     LogLevel(u8),
     CopyLog,
-    // Settings: the game's arguments, About's links
+    // Settings: the game's arguments, About's links, Language picker
     FocusGameArgs,
     OpenSourceCode,
     OpenLicenses,
+    ToggleLanguagePicker,
+    CloseLanguagePicker,
+    SelectLanguage(usize),
+    LanguageScrollUp,
+    LanguageScrollDown,
 }
 
 /// Interactive Meridian launcher backed by [`Backend`].
@@ -197,6 +202,8 @@ pub struct MobileLauncher {
     prefs_dir: Option<PathBuf>,
     route: Route,
     profile_popup_open: bool,
+    language_popup_open: bool,
+    language_scroll: usize,
     // Auth & account addition
     adding_account: bool,
     accounts_before_add: usize,
@@ -311,6 +318,8 @@ impl MobileLauncher {
             prefs_dir,
             route: Route::Home,
             profile_popup_open: false,
+            language_popup_open: false,
+            language_scroll: 0,
             adding_account: false,
             accounts_before_add: 0,
             show_more_auth: false,
@@ -398,8 +407,8 @@ impl MobileLauncher {
         changed
     }
 
-    /// Whether the screen changes without input: an install, a sign-in or a skin upload under
-    /// way. The host draws ten frames a second then, and one otherwise.
+    /// Whether the screen changes without input: an install, a sign-in, a skin upload or a
+    /// language download under way. The host draws ten frames a second then, and one otherwise.
     pub fn moving(&self) -> bool {
         matches!(self.backend.setup(), Setup::Running(_))
             || matches!(
@@ -407,11 +416,24 @@ impl MobileLauncher {
                 SignIn::Starting | SignIn::Code { .. }
             )
             || self.skin_uploading
+            || matches!(
+                self.backend.language_download(),
+                LanguageDownload::Downloading(_)
+            )
             || self
                 .backend
                 .profiles()
                 .iter()
                 .any(|p| matches!(p.state, ProfileState::Installing(_)))
+    }
+
+    fn sync_language(&self) {
+        let lang = self.backend.language();
+        if i18n::is_loaded(lang) {
+            i18n::set(lang);
+        } else {
+            i18n::set(Language::English);
+        }
     }
 
     /// Play stopped on the game's arguments: Settings shows why, under them.
@@ -464,6 +486,7 @@ impl MobileLauncher {
     pub fn scroll(&mut self, delta_x: f32, delta_y: f32) {
         let row = match (self.profile_popup_open, self.route) {
             _ if self.confirm_free_space || self.confirm_remove_profile.is_some() => return,
+            _ if self.language_popup_open => 36.0,
             (true, _) => 34.0,
             (false, Route::Skins) => {
                 // The figure turns as far as the finger moves sideways, and tilts a little.
@@ -512,7 +535,9 @@ impl MobileLauncher {
         let rows = (self.scroll_carry / row).trunc();
         self.scroll_carry -= rows * row;
         let max = self.scroll_max.get() as f32;
-        if self.profile_popup_open {
+        if self.language_popup_open {
+            self.language_scroll = (self.language_scroll as f32 - rows).clamp(0.0, max) as usize;
+        } else if self.profile_popup_open {
             self.profile_scroll = (self.profile_scroll as f32 - rows).clamp(0.0, max) as usize;
         } else {
             // The game log counts back from its end: a drag down shows earlier lines there too.
@@ -794,6 +819,14 @@ impl MobileLauncher {
         }
         // Any other tap answers "Free up space?" with no.
         self.confirm_free_space = matches!(id, ButtonId::FreeSpace | ButtonId::ConfirmFreeSpace);
+        if !matches!(
+            id,
+            ButtonId::ToggleLanguagePicker
+                | ButtonId::LanguageScrollUp
+                | ButtonId::LanguageScrollDown
+        ) {
+            self.language_popup_open = false;
+        }
         self.log_copied = false;
 
         match id {
@@ -803,6 +836,30 @@ impl MobileLauncher {
                 self.profile_rename = None;
                 self.mod_search_focused = false;
                 self.route = Route::Home;
+            }
+            ButtonId::ToggleLanguagePicker => {
+                self.language_popup_open = !self.language_popup_open;
+                if self.language_popup_open {
+                    self.language_scroll = self.backend.language().index().saturating_sub(2);
+                }
+            }
+            ButtonId::CloseLanguagePicker => {
+                self.language_popup_open = false;
+            }
+            ButtonId::SelectLanguage(idx) => {
+                if let Some(&lang) = Language::ALL.get(idx)
+                    && lang.bundled_font_supported()
+                {
+                    self.backend.set_language(lang);
+                    self.sync_language();
+                }
+            }
+            ButtonId::LanguageScrollUp => {
+                self.language_scroll = self.language_scroll.saturating_sub(4);
+            }
+            ButtonId::LanguageScrollDown => {
+                let max_idx = Language::ALL.len().saturating_sub(1);
+                self.language_scroll = (self.language_scroll + 4).min(max_idx);
             }
             ButtonId::ToggleProfilePicker => {
                 self.confirm_remove_profile = None;
@@ -1233,6 +1290,7 @@ impl MobileLauncher {
     }
 
     fn layout(&self, ui: &mut Canvas<'_, '_>) -> Vec<HitRect> {
+        self.sync_language();
         let mut hits = Vec::new();
         // The list a drag scrolls sets it as it's laid out.
         self.scroll_max.set(0);
@@ -1325,18 +1383,30 @@ impl MobileLauncher {
             let card_x = ((ui_w - card_w) * 0.5).round();
 
             if self.route == Route::Settings {
-                self.draw_settings_view(
-                    ui,
-                    &mut hits,
-                    card_x,
-                    content_top,
-                    card_w,
-                    content_h,
-                    true,
-                    &setup,
-                    col_success,
-                    col_danger,
-                );
+                if self.language_popup_open {
+                    self.draw_language_popup(
+                        ui,
+                        &mut hits,
+                        card_x,
+                        content_top,
+                        card_w,
+                        content_h,
+                        col_success,
+                    );
+                } else {
+                    self.draw_settings_view(
+                        ui,
+                        &mut hits,
+                        card_x,
+                        content_top,
+                        card_w,
+                        content_h,
+                        true,
+                        &setup,
+                        col_success,
+                        col_danger,
+                    );
+                }
                 slide(ui);
                 return hits;
             }
@@ -1426,7 +1496,9 @@ impl MobileLauncher {
 
         let mut bg_hits = Vec::new();
         // A question over the page: the page shows, blurred, and only the question takes taps.
-        let popup = self.confirm_free_space || self.confirm_remove_profile.is_some();
+        let popup = self.confirm_free_space
+            || self.confirm_remove_profile.is_some()
+            || self.language_popup_open;
 
         // Top bar drawn first (right of left panel); left panel drawn above it; bottom dock caps full width on top.
         {
@@ -1556,6 +1628,8 @@ impl MobileLauncher {
             let pop_x = ((ui_w - pop_w) * 0.5).round();
             if self.confirm_free_space {
                 self.draw_free_space_confirm(ui, &mut hits, pop_x, 0.0, pop_w, ui_h);
+            } else if self.language_popup_open {
+                self.draw_language_popup(ui, &mut hits, pop_x, 0.0, pop_w, ui_h, col_success);
             } else if let Some((ref id, ref name)) = self.confirm_remove_profile {
                 // As counted now, not when the bin was tapped.
                 let worlds = profiles

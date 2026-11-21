@@ -2,9 +2,9 @@ use super::widgets::{Canvas, count_label, log_levels, profile_stats_line};
 use super::{Action, AuthForm, ButtonId, LICENSES, MobileLauncher, Route, SOURCE_CODE};
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
-    Account, Backend, ELY_SKINS, Head, ModInfo, ModSearch, PickedSkin, Profile, ProfileMod,
-    ProfileState, Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, profile_id,
-    valid_offline_name,
+    Account, Backend, ELY_SKINS, Head, Language, LanguageDownload, ModInfo, ModSearch, PickedSkin,
+    Profile, ProfileMod, ProfileState, Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, i18n,
+    profile_id, valid_offline_name,
 };
 use crate::ui_theme::Ui;
 use std::sync::{Arc, Mutex};
@@ -36,6 +36,8 @@ struct StubBackend {
     args: String,
     /// [`Backend::game_allowed`]: false is a release build no game owner signed in on.
     allowed: bool,
+    language: Language,
+    language_download: LanguageDownload,
 }
 
 impl Default for StubBackend {
@@ -86,6 +88,8 @@ impl Default for StubBackend {
             log: Vec::new(),
             args: String::new(),
             allowed: true,
+            language: Language::English,
+            language_download: LanguageDownload::Idle,
         }
     }
 }
@@ -210,6 +214,15 @@ impl Backend for StubBackend {
         crate::launcher_backend::launch::split_args(text)?;
         self.args = text.trim().into();
         Ok(())
+    }
+    fn language(&self) -> Language {
+        self.language
+    }
+    fn set_language(&mut self, language: Language) {
+        self.language = language;
+    }
+    fn language_download(&self) -> LanguageDownload {
+        self.language_download.clone()
     }
     fn profiles(&self) -> Vec<Profile> {
         self.profiles.clone()
@@ -1764,4 +1777,88 @@ fn tabler_outlines_read_as_lines_curves_and_arcs() {
     // Two pieces, and a stray number after a close stops the reading.
     assert_eq!(svg_path("M0 0L1 1M2 2L3 3").len(), 2);
     assert_eq!(svg_path("M0 0L1 1z 5").len(), 1);
+}
+
+#[test]
+fn language_picker_lists_all_87_languages_and_falls_back_until_loaded() {
+    for lang in Language::ALL {
+        assert_eq!(
+            lang.bundled_font_supported(),
+            crate::ui_theme::bundled_font_covers(lang.name()),
+            "{lang:?} ({})",
+            lang.name()
+        );
+        assert!(
+            crate::ui_theme::bundled_font_covers(lang.english_name()),
+            "{lang:?} ({})",
+            lang.english_name()
+        );
+    }
+
+    let size = [856, 384];
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleLanguagePicker));
+    assert_hits_fit_without_overlap(&l, size, "settings-language-row");
+
+    // Opening the picker shows the top of the list; Chinese (index 4) is unavailable in Phase 1.
+    click_button(&mut l, size, ButtonId::ToggleLanguagePicker);
+    assert!(l.language_popup_open);
+    for s in [[856, 384], [914, 411], [914, 300], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, s, "language-popup");
+    }
+    let top_ids = shown(&l, size);
+    assert!(top_ids.contains(&ButtonId::SelectLanguage(1)));
+    assert!(!top_ids.contains(&ButtonId::SelectLanguage(Language::Chinese.index())));
+
+    // Scroll to the bottom of the 87-language list and back up.
+    l.scroll(0.0, -10_000.0);
+    assert!(shown(&l, size).contains(&ButtonId::SelectLanguage(Language::Venetian.index())));
+    l.scroll(0.0, 10_000.0);
+    assert!(shown(&l, size).contains(&ButtonId::SelectLanguage(0)));
+
+    // Pick French (index 1): before its table is loaded, `tr` falls back to English.
+    click_button(&mut l, size, ButtonId::SelectLanguage(1));
+    assert!(!l.language_popup_open);
+    assert_eq!(l.backend().language(), Language::French);
+    assert_eq!(i18n::tr("Settings"), "Settings");
+
+    // Once verified and loaded, the UI thread switches to French.
+    i18n::load_table_bytes(
+        Language::French,
+        br#"{"Settings":"Param\u00e8tres","Home":"Accueil","Play":"Jouer"}"#,
+    )
+    .unwrap();
+    shown(&l, size);
+    assert_eq!(i18n::tr("Settings"), "Paramètres");
+    assert_eq!(i18n::tr("Play"), "Jouer");
+    assert_hits_fit_without_overlap(&l, size, "settings-in-french");
+
+    // While a language pack downloads, `moving()` is true; a failed download fits on Settings.
+    let downloading = MobileLauncher::new(Box::new(StubBackend {
+        language: Language::German,
+        language_download: LanguageDownload::Downloading(Language::German),
+        ..StubBackend::default()
+    }));
+    assert!(downloading.moving());
+    let mut failed = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        language: Language::German,
+        language_download: LanguageDownload::Failed("Deutsch did not match its checksum.".into()),
+        ..StubBackend::default()
+    }));
+    click_button(&mut failed, size, ButtonId::OpenSettings);
+    assert_hits_fit_without_overlap(&failed, size, "settings-language-failed");
 }

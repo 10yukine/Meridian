@@ -198,9 +198,10 @@ impl MobileLauncher {
         }
         let col_warn = color::hex(crate::menu_style::get().settings.warn, 255);
         let lines = self.backend.game_log(profile);
+        let title = crate::launcher_backend::i18n::tr("Game log");
         let label_w = ui
             .ro()
-            .measure(Face::SemiBold, ui_theme::small(), "Game log")
+            .measure(Face::SemiBold, ui_theme::small(), title)
             + 16.0;
         if let Some(p) = ui.paint() {
             p.text_line(
@@ -210,12 +211,13 @@ impl MobileLauncher {
                 x,
                 y,
                 palette::text(),
-                "Game log",
+                title,
             );
         }
         let mut cx = x + label_w;
         for (level, name) in [(0, "All"), (1, "Warnings"), (2, "Errors")] {
-            let cw = ui.ro().measure(Face::Medium, ui_theme::small(), name) + 22.0;
+            let shown_name = crate::launcher_backend::i18n::tr(name);
+            let cw = ui.ro().measure(Face::Medium, ui_theme::small(), shown_name) + 22.0;
             draw_button(
                 ui,
                 hits,

@@ -239,6 +239,18 @@ pub(crate) fn save_pixel_font_pref(dir: &Path, pixel: bool) {
 pub fn pack_font_ready(atlas: &HudAtlas) -> bool {
     atlas.font.glyph('A').rect.is_some()
 }
+/// Whether the bundled modern faces cover every non-whitespace character in `text`.
+pub fn bundled_font_covers(text: &str) -> bool {
+    let Some(fonts) = Fonts::load() else {
+        return true;
+    };
+    text.chars().all(|ch| {
+        ch.is_whitespace()
+            || [Face::Regular, Face::Medium, Face::SemiBold]
+                .into_iter()
+                .all(|face| fonts.face(face).glyph_id(ch).0 != 0)
+    })
+}
 /// Reloaded atlases can occupy the same address with empty run-time slots.
 pub fn reset_atlas() {
     CACHE.with(|cache| *cache.borrow_mut() = None);

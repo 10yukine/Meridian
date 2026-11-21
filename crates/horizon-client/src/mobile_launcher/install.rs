@@ -73,6 +73,7 @@ impl MobileLauncher {
                     p.rounded(px, cy, pill_w, pill_h, 8.0, bg);
                 }
                 p.border(px, cy, pill_w, pill_h, 8.0, bdr);
+                let label = crate::launcher_backend::i18n::tr(label);
                 let tw = p.measure(Face::Medium, ui_theme::small(), label);
                 p.text_line(
                     Face::Medium,

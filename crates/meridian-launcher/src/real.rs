@@ -114,6 +114,8 @@ pub struct Real {
     /// The install cache's bytes ([`launch::install_cache_size`]), or [`MEASURING`].
     reclaimable: Arc<AtomicU64>,
     skin_upload: Arc<Mutex<SkinUpload>>,
+    language: Arc<Mutex<Language>>,
+    language_download: Arc<Mutex<LanguageDownload>>,
     log_tail: Mutex<Option<LogTail>>,
     heads: heads::Cache,
     profiles: profiles::Store,
@@ -136,6 +138,14 @@ impl Real {
         let resources = horizon_prepare::resources_dir(&root, "26.3", None);
         let ready =
             horizon_prepare::check(&root, &resources).is_ok_and(|missing| missing.is_empty());
+        let saved_lang = i18n::saved_language(&root);
+        let lang_ready =
+            saved_lang == Language::English || i18n::load_from_disk(&root, saved_lang).is_ok();
+        i18n::set(if lang_ready {
+            saved_lang
+        } else {
+            Language::English
+        });
         let mut backend = Self {
             root,
             account_file,
@@ -147,11 +157,16 @@ impl Real {
             base_ready: Arc::new(AtomicBool::new(ready)),
             reclaimable: Arc::new(AtomicU64::new(if ready { MEASURING } else { 0 })),
             skin_upload: Arc::default(),
+            language: Arc::new(Mutex::new(saved_lang)),
+            language_download: Arc::default(),
             log_tail: Mutex::default(),
             heads: heads::Cache::default(),
             profiles,
             release: crate::RELEASE,
         };
+        if !lang_ready && backend.account_file.is_some() {
+            backend.fetch_language(saved_lang);
+        }
         if ready {
             measure_install_cache(&backend.root, &backend.reclaimable);
             spawn_later(backend.root.clone(), backend.later_cancel.clone());
@@ -234,6 +249,29 @@ impl Real {
 
     fn cancel_sign_in(&self) {
         self.sign_in_cancel.store(true, Relaxed);
+    }
+
+    fn fetch_language(&mut self, language: Language) {
+        *self.language_download.lock().unwrap() = LanguageDownload::Downloading(language);
+        let root = self.root.clone();
+        let chosen = self.language.clone();
+        let status = self.language_download.clone();
+        let spawned = std::thread::Builder::new()
+            .name("launcher-language".into())
+            .spawn(move || {
+                let result = i18n::fetch(&root, language);
+                if *chosen.lock().unwrap() != language {
+                    return;
+                }
+                *status.lock().unwrap() = match result {
+                    Ok(()) => LanguageDownload::Idle,
+                    Err(e) => LanguageDownload::Failed(e),
+                };
+            });
+        if spawned.is_err() {
+            *self.language_download.lock().unwrap() =
+                LanguageDownload::Failed("Could not start the download.".into());
+        }
     }
 }
 
@@ -716,6 +754,33 @@ impl Backend for Real {
         let lines = read_log_tail(&path, len).unwrap_or_default();
         *kept = Some((path, len, modified, lines.clone()));
         lines
+    }
+
+    fn language(&self) -> Language {
+        *self.language.lock().unwrap()
+    }
+
+    fn set_language(&mut self, language: Language) {
+        if !language.bundled_font_supported() {
+            return;
+        }
+        let _ = i18n::save_language(&self.root, language);
+        *self.language.lock().unwrap() = language;
+        if language == Language::English || i18n::load_from_disk(&self.root, language).is_ok() {
+            *self.language_download.lock().unwrap() = LanguageDownload::Idle;
+            i18n::set(language);
+        } else {
+            i18n::set(Language::English);
+            self.fetch_language(language);
+        }
+    }
+
+    fn language_download(&self) -> LanguageDownload {
+        self.language_download.lock().unwrap().clone()
+    }
+
+    fn language_cached(&self, language: Language) -> bool {
+        i18n::is_cached(&self.root, language)
     }
 }
 

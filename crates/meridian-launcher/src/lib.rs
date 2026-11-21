@@ -294,6 +294,24 @@ pub trait Backend: Send {
     fn export_diagnostics(&mut self, _extras: &[(&str, String)]) -> Result<std::path::PathBuf, String> {
         Err("Diagnostics are unavailable in this launcher.".into())
     }
+    /// The launcher's chosen language (English by default; another language shows once its table
+    /// is on disk and checked, falling back to English until then).
+    fn language(&self) -> Language {
+        Language::English
+    }
+    /// Chooses `language` for the launcher and the game: English applies at once; another
+    /// language applies at once when already verified on disk, else downloads on a worker checked
+    /// against its pinned SHA-256 ([`Self::language_download`]).
+    fn set_language(&mut self, language: Language) {
+        i18n::set(language);
+    }
+    fn language_download(&self) -> LanguageDownload {
+        LanguageDownload::Idle
+    }
+    /// Whether `language`'s table is already verified on disk (always true for English).
+    fn language_cached(&self, language: Language) -> bool {
+        i18n::is_loaded(language)
+    }
     /// Every profile, installed or offered: [`VANILLA`] first, then the modpacks.
     fn profiles(&self) -> Vec<Profile> {
         vec![Profile {
@@ -433,10 +451,12 @@ mod account;
 pub mod controls_art;
 pub mod diagnostics;
 mod ely;
+pub mod i18n;
 pub mod launch;
 mod mojang;
 mod real;
 mod sources;
 
 pub use account::NOT_APPROVED;
+pub use i18n::{Language, LanguageDownload};
 pub use real::Real;

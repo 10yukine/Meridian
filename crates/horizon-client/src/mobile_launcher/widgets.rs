@@ -705,6 +705,7 @@ pub(super) fn draw_input_box(
         p.border(x, y, w, h, 9.0, bdr);
         let mut tx = x + 12.0;
         if !label.is_empty() {
+            let label = crate::launcher_backend::i18n::tr(label);
             p.text_line(
                 Face::Medium,
                 ui_theme::small(),
@@ -1070,6 +1071,14 @@ pub(super) fn draw_button(
         if let Some(b) = border {
             p.border(x, y, w, h, radius, b);
         }
+        let label = if matches!(
+            id,
+            ButtonId::ToggleLanguagePicker | ButtonId::ModManagerPickProfile(_)
+        ) {
+            label
+        } else {
+            crate::launcher_backend::i18n::tr(label)
+        };
         let room = (w - 16.0).max(16.0);
         let font_size = p.fit(Face::Medium, ui_theme::sizes().ui, label, room);
         let label = truncate_to_fit(p, Face::Medium, font_size, label, room);
@@ -1094,6 +1103,7 @@ pub(super) fn draw_play_button(
 ) {
     let hit = HitRect { id, x, y, w, h };
     if let Some(p) = ui.paint() {
+        let label = crate::launcher_backend::i18n::tr(label);
         let hovered = hit.contains(p.cursor);
         let fill = if hovered {
             palette::accent_fill_hover()
@@ -1212,6 +1222,7 @@ pub(super) fn draw_rail_item(
             RailIcon::Settings => draw_icon_settings(p, icon_cx, icon_cy, icon_sz, icon_col),
         }
         if !icon_only {
+            let label = crate::launcher_backend::i18n::tr(label);
             let lbl_sz = if compact { 9.0 } else { 9.5 };
             let lw = p.measure(Face::Medium, lbl_sz, label);
             let ly = y + h - if compact { 14.0 } else { 16.0 };
@@ -1289,15 +1300,16 @@ pub(super) fn profile_badge_parts(
     col_success: u32,
     col_danger: u32,
 ) -> (String, u32) {
+    use crate::launcher_backend::i18n::tr;
     match state {
-        ProfileState::Available => ("Needs install".to_owned(), palette::accent_star()),
+        ProfileState::Available => (tr("Needs install").to_owned(), palette::accent_star()),
         ProfileState::Installing(p) => {
             let pct = (stage_fraction(p) * 100.0).round() as u32;
-            (format!("Installing {pct}%"), palette::accent())
+            (format!("{} {pct}%", tr("Installing")), palette::accent())
         }
-        ProfileState::Installed if selected => ("Ready".to_owned(), col_success),
-        ProfileState::Installed => ("Installed".to_owned(), palette::muted()),
-        ProfileState::Failed(_) => ("Failed".to_owned(), col_danger),
+        ProfileState::Installed if selected => (tr("Ready").to_owned(), col_success),
+        ProfileState::Installed => (tr("Installed").to_owned(), palette::muted()),
+        ProfileState::Failed(_) => (tr("Failed").to_owned(), col_danger),
     }
 }
 
@@ -1310,16 +1322,17 @@ pub(super) fn account_short(account: &Account) -> &str {
 }
 
 pub(super) fn account_provider_tag(account: &Account) -> &'static str {
+    use crate::launcher_backend::i18n::tr;
     match account {
         Account::Microsoft { .. } => "Microsoft",
         Account::Ely { .. } => "Ely.by",
-        Account::Offline { .. } => "Offline",
+        Account::Offline { .. } => tr("Offline"),
     }
 }
 
 pub(super) fn format_size(bytes: u64) -> String {
     if bytes == 0 {
-        "Base game".to_owned()
+        crate::launcher_backend::i18n::tr("Base game").to_owned()
     } else if bytes >= 1_000_000 {
         format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else {
@@ -1337,20 +1350,22 @@ pub(super) fn stage_index(stage: Stage) -> usize {
 }
 
 pub(super) fn stage_name(stage: Stage) -> &'static str {
+    use crate::launcher_backend::i18n::tr;
     match stage {
-        Stage::Check => "Check",
-        Stage::Download => "Download",
-        Stage::Verify => "Verify",
-        Stage::Prepare => "Prepare",
+        Stage::Check => tr("Check"),
+        Stage::Download => tr("Download"),
+        Stage::Verify => tr("Verify"),
+        Stage::Prepare => tr("Prepare"),
     }
 }
 
 pub(super) fn stage_heading(stage: Stage) -> &'static str {
+    use crate::launcher_backend::i18n::tr;
     match stage {
-        Stage::Check => "Checking installed game files",
-        Stage::Download => "Downloading Minecraft 26.3 resources",
-        Stage::Verify => "Verifying SHA-1 file integrity",
-        Stage::Prepare => "Preparing runtime resources",
+        Stage::Check => tr("Checking installed game files"),
+        Stage::Download => tr("Downloading Minecraft 26.3 resources"),
+        Stage::Verify => tr("Verifying SHA-1 file integrity"),
+        Stage::Prepare => tr("Preparing runtime resources"),
     }
 }
 

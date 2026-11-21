@@ -5,7 +5,10 @@ use super::widgets::{
     draw_plate, draw_player_head, draw_skin_3d, format_size, palette, truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
-use crate::launcher_backend::{Account, Setup, SkinUpload};
+use crate::launcher_backend::{
+    Account, Language, LanguageDownload, Setup, SkinUpload,
+    i18n::{self, tr},
+};
 use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
@@ -256,7 +259,7 @@ impl MobileLauncher {
                     inner_x + 112.0,
                     cy,
                     palette::text(),
-                    "Launcher Settings",
+                    tr("Launcher Settings"),
                 );
             }
             cy += hdr_h + if compact_v { 10.0 } else { 18.0 };
@@ -286,7 +289,7 @@ impl MobileLauncher {
                     inner_x,
                     cy,
                     palette::text(),
-                    text,
+                    tr(text),
                 );
             }
         };
@@ -306,7 +309,12 @@ impl MobileLauncher {
                        items: &[(ButtonId, &str)]| {
             let mut bx = inner_x + inner_w;
             for &(id, label) in items.iter().rev() {
-                let bw = (ui.ro().measure(Face::Medium, ui_size, label) + 32.0).max(84.0);
+                let shown = if id == ButtonId::ToggleLanguagePicker {
+                    label
+                } else {
+                    tr(label)
+                };
+                let bw = (ui.ro().measure(Face::Medium, ui_size, shown) + 32.0).max(84.0);
                 bx -= bw;
                 draw_button(
                     ui,
@@ -327,6 +335,12 @@ impl MobileLauncher {
         let offer = matches!(setup, Setup::Ready).then_some(reclaim).flatten();
         let full = !onboarding && !typing_args;
         let free_shown = full && (offer.is_some() || self.freed.is_some());
+        let lang_status = self.backend.language_download();
+        let lang_err_h = if matches!(lang_status, LanguageDownload::Failed(_)) {
+            18.0
+        } else {
+            0.0
+        };
         let error_h = if self.game_args_error.is_some() {
             18.0
         } else {
@@ -334,7 +348,7 @@ impl MobileLauncher {
         };
         // The rows under the title, as a drag scrolled them: rows scrolled past and rows past the
         // card's end aren't drawn, and how many are below sets how far a drag goes.
-        let total = 2 * usize::from(!typing_args)
+        let total = 3 * usize::from(!typing_args)
             + usize::from(!onboarding)
             + usize::from(free_shown)
             + 4 * usize::from(full);
@@ -372,6 +386,7 @@ impl MobileLauncher {
                     chosen,
                 );
                 for (i, label) in labels.into_iter().enumerate() {
+                    let label = tr(label);
                     let ink = if (i == 1) == right {
                         palette::text()
                     } else {
@@ -391,6 +406,36 @@ impl MobileLauncher {
                 h: ctl_h,
             });
         };
+        if !typing_args && let Some(cy) = rows.next(row_h + lang_err_h, row_h + lang_err_h) {
+            name(ui, cy, row_h + lang_err_h, "Language");
+            let chosen = self.backend.language();
+            let label = match &lang_status {
+                LanguageDownload::Downloading(lang) => format!("{}...", lang.name()),
+                _ => chosen.name().to_owned(),
+            };
+            buttons(
+                ui,
+                hits,
+                cy,
+                &[(ButtonId::ToggleLanguagePicker, label.as_str())],
+            );
+            if let LanguageDownload::Failed(err) = &lang_status
+                && let Some(p) = ui.paint()
+            {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, inner_w);
+                let tw = p.measure(Face::Regular, ui_theme::small(), &fit);
+                let tx = inner_x + inner_w - tw;
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    lang_err_h,
+                    tx,
+                    cy + row_h - 4.0,
+                    col_danger,
+                    &fit,
+                );
+            }
+        }
         if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
             name(ui, cy, row_h, "Launcher Font");
             let pixel = ui_theme::pixel_font();
@@ -580,6 +625,191 @@ impl MobileLauncher {
             Tone::Primary,
             &format!("Free Up {size}"),
         );
+    }
+
+    /// Language picker modal: the 87 launcher languages in `Language::ALL` order, each named in
+    /// itself, with its download size (or `Installed` / `Active`) on the right.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_language_popup(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        x: f32,
+        y: f32,
+        w: f32,
+        avail_h: f32,
+        col_success: u32,
+    ) {
+        let compact_v = avail_h < 300.0;
+        let pad = if compact_v { 12.0 } else { 18.0 };
+        let hdr_h = if compact_v { 30.0 } else { 36.0 };
+        let row_h = if compact_v { 32.0 } else { 36.0 };
+        let row_gap = 4.0;
+        let step = row_h + row_gap;
+        let max_card_h = (avail_h - 16.0).clamp(112.0, 356.0);
+        let list_avail = (max_card_h - pad * 2.0 - hdr_h - 10.0).max(row_h);
+        let max_rows = ((list_avail + row_gap) / step).floor().max(1.0) as usize;
+        let shown_rows = max_rows.min(Language::ALL.len());
+        let card_h =
+            (pad * 2.0 + hdr_h + 10.0 + shown_rows as f32 * step - row_gap).min(avail_h);
+        let cy_top = y + ((avail_h - card_h) * 0.5).max(0.0).round();
+        draw_plate(ui, x, cy_top, w, card_h, palette::border());
+
+        let inner_x = x + pad;
+        let inner_w = (w - pad * 2.0).max(160.0);
+        let hdr_y = cy_top + pad;
+        if let Some(p) = ui.paint() {
+            p.text_line(
+                Face::SemiBold,
+                if compact_v { 18.0 } else { 20.0 },
+                hdr_h,
+                inner_x,
+                hdr_y,
+                palette::text(),
+                tr("Language"),
+            );
+        }
+
+        let done_w = 78.0;
+        let done_x = inner_x + inner_w - done_w;
+        draw_button(
+            ui,
+            hits,
+            ButtonId::CloseLanguagePicker,
+            done_x,
+            hdr_y,
+            done_w,
+            hdr_h,
+            Tone::Secondary,
+            "Done",
+        );
+        if Language::ALL.len() > shown_rows {
+            let nav_w = 60.0;
+            let down_x = done_x - 6.0 - nav_w;
+            let up_x = down_x - 6.0 - nav_w;
+            draw_button(
+                ui,
+                hits,
+                ButtonId::LanguageScrollUp,
+                up_x,
+                hdr_y,
+                nav_w,
+                hdr_h,
+                Tone::Ghost,
+                "Up",
+            );
+            draw_button(
+                ui,
+                hits,
+                ButtonId::LanguageScrollDown,
+                down_x,
+                hdr_y,
+                nav_w,
+                hdr_h,
+                Tone::Ghost,
+                "Down",
+            );
+        }
+
+        let max_scroll = Language::ALL.len().saturating_sub(shown_rows);
+        self.scroll_max.set(max_scroll);
+        let start = self.language_scroll.min(max_scroll);
+        let chosen = self.backend.language();
+        let dl_status = self.backend.language_download();
+        let mut ry = hdr_y + hdr_h + 10.0;
+
+        for (idx, lang) in Language::ALL
+            .into_iter()
+            .enumerate()
+            .skip(start)
+            .take(shown_rows)
+        {
+            let supported = lang.bundled_font_supported();
+            let hit = HitRect {
+                id: ButtonId::SelectLanguage(idx),
+                x: inner_x,
+                y: ry,
+                w: inner_w,
+                h: row_h,
+            };
+            let is_chosen = lang == chosen;
+            if let Some(p) = ui.paint() {
+                let hovered = supported && hit.contains(p.cursor);
+                let fill = if is_chosen {
+                    color::with_alpha(palette::accent(), 0.20)
+                } else if hovered {
+                    palette::surface_hover()
+                } else {
+                    palette::surface()
+                };
+                let bdr = if is_chosen {
+                    palette::accent_star()
+                } else if hovered {
+                    palette::border()
+                } else {
+                    palette::border_subtle()
+                };
+                p.rounded(inner_x, ry, inner_w, row_h, 9.0, fill);
+                p.border(inner_x, ry, inner_w, row_h, 9.0, bdr);
+
+                // Supported languages show their name in itself; Phase 1 unavailable scripts show
+                // their plain Latin name so no missing-glyph boxes are drawn.
+                let display_name = if supported {
+                    lang.name()
+                } else {
+                    lang.english_name()
+                };
+                let name_fit = truncate_to_fit(
+                    p,
+                    Face::Medium,
+                    ui_theme::sizes().ui,
+                    display_name,
+                    inner_w * 0.62,
+                );
+                p.text_line(
+                    Face::Medium,
+                    ui_theme::sizes().ui,
+                    row_h,
+                    inner_x + 14.0,
+                    ry,
+                    if supported {
+                        palette::text()
+                    } else {
+                        palette::muted()
+                    },
+                    &name_fit,
+                );
+
+                let (tag, tag_col) = if !supported {
+                    (tr("Unavailable").to_owned(), palette::muted())
+                } else {
+                    match &dl_status {
+                        LanguageDownload::Downloading(dl) if *dl == lang => {
+                            (tr("Downloading").to_owned(), palette::accent())
+                        }
+                        _ if is_chosen => (tr("Active").to_owned(), col_success),
+                        _ if lang == Language::English || self.backend.language_cached(lang) => {
+                            (tr("Installed").to_owned(), palette::muted())
+                        }
+                        _ => (format_size(i18n::download_size(lang)), palette::muted()),
+                    }
+                };
+                let tw = p.measure(Face::Regular, ui_theme::small(), &tag);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    row_h,
+                    inner_x + inner_w - 14.0 - tw,
+                    ry,
+                    tag_col,
+                    &tag,
+                );
+            }
+            if supported {
+                hits.push(hit);
+            }
+            ry += step;
+        }
     }
 }
 
