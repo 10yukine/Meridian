@@ -212,7 +212,7 @@ pub fn set_min_density(density: f32) {
 }
 /// Whether `Ui` draws text with the resource pack's pixel bitmap font instead of the modern
 /// TrueType faces (default: `false`, modern font).
-pub(crate) fn pixel_font() -> bool {
+pub fn pixel_font() -> bool {
     PIXEL_FONT.with(Cell::get)
 }
 /// Toggle between the modern TrueType faces (`false`) and Minecraft's pixel bitmap font (`true`).
@@ -236,7 +236,7 @@ pub(crate) fn save_pixel_font_pref(dir: &Path, pixel: bool) {
     );
 }
 /// Whether this atlas has loaded the resource pack's pixel bitmap font (prepared 26.3 files exist).
-pub(crate) fn pack_font_ready(atlas: &HudAtlas) -> bool {
+pub fn pack_font_ready(atlas: &HudAtlas) -> bool {
     atlas.font.glyph('A').rect.is_some()
 }
 /// Reloaded atlases can occupy the same address with empty run-time slots.
@@ -475,10 +475,6 @@ impl<'a> Ui<'a> {
             scale,
             batch,
         }
-    }
-    /// Whether the resource pack's Minecraft pixel bitmap font is loaded in this atlas.
-    pub(crate) fn pack_font_available(&self) -> bool {
-        pack_font_ready(self.atlas)
     }
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
     pub fn finish(self) {

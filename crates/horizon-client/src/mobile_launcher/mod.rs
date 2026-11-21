@@ -26,6 +26,7 @@ use crate::menu_style;
 use crate::ui_theme::{self, Face, Ui, color};
 use std::cell::Cell;
 use std::path::PathBuf;
+use std::time::Instant;
 use widgets::{
     Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, draw_backdrop,
     draw_button, draw_icon_chevron, draw_north_star_badge, draw_play_button, draw_player_head,
@@ -36,6 +37,8 @@ use widgets::{
 /// About's links: the source, and the licenses of what Meridian is built from.
 const SOURCE_CODE: &str = "https://github.com/10yukine/Meridian";
 const LICENSES: &str = "https://github.com/10yukine/Meridian/blob/main/THIRD_PARTY_NOTICES.md";
+/// How far sideways (dp) a finger on a Mods list moves before the list turns its page.
+const SWIPE: f32 = 40.0;
 
 /// Action requested by clicking on [`MobileLauncher`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,12 +135,11 @@ enum ButtonId {
     ModManagerPickProfile(usize),
     ToggleProfileMod(usize),
     RemoveProfileMod(usize),
-    ProfileModsPrev,
+    /// The page dots under a list: the next page, then the first again.
     ProfileModsNext,
     FocusModSearch,
     SubmitModSearch,
     AddRegistryMod(usize),
-    RegistryModsPrev,
     RegistryModsNext,
     // Overlays
     CloseProfilePopup,
@@ -201,6 +203,15 @@ pub struct MobileLauncher {
     /// view (and whether it was being renamed), as laid out.
     tab_scroll: Cell<f32>,
     tab_revealed: Cell<Option<(String, bool)>>,
+    /// Mods' two lists as laid out: where they start and the line between them (dp), and how
+    /// many pages each has (the profile's, then the registry's). None without them.
+    mod_lists: Cell<Option<(f32, f32)>>,
+    mod_pages: Cell<[usize; 2]>,
+    /// The Mods list a drag began on (0: the profile's, 1: the registry's) and how far it has
+    /// moved sideways; None once it turned the page, so a swipe turns one.
+    swipe: Option<(usize, Option<f32>)>,
+    /// Each Mods list's page dots panning: from where, to which page, since when.
+    dots: Cell<[(f32, usize, Instant); 2]>,
     // Mod manager state
     mods_profile_id: Option<String>,
     mods_list_page: usize,
@@ -282,6 +293,10 @@ impl MobileLauncher {
             scroll_max: Cell::new(0),
             tab_scroll: Cell::new(0.0),
             tab_revealed: Cell::new(None),
+            mod_lists: Cell::new(None),
+            mod_pages: Cell::new([1, 1]),
+            swipe: None,
+            dots: Cell::new([(0.0, 0, Instant::now()); 2]),
             mods_profile_id: None,
             mods_list_page: 0,
             mod_search_query: String::new(),
@@ -359,6 +374,29 @@ impl MobileLauncher {
         self.game_args_error = Some(why.into());
     }
 
+    /// Whether something on screen moves by itself (page dots panning): the host draws every
+    /// frame until it stops.
+    pub fn animating(&self) -> bool {
+        let dots = self.dots.get();
+        dots.iter()
+            .any(|&(_, _, since)| since.elapsed().as_secs_f32() < mods::DOTS_SECS)
+    }
+
+    /// Where list `list`'s page dots are: at `page`, or panning there, eased, after it turned.
+    fn dots_at(&self, list: usize, page: usize) -> f32 {
+        let at = |(from, to, since): (f32, usize, Instant)| {
+            let t = since.elapsed().as_secs_f32() / mods::DOTS_SECS;
+            let eased = 1.0 - (1.0 - t.min(1.0)).powi(3);
+            from + (to as f32 - from) * eased
+        };
+        let mut dots = self.dots.get();
+        if dots[list].1 != page {
+            dots[list] = (at(dots[list]), page, Instant::now());
+            self.dots.set(dots);
+        }
+        at(dots[list])
+    }
+
     /// The platform has no file picker to open.
     pub fn no_file_picker(&mut self) {
         self.skin_error = Some("This device has no file picker.".into());
@@ -385,9 +423,36 @@ impl MobileLauncher {
                 return;
             }
             (false, Route::Mods) => {
-                let max = self.scroll_max.get() as f32;
-                self.tab_scroll
-                    .set((self.tab_scroll.get() - delta_x).clamp(0.0, max));
+                match self.swipe {
+                    // Begun on a list: far enough sideways, it shows that list's next page (the
+                    // finger moved left) or the one before.
+                    Some((list, Some(moved))) => {
+                        let moved = moved + delta_x;
+                        if moved.abs() < SWIPE {
+                            self.swipe = Some((list, Some(moved)));
+                            return;
+                        }
+                        self.swipe = Some((list, None));
+                        let last = self.mod_pages.get()[list].saturating_sub(1);
+                        let page = if list == 0 {
+                            &mut self.mods_list_page
+                        } else {
+                            &mut self.mod_registry_page
+                        };
+                        let at = (*page).min(last);
+                        *page = if moved < 0.0 {
+                            (at + 1).min(last)
+                        } else {
+                            at.saturating_sub(1)
+                        };
+                    }
+                    Some((_, None)) => {}
+                    None => {
+                        let max = self.scroll_max.get() as f32;
+                        self.tab_scroll
+                            .set((self.tab_scroll.get() - delta_x).clamp(0.0, max));
+                    }
+                }
                 return;
             }
             (false, Route::Home) => 16.0,
@@ -410,6 +475,16 @@ impl MobileLauncher {
             let at = (self.page_offset() as f32 + rows).clamp(0.0, max);
             self.page_scroll = (self.route, at as usize);
         }
+    }
+
+    /// A drag began at `at` (dp). On Mods, one begun on a list turns its pages ([`Self::scroll`]);
+    /// one above them scrolls the profile tabs.
+    pub fn drag_from(&mut self, at: (f32, f32)) {
+        self.swipe = self
+            .mod_lists
+            .get()
+            .filter(|&(top, _)| self.route == Route::Mods && at.1 >= top)
+            .map(|(_, split)| (usize::from(at.0 >= split), Some(0.0)));
     }
 
     /// A sign-in that failed, or the welcome screen's one still running, is dropped before
@@ -982,11 +1057,8 @@ impl MobileLauncher {
                     self.mods_error = Some(err);
                 }
             }
-            ButtonId::ProfileModsPrev => {
-                self.mods_list_page = self.mods_list_page.saturating_sub(1);
-            }
             ButtonId::ProfileModsNext => {
-                self.mods_list_page = self.mods_list_page.saturating_add(1);
+                self.mods_list_page = (self.mods_list_page + 1) % self.mod_pages.get()[0].max(1);
             }
             ButtonId::FocusModSearch => {
                 self.mod_search_focused = true;
@@ -1008,11 +1080,9 @@ impl MobileLauncher {
                     }
                 }
             }
-            ButtonId::RegistryModsPrev => {
-                self.mod_registry_page = self.mod_registry_page.saturating_sub(1);
-            }
             ButtonId::RegistryModsNext => {
-                self.mod_registry_page = self.mod_registry_page.saturating_add(1);
+                self.mod_registry_page =
+                    (self.mod_registry_page + 1) % self.mod_pages.get()[1].max(1);
             }
             ButtonId::RenameTabProfile => {
                 let pid = self.effective_mods_profile_id(&self.backend.profiles());

@@ -980,8 +980,15 @@ impl HudAtlas {
     /// transparent black. Nothing from a pack: the boot screen draws with
     /// the theme's bundled faces, so the font here has no sheets to read.
     pub fn boot() -> Self {
-        let (width, height) = (1024, 1024);
-        let text_rows = 512;
+        Self::text_only(1024, 1024, 512)
+    }
+    /// Meridian: the launcher's atlas, the boot screen's with the full atlas's room for text
+    /// (`horizon/ui-text`, 2048x1024): its pages draw only theme text and fills, so it packs no
+    /// game textures (0.3 s of the A14's launcher start, 0.7 s of the A32's).
+    pub fn launcher() -> Self {
+        Self::text_only(2048, 1092, 1024)
+    }
+    fn text_only(width: u32, height: u32, text_rows: u32) -> Self {
         let glyph_top = text_rows + 4;
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         // The white sprite the fills and the font's underline pass sample.

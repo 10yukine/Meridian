@@ -6,7 +6,7 @@ use super::widgets::{
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{Account, Setup, SkinUpload};
-use crate::ui_theme::{self, Face};
+use crate::ui_theme::{self, Face, color};
 
 impl MobileLauncher {
     /// The account's skin: a chosen PNG goes to a Microsoft account's profile, or stays on this
@@ -255,73 +255,82 @@ impl MobileLauncher {
             cy += hdr_h + if compact_v { 10.0 } else { 18.0 };
         }
 
-        let row_h: f32 = if compact_v { 32.0 } else { 46.0 };
-        let row_step: f32 = if compact_v { 36.0 } else { 54.0 };
-        let gap = 8.0;
-        let half_w = ((inner_w - gap) * 0.5).floor();
-        let ctl_h = (row_h - 6.0).max(26.0);
-        let ctl_w = (half_w * 0.46).clamp(110.0, 184.0);
+        // One list: each row's name on the left, its control in one column on the right that
+        // every row shares.
+        let row_h: f32 = if compact_v { 40.0 } else { 46.0 };
+        let ctl_h: f32 = if compact_v { 30.0 } else { 34.0 };
+        let col_w = (inner_w * 0.42).clamp(200.0, 320.0);
+        let col_x = inner_x + inner_w - col_w;
         let card_end = cy_top + card_h - 6.0;
+        let ctl_y = |cy: f32| cy + ((row_h - ctl_h) * 0.5).round();
         // Typing the game's arguments with the keyboard up: that field is all that shows.
         let typing_args = self.game_args_focused && avail_h < 220.0;
+        let ui_size = ui_theme::sizes().ui;
 
-        // A row's name and the hairline under it. Its control or value goes on its right.
-        let plate = |ui: &mut Canvas<'_, '_>, cx: f32, cy: f32, cw: f32, name: &str| {
+        // A row's name, and the hairline under the row (`h` tall).
+        let name = |ui: &mut Canvas<'_, '_>, cy: f32, h: f32, text: &str| {
             if let Some(p) = ui.paint() {
-                p.rounded(cx, cy + row_h - 1.0, cw, 1.0, 0.0, palette::border_subtle());
+                let line = palette::border_subtle();
+                p.rounded(inner_x, cy + h - 1.0, inner_w, 1.0, 0.0, line);
                 p.text_line(
                     Face::Medium,
-                    ui_theme::sizes().ui,
+                    ui_size,
                     row_h,
-                    cx,
+                    inner_x,
                     cy,
                     palette::text(),
-                    name,
+                    text,
                 );
             }
         };
-        let value = |ui: &mut Canvas<'_, '_>, cx: f32, cy: f32, cw: f32, text: &str, ink: u32| {
+        // A fact at the column's right end.
+        let value = |ui: &mut Canvas<'_, '_>, cy: f32, text: &str, ink: u32| {
             if let Some(p) = ui.paint() {
-                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), text, cw * 0.58);
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), text, col_w);
                 let tw = p.measure(Face::Regular, ui_theme::small(), &fit);
-                p.text_line(
-                    Face::Regular,
-                    ui_theme::small(),
-                    row_h,
-                    cx + cw - tw,
-                    cy,
-                    ink,
-                    &fit,
+                let tx = inner_x + inner_w - tw;
+                p.text_line(Face::Regular, ui_theme::small(), row_h, tx, cy, ink, &fit);
+            }
+        };
+        // Buttons at the column's right end, each as wide as its label.
+        let buttons = |ui: &mut Canvas<'_, '_>,
+                       hits: &mut Vec<HitRect>,
+                       cy: f32,
+                       items: &[(ButtonId, &str)]| {
+            let mut bx = inner_x + inner_w;
+            for &(id, label) in items.iter().rev() {
+                let bw = (ui.ro().measure(Face::Medium, ui_size, label) + 32.0).max(84.0);
+                bx -= bw;
+                draw_button(
+                    ui,
+                    hits,
+                    id,
+                    bx,
+                    ctl_y(cy),
+                    bw,
+                    ctl_h,
+                    Tone::Secondary,
+                    label,
                 );
+                bx -= 8.0;
             }
         };
 
-        // The launcher's state, two cells to a row.
         let reclaim = self.backend.reclaimable().filter(|&bytes| bytes > 0);
         let offer = matches!(setup, Setup::Ready).then_some(reclaim).flatten();
-        let free_shown = !onboarding && (offer.is_some() || self.freed.is_some());
-        #[derive(Clone, Copy)]
-        enum Cell {
-            Font,
-            FreeSpace,
-        }
-        let cells: Vec<Cell> = [Some(Cell::Font), free_shown.then_some(Cell::FreeSpace)]
-            .into_iter()
-            .flatten()
-            .collect();
+        let full = !onboarding && !typing_args;
+        let free_shown = full && (offer.is_some() || self.freed.is_some());
         let error_h = if self.game_args_error.is_some() {
-            14.0
+            18.0
         } else {
             0.0
         };
         // The rows under the title, as a drag scrolled them: rows scrolled past and rows past the
         // card's end aren't drawn, and how many are below sets how far a drag goes.
-        let total = if typing_args {
-            0
-        } else {
-            cells.len().div_ceil(2)
-        } + usize::from(!onboarding)
-            + 3 * usize::from(!onboarding && !typing_args);
+        let total = usize::from(!typing_args)
+            + usize::from(!onboarding)
+            + usize::from(free_shown)
+            + 4 * usize::from(full);
         let mut rows = Rows {
             skip: if typing_args {
                 0
@@ -333,70 +342,48 @@ impl MobileLauncher {
             y: cy,
             end: card_end,
         };
-        if !typing_args {
-            for pair in cells.chunks(2) {
-                let Some(ccy) = rows.next(row_step, row_h) else {
-                    continue;
-                };
-                for (i, cell) in pair.iter().enumerate() {
-                    let cx = inner_x + i as f32 * (half_w + gap);
-                    let ctl_x = cx + half_w - 6.0 - ctl_w;
-                    let ctl_y = ccy + ((row_h - ctl_h) * 0.5).round();
-                    match cell {
-                        Cell::Font => {
-                            plate(ui, cx, ccy, half_w, "Launcher Font");
-                            // Modern (Geist) by default; the Minecraft pixel font once 26.3's art is
-                            // in (persisted in horizon.txt via ui_theme::preference).
-                            let pixel_font = ui_theme::pixel_font();
-                            let label = if pixel_font && ui.ro().pack_font_available() {
-                                "Pixel (Minecraft)"
-                            } else if pixel_font {
-                                "Pixel (after 26.3)"
-                            } else {
-                                "Modern (Geist)"
-                            };
-                            let tone = if pixel_font {
-                                Tone::Banner
-                            } else {
-                                Tone::Secondary
-                            };
-                            let id = ButtonId::ToggleLauncherFont;
-                            draw_button(ui, hits, id, ctl_x, ctl_y, ctl_w, ctl_h, tone, label);
-                        }
-                        // What only installing uses, offered once the game is installed and the
-                        // cache measured; after freeing, what happened.
-                        Cell::FreeSpace => {
-                            plate(ui, cx, ccy, half_w, "Free Up Space");
-                            match (&self.freed, offer) {
-                                (Some(Err(err)), _) => value(ui, cx, ccy, half_w, err, col_danger),
-                                (_, Some(bytes)) => draw_button(
-                                    ui,
-                                    hits,
-                                    ButtonId::FreeSpace,
-                                    ctl_x,
-                                    ctl_y,
-                                    ctl_w,
-                                    ctl_h,
-                                    Tone::Secondary,
-                                    &format!("Free {}", format_size(bytes)),
-                                ),
-                                (Some(Ok(bytes)), None) => {
-                                    let text = format!("Freed {}", format_size(*bytes));
-                                    value(ui, cx, ccy, half_w, &text, col_success);
-                                }
-                                (None, None) => {}
-                            }
-                        }
-                    }
+
+        // Modern or Pixel, side by side: the one not chosen takes the tap.
+        if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
+            name(ui, cy, row_h, "Launcher Font");
+            let pixel = ui_theme::pixel_font();
+            let (by, half) = (ctl_y(cy), col_w * 0.5);
+            if let Some(p) = ui.paint() {
+                p.rounded(col_x, by, col_w, ctl_h, 10.0, palette::surface());
+                p.border(col_x, by, col_w, ctl_h, 10.0, palette::border());
+                let chosen_x = col_x + if pixel { half } else { 0.0 };
+                let chosen = color::with_alpha(palette::accent(), 0.26);
+                p.rounded(
+                    chosen_x + 3.0,
+                    by + 3.0,
+                    half - 6.0,
+                    ctl_h - 6.0,
+                    7.0,
+                    chosen,
+                );
+                for (i, label) in ["Modern", "Pixel"].into_iter().enumerate() {
+                    let ink = if (i == 1) == pixel {
+                        palette::text()
+                    } else {
+                        palette::muted()
+                    };
+                    let tw = p.measure(Face::Medium, ui_size, label);
+                    let lx = col_x + i as f32 * half + ((half - tw) * 0.5).round();
+                    p.text_line(Face::Medium, ui_size, ctl_h, lx, by, ink, label);
                 }
             }
+            hits.push(HitRect {
+                id: ButtonId::ToggleLauncherFont,
+                x: col_x + if pixel { 0.0 } else { half },
+                y: by,
+                w: half,
+                h: ctl_h,
+            });
         }
 
-        // The game's arguments, below everything: words, "quoted words" as one.
-        if !onboarding && let Some(cy) = rows.next(row_step + error_h, row_h + error_h) {
-            let name = "Game Arguments";
-            plate(ui, inner_x, cy, inner_w, name);
-            let name_w = ui.ro().measure(Face::Medium, ui_theme::sizes().ui, name) + 16.0;
+        // The game's arguments: words, "quoted words" as one; why they were refused, under them.
+        if !onboarding && let Some(cy) = rows.next(row_h + error_h, row_h + error_h) {
+            name(ui, cy, row_h + error_h, "Game Arguments");
             let saved = self.backend.game_args();
             let text = if self.game_args_focused {
                 self.game_args_draft.as_str()
@@ -407,106 +394,85 @@ impl MobileLauncher {
                 ui,
                 hits,
                 ButtonId::FocusGameArgs,
-                inner_x + name_w,
-                cy + 3.0,
-                inner_w - name_w - 4.0,
-                row_h - 6.0,
+                col_x,
+                ctl_y(cy),
+                col_w,
+                ctl_h,
                 if text.is_empty() { "None" } else { "" },
                 text,
                 false,
                 self.game_args_focused,
             );
-            if let Some(err) = &self.game_args_error {
-                if let Some(p) = ui.paint() {
-                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, inner_w);
-                    p.text_line(
-                        Face::Regular,
-                        ui_theme::small(),
-                        18.0,
-                        inner_x + 14.0,
-                        cy + row_step - 4.0,
-                        col_danger,
-                        &fit,
-                    );
-                }
+            if let Some(err) = &self.game_args_error
+                && let Some(p) = ui.paint()
+            {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, inner_w);
+                let tw = p.measure(Face::Regular, ui_theme::small(), &fit);
+                let tx = inner_x + inner_w - tw;
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    error_h,
+                    tx,
+                    cy + row_h - 4.0,
+                    col_danger,
+                    &fit,
+                );
             }
         }
 
-        // About, underneath, and the line under it.
-        if !onboarding && !typing_args {
-            if let Some(cy) = rows.next(row_step, row_h) {
-                plate(ui, inner_x, cy, inner_w, "About");
-                let links_w = 2.0 * ctl_w.min(140.0) + 8.0;
-                let link_w = ctl_w.min(140.0);
-                let link_y = cy + ((row_h - ctl_h) * 0.5).round();
-                let right = inner_x + inner_w - 6.0;
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::OpenLicenses,
-                    right - link_w,
-                    link_y,
-                    link_w,
-                    ctl_h,
-                    Tone::Secondary,
-                    "Licenses",
-                );
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::OpenSourceCode,
-                    right - links_w,
-                    link_y,
-                    link_w,
-                    ctl_h,
-                    Tone::Secondary,
-                    "Source Code",
-                );
-                if let Some(p) = ui.paint() {
-                    let name_w = p.measure(Face::Medium, ui_theme::sizes().ui, "About") + 16.0;
-                    let about = concat!(
-                        "Meridian ",
-                        env!("CARGO_PKG_VERSION"),
-                        "  ·  Minecraft 26.3  ·  Horizon engine"
-                    );
-                    let room = (inner_w - name_w - links_w - 20.0).max(0.0);
-                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), about, room);
-                    p.text_line(
-                        Face::Regular,
-                        ui_theme::small(),
-                        row_h,
-                        inner_x + name_w,
-                        cy,
-                        palette::body(),
-                        &fit,
-                    );
+        // What only installing uses, offered once the game is installed and the cache measured;
+        // after freeing, what happened.
+        if free_shown && let Some(cy) = rows.next(row_h, row_h) {
+            name(ui, cy, row_h, "Free Up Space");
+            match (&self.freed, offer) {
+                (Some(Err(err)), _) => value(ui, cy, err, col_danger),
+                (_, Some(bytes)) => {
+                    let label = format!("Free {}", format_size(bytes));
+                    buttons(ui, hits, cy, &[(ButtonId::FreeSpace, label.as_str())]);
                 }
+                (Some(Ok(bytes)), None) => {
+                    let text = format!("Freed {}", format_size(*bytes));
+                    value(ui, cy, &text, col_success);
+                }
+                (None, None) => {}
             }
-            if let (Some(cy), Some(p)) = (rows.next(18.0, 16.0), ui.paint()) {
+        }
+
+        if full {
+            if let Some(cy) = rows.next(row_h, row_h) {
+                name(ui, cy, row_h, "Version");
+                let version = concat!(
+                    "Meridian ",
+                    env!("CARGO_PKG_VERSION"),
+                    "  ·  Minecraft 26.3"
+                );
+                value(ui, cy, version, palette::body());
+            }
+            if let Some(cy) = rows.next(row_h, row_h) {
+                name(ui, cy, row_h, "Open Source");
+                let links = [
+                    (ButtonId::OpenSourceCode, "Source Code"),
+                    (ButtonId::OpenLicenses, "Licenses"),
+                ];
+                buttons(ui, hits, cy, &links);
+            }
+            if let Some(cy) = rows.next(row_h, row_h) {
+                name(ui, cy, row_h, "Quit Launcher");
+                buttons(ui, hits, cy, &[(ButtonId::Quit, "Quit")]);
+            }
+            if let (Some(cy), Some(p)) = (rows.next(22.0, 20.0), ui.paint()) {
                 let note = "Not an official Minecraft product. Not approved by or associated \
                             with Mojang or Microsoft.";
                 let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), note, inner_w);
                 p.text_line(
                     Face::Regular,
                     ui_theme::small(),
-                    18.0,
+                    22.0,
                     inner_x,
-                    cy - 2.0,
+                    cy + 4.0,
                     palette::muted(),
                     &fit,
-                );
-            }
-            if let Some(cy) = rows.next(row_step, row_h) {
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::Quit,
-                    inner_x + inner_w - 136.0,
-                    cy,
-                    136.0,
-                    row_h,
-                    Tone::Secondary,
-                    "Quit Launcher",
                 );
             }
         }

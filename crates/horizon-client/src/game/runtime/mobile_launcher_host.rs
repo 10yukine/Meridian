@@ -103,18 +103,22 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
     ));
     let backend = Real::new(root.to_path_buf());
     eprintln!("Meridian: launcher backend after {} ms", started.elapsed().as_millis());
-    let gui = UiResources {
-        atlas: HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
-            launch::resources_dir(root),
-        ))?,
-        panorama: Arc::new(horizon_client::gfx::panorama::Faces::colour([0; 4])),
-        splashes: Arc::from(""),
-    };
-    eprintln!("Meridian: launcher atlas after {} ms", started.elapsed().as_millis());
     let mut screen = MobileLauncher::new(Box::new(backend));
     if launch::closed_unexpectedly(root) {
         screen.note("The game closed unexpectedly last time.");
     }
+    // Text and fills are all the launcher draws: no game textures, unless its pixel font (the
+    // pack's font sheets) is on.
+    let gui = UiResources {
+        atlas: if horizon_client::ui_theme::pixel_font() {
+            full_atlas(root)?
+        } else {
+            HudAtlas::launcher()
+        },
+        panorama: Arc::new(horizon_client::gfx::panorama::Faces::colour([0; 4])),
+        splashes: Arc::from(""),
+    };
+    eprintln!("Meridian: launcher atlas after {} ms", started.elapsed().as_millis());
     let mut host = Host {
         root: root.to_path_buf(),
         window: None,
@@ -140,6 +144,13 @@ pub fn run(root: &std::path::Path) -> Result<bool> {
     };
     super::event_loop::new_event_loop()?.run_app(&mut host)?;
     host.error.map_or(Ok(host.play), Err)
+}
+
+/// The atlas of the prepared game files, the pack's font sheets in it.
+fn full_atlas(root: &std::path::Path) -> Result<HudAtlas> {
+    Ok(HudAtlas::build(
+        &horizon_assets::resource_source::ResourceSource::directory(launch::resources_dir(root)),
+    )?)
 }
 
 impl Host {
@@ -231,6 +242,7 @@ impl Host {
         if self.play_requested_at.is_some() {
             return;
         }
+        let pixel = horizon_client::ui_theme::pixel_font();
         match self.with_ui(|screen, ui| screen.click(ui)) {
             Some(Action::Play) => {
                 self.prepare_game_files();
@@ -259,8 +271,51 @@ impl Host {
             Some(Action::Quit) => event_loop.exit(),
             None => {}
         }
+        if !pixel
+            && horizon_client::ui_theme::pixel_font()
+            && !horizon_client::ui_theme::pack_font_ready(&self.gui.atlas)
+        {
+            self.use_full_atlas();
+        }
         // A tap on a field brings the keyboard back even after Back put it away.
         self.sync_keyboard(true);
+    }
+
+    /// The pixel font turned on: the launcher's atlas has no font sheets, so the full one is
+    /// built and a renderer made for it (about a second, once), as the loading screen swaps its
+    /// atlas. Without one, the launcher's atlas stays, with its modern font.
+    fn use_full_atlas(&mut self) {
+        let (Ok(atlas), Some(window)) = (full_atlas(&self.root), self.window.clone()) else {
+            return;
+        };
+        // A window takes one surface at a time (Android: ERROR_NATIVE_WINDOW_IN_USE_KHR).
+        if let Some(renderer) = &mut self.renderer {
+            renderer.release_surface();
+        }
+        match loading_renderer(
+            window,
+            false,
+            Some(&atlas),
+            Some(&self.gui.panorama),
+            self.renderer.as_ref(),
+            self.settings.horizon.api,
+            false,
+        ) {
+            Ok(renderer) => {
+                self.renderer = Some(renderer);
+                self.gui.atlas = atlas;
+                // The new atlas is where the old one was: its glyphs are drawn again.
+                horizon_client::ui_theme::reset_atlas();
+            }
+            Err(error) => {
+                eprintln!("Meridian: no renderer for the pixel font: {error}");
+                if let Some(renderer) = &mut self.renderer
+                    && let Err(error) = renderer.recreate_surface()
+                {
+                    eprintln!("Meridian: the launcher's surface did not come back: {error}");
+                }
+            }
+        }
     }
 
     /// Check the Bedrock art first, since replacing it can invalidate the prepared data file.
@@ -373,6 +428,9 @@ impl Host {
                 if !finger.dragging && moved >= DRAG * scale {
                     finger.dragging = true;
                     finger.last = at;
+                    // Where it went down decides what it moves (on Mods: a list's pages or the tabs).
+                    let down = (finger.down.0 / density, finger.down.1 / density);
+                    self.screen.drag_from((down.0 as f32, down.1 as f32));
                 }
                 if finger.dragging {
                     self.screen.scroll(
@@ -552,7 +610,7 @@ impl ApplicationHandler for Host {
             self.hand_off(event_loop);
         }
         // A frame after input at once; without input, every frame while a controller moves the
-        // pointer, ten a second while an install, a sign-in or the game's files move on, and
+        // pointer or page dots pan, ten a second while an install, a sign-in or the game's files move on, and
         // one a second otherwise (sizes measured, a head downloaded), so an idle launcher
         // leaves the phone's CPU alone.
         let pad_moving = self
@@ -561,7 +619,7 @@ impl ApplicationHandler for Host {
         let working = self.screen.moving()
             || self.play_requested_at.is_some()
             || matches!(self.game_files, GameFiles::Writing(_));
-        let next = if pad_moving {
+        let next = if pad_moving || self.screen.animating() {
             16
         } else if working {
             100

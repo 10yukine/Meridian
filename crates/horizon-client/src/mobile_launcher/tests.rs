@@ -1431,6 +1431,131 @@ fn mods_tabs_scroll_sideways_on_one_row_and_a_new_profiles_name_shows() {
 }
 
 #[test]
+fn mods_lists_turn_pages_by_swipe_and_show_dots_instead_of_buttons() {
+    let info = |i: usize| ModInfo {
+        id: format!("mod-{i}"),
+        name: format!("Mod {i}"),
+        description: String::new(),
+        version: "1.0.0".into(),
+        size: 1_000,
+    };
+    let mut profiles = StubBackend::default().profiles;
+    profiles.push(Profile {
+        id: "pack".into(),
+        name: "Pack".into(),
+        description: String::new(),
+        mods: 7,
+        size: 1_000_000,
+        worlds: 0,
+        state: ProfileState::Installed,
+    });
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        profiles,
+        selected_profile: "pack".into(),
+        // The profile's mods aren't the registry's, so every result has its Add.
+        mods: (10..17)
+            .map(|i| ProfileMod {
+                info: info(i),
+                enabled: true,
+            })
+            .collect(),
+        search: ModSearch::Done((0..7).map(info).collect()),
+        ..StubBackend::default()
+    }));
+    // The A14's screen in dp.
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    let results = |l: &MobileLauncher| -> Vec<usize> {
+        shown(l, size)
+            .into_iter()
+            .filter_map(|id| match id {
+                ButtonId::AddRegistryMod(i) => Some(i),
+                _ => None,
+            })
+            .collect()
+    };
+    // Three results a page, the dots under them; the profile's list pages too.
+    assert_eq!(results(&l), [0, 1, 2]);
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::RegistryModsNext) && ids.contains(&ButtonId::ProfileModsNext));
+    assert_hits_fit_without_overlap(&l, size, "mods-pages");
+    let row = with_ui(size, (0.0, 0.0), |ui| {
+        let hits = l.layout(&mut Canvas::Hit(ui));
+        let h = hits
+            .iter()
+            .find(|h| h.id == ButtonId::AddRegistryMod(0))
+            .unwrap();
+        (h.x - 40.0, h.y + h.h * 0.5)
+    });
+    // A swipe left on the registry list: the next page once it has moved far enough, and one
+    // page a swipe however far it goes.
+    l.drag_from(row);
+    l.scroll(-25.0, 0.0);
+    assert_eq!(results(&l), [0, 1, 2]);
+    l.scroll(-25.0, 0.0);
+    assert_eq!(results(&l), [3, 4, 5]);
+    l.scroll(-400.0, 0.0);
+    assert_eq!(results(&l), [3, 4, 5]);
+    // A swipe right shows the page before; the profile's own list stayed on its first.
+    l.drag_from(row);
+    l.scroll(60.0, 0.0);
+    assert_eq!(results(&l), [0, 1, 2]);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleProfileMod(0)));
+    // A drag on the tabs leaves the pages be.
+    l.drag_from((row.0, 20.0));
+    l.scroll(-400.0, 0.0);
+    assert_eq!(results(&l), [0, 1, 2]);
+    // A tap on the dots shows the next page, and the first after the last.
+    click_button(&mut l, size, ButtonId::RegistryModsNext);
+    click_button(&mut l, size, ButtonId::RegistryModsNext);
+    assert_eq!(results(&l), [6]);
+    click_button(&mut l, size, ButtonId::RegistryModsNext);
+    assert_eq!(results(&l), [0, 1, 2]);
+    assert_eq!(super::mods::pages(3, 0.0, 160.0, 48.0), (3, 1, 152.0));
+    assert_eq!(super::mods::pages(4, 0.0, 160.0, 48.0), (3, 2, 144.0));
+    // No room for the dots: the rows that fit, and the swipe still turns the page.
+    assert_eq!(super::mods::pages(4, 0.0, 60.0, 48.0), (1, 4, 52.0));
+
+    // Five dots at most: the page shown keeps the middle, and an end dot is half size while
+    // more pages lie past it.
+    let row = |shown: f32, pages: usize| -> Vec<(usize, f32, f32)> {
+        super::mods::dot_row(shown, pages)
+            .into_iter()
+            .map(|(i, _, size, lit)| (i, size, lit))
+            .collect()
+    };
+    assert_eq!(
+        row(0.0, 16),
+        [
+            (0, 1.0, 1.0),
+            (1, 1.0, 0.0),
+            (2, 1.0, 0.0),
+            (3, 1.0, 0.0),
+            (4, 0.5, 0.0)
+        ]
+    );
+    let middle = row(8.0, 16);
+    assert_eq!(
+        middle.iter().map(|d| d.0).collect::<Vec<_>>(),
+        [6, 7, 8, 9, 10]
+    );
+    assert!(middle[0].1 == 0.5 && middle[4].1 == 0.5 && middle[2] == (8, 1.0, 1.0));
+    let last = row(15.0, 16);
+    assert!(last[0] == (11, 0.5, 0.0) && last[4] == (15, 1.0, 1.0));
+    assert_eq!(row(1.0, 3), [(0, 1.0, 0.0), (1, 1.0, 1.0), (2, 1.0, 0.0)]);
+    // Halfway through a pan: the dot leaving shrinks, the one coming grows, both pages half lit.
+    let panning = row(7.5, 16);
+    assert_eq!(panning.len(), 6);
+    assert!(panning[0].0 == 5 && panning[0].1 < 0.5 && panning[5].0 == 10);
+    assert!(panning[2].2 == 0.5 && panning[3].2 == 0.5);
+}
+
+#[test]
 fn vanilla_note_drops_its_badge_then_its_explanation_when_room_runs_short() {
     let parts = [76.0, 36.0, 30.0];
     assert_eq!(super::mods::fit_note(200.0, parts), parts);

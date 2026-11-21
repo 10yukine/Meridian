@@ -24,6 +24,8 @@ impl MobileLauncher {
     ) {
         let ultra_v = avail_h < 150.0;
         let compact_v = avail_h < 300.0;
+        self.mod_lists.set(None);
+        self.mod_pages.set([1, 1]);
 
         let ix = x;
         let iw = w;
@@ -354,6 +356,7 @@ impl MobileLauncher {
             let rule_x = (ix + pane_w + pane_gap * 0.5).round();
             p.rounded(rule_x, cy, 1.0, pane_h, 0.0, palette::border_subtle());
         }
+        self.mod_lists.set(Some((cy, right_x - pane_gap * 0.5)));
 
         self.draw_profile_mods_pane(ui, hits, ix, cy, pane_w, pane_h, &pid, compact_v);
         self.draw_registry_pane(
@@ -450,24 +453,17 @@ impl MobileLauncher {
         }
 
         let row_h: f32 = if compact_v { 44.0 } else { 48.0 };
-        let row_gap: f32 = 0.0;
         let bottom_limit = y + h - 8.0;
         let total_space = (bottom_limit - py).max(0.0);
         if total_space < row_h {
             return;
         }
-        let fit_all = ((total_space + row_gap) / (row_h + row_gap))
-            .floor()
-            .max(1.0) as usize;
-        let needs_pager = mods.len() > fit_all && total_space >= row_h + 34.0;
-        let pager_h: f32 = if needs_pager { 34.0 } else { 0.0 };
-        let avail = (total_space - pager_h).max(row_h);
-        let per_page = ((avail + row_gap) / (row_h + row_gap)).floor().max(1.0) as usize;
-        let total_pages = mods.len().max(1).div_ceil(per_page);
+        let (per_page, total_pages, rows_limit) = pages(mods.len(), py, y + h, row_h);
+        self.mod_pages.set([total_pages, self.mod_pages.get()[1]]);
         let page = self.mods_list_page.min(total_pages - 1);
+        let shown = self.dots_at(0, page);
         let start = page * per_page;
         let end = (start + per_page).min(mods.len());
-        let rows_limit = bottom_limit - pager_h;
 
         let rem_w = 78.0;
         let tog_w = 50.0;
@@ -528,38 +524,20 @@ impl MobileLauncher {
                 },
                 if pm.enabled { "ON" } else { "OFF" },
             );
-            py += row_h + row_gap;
+            py += row_h;
         }
 
-        if needs_pager && total_pages > 1 {
-            let fy = y + h - 34.0;
-            if page > 0 {
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::ProfileModsPrev,
-                    px,
-                    fy,
-                    70.0,
-                    28.0,
-                    Tone::Secondary,
-                    "Prev",
-                );
-            }
-            if page + 1 < total_pages {
-                draw_button(
-                    ui,
-                    hits,
-                    ButtonId::ProfileModsNext,
-                    px + pw - 70.0,
-                    fy,
-                    70.0,
-                    28.0,
-                    Tone::Secondary,
-                    "Next",
-                );
-            }
-        }
+        draw_page_dots(
+            ui,
+            hits,
+            ButtonId::ProfileModsNext,
+            px,
+            rows_limit,
+            y + h,
+            pw,
+            shown,
+            total_pages,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -685,24 +663,17 @@ impl MobileLauncher {
                     return;
                 }
                 let row_h: f32 = if compact_v { 40.0 } else { 48.0 };
-                let row_gap: f32 = 0.0;
                 let bottom_limit = y + h - 8.0;
                 let total_space = (bottom_limit - py).max(0.0);
                 if total_space < row_h {
                     return;
                 }
-                let fit_all = ((total_space + row_gap) / (row_h + row_gap))
-                    .floor()
-                    .max(1.0) as usize;
-                let needs_pager = results.len() > fit_all && total_space >= row_h + 34.0;
-                let pager_h: f32 = if needs_pager { 34.0 } else { 0.0 };
-                let avail = (total_space - pager_h).max(row_h);
-                let per_page = ((avail + row_gap) / (row_h + row_gap)).floor().max(1.0) as usize;
-                let total_pages = results.len().max(1).div_ceil(per_page);
+                let (per_page, total_pages, rows_limit) = pages(results.len(), py, y + h, row_h);
+                self.mod_pages.set([self.mod_pages.get()[0], total_pages]);
                 let page = self.mod_registry_page.min(total_pages - 1);
+                let shown = self.dots_at(1, page);
                 let start = page * per_page;
                 let end = (start + per_page).min(results.len());
-                let rows_limit = bottom_limit - pager_h;
 
                 for (i, m) in results.iter().enumerate().skip(start).take(end - start) {
                     if py + row_h > rows_limit + 0.5 {
@@ -759,39 +730,105 @@ impl MobileLauncher {
                             "+ Add",
                         );
                     }
-                    py += row_h + row_gap;
+                    py += row_h;
                 }
 
-                if needs_pager && total_pages > 1 {
-                    let fy = y + h - 34.0;
-                    if page > 0 {
-                        draw_button(
-                            ui,
-                            hits,
-                            ButtonId::RegistryModsPrev,
-                            px,
-                            fy,
-                            70.0,
-                            28.0,
-                            Tone::Secondary,
-                            "Prev",
-                        );
-                    }
-                    if page + 1 < total_pages {
-                        draw_button(
-                            ui,
-                            hits,
-                            ButtonId::RegistryModsNext,
-                            px + pw - 70.0,
-                            fy,
-                            70.0,
-                            28.0,
-                            Tone::Secondary,
-                            "Next",
-                        );
-                    }
-                }
+                draw_page_dots(
+                    ui,
+                    hits,
+                    ButtonId::RegistryModsNext,
+                    px,
+                    rows_limit,
+                    y + h,
+                    pw,
+                    shown,
+                    total_pages,
+                );
             }
+        }
+    }
+}
+
+/// The page dots' strip at the bottom of a list that doesn't fit.
+const DOTS_H: f32 = 16.0;
+
+/// A list of `count` rows of `row_h` from `top` down to its pane's `bottom`: how many rows a
+/// page shows, how many pages, and where the rows end. One that doesn't fit keeps the pane's
+/// last [`DOTS_H`] for its page dots, when it has the room.
+pub(super) fn pages(count: usize, top: f32, bottom: f32, row_h: f32) -> (usize, usize, f32) {
+    let fits = |end: f32| (((end - top) / row_h).floor() as usize).max(1);
+    let mut end = bottom - 8.0;
+    if count > fits(end) && bottom - DOTS_H - top >= row_h {
+        end = bottom - DOTS_H;
+    }
+    let per_page = fits(end);
+    (per_page, count.max(1).div_ceil(per_page), end)
+}
+
+/// At most this many page dots show; past it the row pans.
+const MAX_DOTS: usize = 5;
+/// How long the dots take to pan to a page turned to.
+pub(super) const DOTS_SECS: f32 = 0.22;
+
+/// The page dots of `pages` pages with the row at `shown` (a page, or between two while it
+/// pans): each dot's page, its place in the row (0 to 4, fractions while panning), its size (1
+/// whole; the row's end dots shrink while more pages lie past them) and how lit it is.
+pub(super) fn dot_row(shown: f32, pages: usize) -> Vec<(usize, f32, f32, f32)> {
+    let span = pages.min(MAX_DOTS) as f32;
+    let past = pages as f32 - span;
+    // The row keeps the page shown in its middle, between its ends.
+    let start = (shown - (span - 1.0) * 0.5).clamp(0.0, past);
+    let (more_left, more_right) = (start.min(1.0), (past - start).clamp(0.0, 1.0));
+    // A dot `d` places from a row end that has more past it: half size at the end, gone past it.
+    let size = |d: f32, more: f32| 1.0 - more * (1.0 - (0.5 + 0.5 * d).clamp(0.0, 1.0));
+    (0..pages)
+        .filter_map(|i| {
+            let at = i as f32 - start;
+            let s = size(at, more_left).min(size(span - 1.0 - at, more_right));
+            let lit = (1.0 - (i as f32 - shown).abs()).max(0.0);
+            (at > -1.0 && at < span && s > 0.05).then_some((i, at, s, lit))
+        })
+        .collect()
+}
+
+/// Under a list of more than one page, between the rows' `end` and the pane's `bottom`: up to
+/// five dots, the page shown lit ([`dot_row`], at `shown`). A swipe on the list turns its page;
+/// a tap here shows the next, for a controller or mouse.
+#[allow(clippy::too_many_arguments)]
+fn draw_page_dots(
+    ui: &mut Canvas<'_, '_>,
+    hits: &mut Vec<HitRect>,
+    id: ButtonId,
+    x: f32,
+    end: f32,
+    bottom: f32,
+    w: f32,
+    shown: f32,
+    pages: usize,
+) {
+    if pages < 2 || bottom - end < DOTS_H - 0.5 {
+        return;
+    }
+    let y = bottom - DOTS_H;
+    hits.push(HitRect {
+        id,
+        x,
+        y,
+        w,
+        h: DOTS_H,
+    });
+    let Some(p) = ui.paint() else { return };
+    let (dot, step) = (6.0, 14.0);
+    let span = pages.min(MAX_DOTS) as f32;
+    let left = x + (w - (span - 1.0) * step) * 0.5;
+    let mid = y + DOTS_H * 0.5;
+    for (_, at, size, lit) in dot_row(shown, pages) {
+        let (d, cx) = (dot * size, left + at * step);
+        let dim = color::with_alpha(palette::muted(), 0.45);
+        p.rounded(cx - d * 0.5, mid - d * 0.5, d, d, d * 0.5, dim);
+        if lit > 0.0 {
+            let col = color::with_alpha(palette::text(), lit);
+            p.rounded(cx - d * 0.5, mid - d * 0.5, d, d, d * 0.5, col);
         }
     }
 }
