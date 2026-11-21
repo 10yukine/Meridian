@@ -15,6 +15,7 @@ mod remembered;
 use remembered::{Remembered, Shelf};
 mod heads;
 pub(crate) mod profiles;
+mod skin_slots;
 
 const LOCK: &str = include_str!("../../../research-lock.json");
 const EXPORTER_SOURCES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/exporters.rs"));
@@ -116,6 +117,7 @@ pub struct Real {
     skin_upload: Arc<Mutex<SkinUpload>>,
     log_tail: Mutex<Option<LogTail>>,
     heads: heads::Cache,
+    skin_slots: skin_slots::Store,
     profiles: profiles::Store,
     /// [`crate::RELEASE`], kept here so tests can be a release build.
     release: bool,
@@ -149,6 +151,7 @@ impl Real {
             skin_upload: Arc::default(),
             log_tail: Mutex::default(),
             heads: heads::Cache::default(),
+            skin_slots: skin_slots::Store::default(),
             profiles,
             release: crate::RELEASE,
         };
@@ -350,7 +353,8 @@ impl Backend for Real {
                 return Err("No such account.".into());
             }
             let mut shelf = state.shelf.clone();
-            let removed = shelf.entries.remove(index).account();
+            let removed_entry = shelf.entries.remove(index);
+            let removed = removed_entry.account();
             let active_removed = shelf.active == Some(index);
             shelf.active = match shelf.active {
                 Some(active) if active == index => (!shelf.entries.is_empty()).then_some(0),
@@ -359,6 +363,9 @@ impl Backend for Real {
             };
             state.commit(shelf, self.account_file.as_deref())?;
             self.heads.remove(&removed);
+            if let Some(key) = skin_slots::account_key(&removed_entry) {
+                self.skin_slots.remove(&key);
+            }
             // Cancel any index-based restoration, whose target shifted on removal.
             self.cancel_sign_in();
             if active_removed {
@@ -673,6 +680,52 @@ impl Backend for Real {
         // Loads it with the head, if it isn't yet.
         self.player_head(player)?;
         Some((self.heads.skin(player)?, slim))
+    }
+
+    fn skin_slots(&self, player: &Account) -> [Option<SkinSlot>; 4] {
+        let entry = {
+            let state = self.identity.lock().unwrap();
+            state
+                .shelf
+                .entries
+                .iter()
+                .find(|item| item.account() == *player)
+                .cloned()
+        };
+        let Some(entry) = entry else {
+            return [None, None, None, None];
+        };
+        self.skin_slots.get(&self.root, &entry, || {
+            self.player_head(player);
+            self.heads.png(player)
+        })
+    }
+
+    fn save_skin_slot(&mut self, slot: usize, png: Vec<u8>, slim: bool) {
+        let active = {
+            let state = self.identity.lock().unwrap();
+            state
+                .shelf
+                .active
+                .and_then(|i| state.shelf.entries.get(i).cloned())
+        };
+        let Some(entry) = active else {
+            *self.skin_upload.lock().unwrap() =
+                SkinUpload::Failed("No active account.".into());
+            return;
+        };
+        let player = entry.account();
+        if let Err(e) = self
+            .skin_slots
+            .save(&self.root, &entry, slot, png.clone(), slim, || {
+                self.player_head(&player);
+                self.heads.png(&player)
+            })
+        {
+            *self.skin_upload.lock().unwrap() = SkinUpload::Failed(format!("Skin not saved: {e}"));
+            return;
+        }
+        self.use_skin(png, slim);
     }
 
     fn game_args(&self) -> String {

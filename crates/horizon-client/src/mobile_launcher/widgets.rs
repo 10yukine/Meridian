@@ -913,6 +913,23 @@ pub(super) fn draw_skin_3d(
     }
 }
 
+/// A flat 64x64 RGBA skin whose six body parts are filled and outer layers are empty, for an
+/// empty skin slot's silhouette.
+pub(super) fn blank_skin() -> &'static [u8; 64 * 64 * 4] {
+    static SKIN: std::sync::OnceLock<[u8; 64 * 64 * 4]> = std::sync::OnceLock::new();
+    SKIN.get_or_init(|| {
+        let mut rgba = [0u8; 64 * 64 * 4];
+        for (u0, v0, w, h) in [(0, 0, 32, 16), (0, 16, 56, 16), (16, 48, 32, 16)] {
+            for y in v0..v0 + h {
+                for x in u0..u0 + w {
+                    rgba[(y * 64 + x) * 4..][..4].copy_from_slice(&[113, 113, 122, 88]);
+                }
+            }
+        }
+        rgba
+    })
+}
+
 /// Tabler's `pencil`.
 pub(super) fn draw_icon_pencil(p: &mut Ui, cx: f32, cy: f32, size: f32, col: u32) {
     let paths = [
@@ -1078,6 +1095,63 @@ pub(super) fn draw_button(
         p.text_line(Face::Medium, font_size, h, lx, y, ink, &label);
     }
     hits.push(hit);
+}
+
+/// Two choices side by side (`right` chosen when true); each half with an id in `ids` takes taps.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_switch(
+    ui: &mut Canvas<'_, '_>,
+    hits: &mut Vec<HitRect>,
+    ids: [Option<ButtonId>; 2],
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    labels: [&str; 2],
+    right: bool,
+) {
+    let half = (w * 0.5).round();
+    if let Some(p) = ui.paint() {
+        p.rounded(x, y, w, h, 10.0, palette::surface());
+        p.border(x, y, w, h, 10.0, palette::border());
+        let (chosen_x, chosen_w) = if right { (x + half, w - half) } else { (x, half) };
+        let chosen = color::with_alpha(palette::accent(), 0.26);
+        p.rounded(
+            chosen_x + 3.0,
+            y + 3.0,
+            chosen_w - 6.0,
+            h - 6.0,
+            7.0,
+            chosen,
+        );
+        let ui_size = ui_theme::sizes().ui;
+        for (i, label) in labels.into_iter().enumerate() {
+            let (hx, hw) = if i == 0 { (x, half) } else { (x + half, w - half) };
+            let ink = if (i == 1) == right {
+                palette::text()
+            } else {
+                palette::muted()
+            };
+            let room = (hw - 10.0).max(16.0);
+            let size = p.fit(Face::Medium, ui_size, label, room);
+            let fit = truncate_to_fit(p, Face::Medium, size, label, room);
+            let tw = p.measure(Face::Medium, size, &fit);
+            let lx = hx + ((hw - tw) * 0.5).round();
+            p.text_line(Face::Medium, size, h, lx, y, ink, &fit);
+        }
+    }
+    for (i, id) in ids.into_iter().enumerate() {
+        if let Some(id) = id {
+            let (hx, hw) = if i == 0 { (x, half) } else { (x + half, w - half) };
+            hits.push(HitRect {
+                id,
+                x: hx,
+                y,
+                w: hw,
+                h,
+            });
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

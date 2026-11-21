@@ -1,8 +1,9 @@
 //! Skins preview and Launcher Settings views.
 
 use super::widgets::{
-    Canvas, HitRect, Tone, account_provider_tag, account_short, draw_button, draw_input_box,
-    draw_plate, draw_player_head, draw_skin_3d, format_size, palette, truncate_to_fit, wrap_lines,
+    Canvas, HitRect, Tone, account_provider_tag, account_short, blank_skin, draw_button,
+    draw_input_box, draw_plate, draw_player_head, draw_skin_3d, draw_switch, format_size, palette,
+    truncate_to_fit, wrap_lines,
 };
 use super::{ButtonId, MobileLauncher};
 use crate::launcher_backend::{Account, Setup, SkinUpload};
@@ -27,24 +28,55 @@ impl MobileLauncher {
         let compact_v = avail_h < 300.0;
 
         let ix = x;
-        let cy = y + if compact_v { 4.0 } else { 8.0 };
+        let pad_v = if compact_v { 4.0 } else { 8.0 };
+        let cy = y + pad_v;
 
-        // The whole figure, head to feet: the chosen file until it is put on, else the account's
-        // own (its face alone until that has loaded).
-        let tile_h = (y + avail_h - cy - 8.0).max(80.0);
+        // The whole figure, head to feet: the chosen file until it is put on, else the selected
+        // slot's skin, or the account's own (its face alone until that has loaded).
+        let tile_h = (y + avail_h - cy - pad_v).max(80.0);
         // Room for the figure turned and tilted: about 34 pixels tall, 18 wide.
-        let texel = ((tile_h - 20.0) / 34.0).floor().max(2.0);
+        let max_texel = (((w * 0.28) - 32.0) / 16.0).floor().max(2.0);
+        let texel = ((tile_h - 20.0) / 34.0).floor().clamp(2.0, max_texel);
         let tile_w = 16.0 * texel + 32.0;
+
+        let slots = account
+            .as_ref()
+            .map(|a| self.backend.skin_slots(a))
+            .unwrap_or_default();
+        let selected_idx = self.skin_slot.min(3);
+        let selected_slot = slots[selected_idx].as_ref();
+        let effective_slim = match (self.skin_pick.is_some() || self.skin_slim_edited, selected_slot)
+        {
+            (false, Some(slot)) => slot.slim,
+            _ => self.skin_slim,
+        };
         let skin = self
             .skin_pick
             .as_ref()
-            .map(|pick| (pick.skin.clone(), self.skin_slim))
-            .or_else(|| account.as_ref().and_then(|a| self.backend.player_skin(a)));
+            .map(|pick| (pick.skin.clone(), effective_slim))
+            .or_else(|| selected_slot.map(|slot| (slot.skin.clone(), effective_slim)))
+            .or_else(|| {
+                account
+                    .as_ref()
+                    .and_then(|a| self.backend.player_skin(a))
+                    .map(|(s, slim)| {
+                        (
+                            s,
+                            if self.skin_slim_edited {
+                                self.skin_slim
+                            } else {
+                                slim
+                            },
+                        )
+                    })
+            });
         let name = account.as_ref().map_or("Player", account_short);
         let provider = account
             .as_ref()
             .map_or("Not signed in", account_provider_tag);
-        let tx = ix + tile_w + 24.0;
+        let col_gap = if w < 760.0 { 18.0 } else { 24.0 };
+        let tx = ix + tile_w + col_gap;
+        let ctl_w = (w * 0.25).clamp(168.0, 210.0);
         // Opening Skins turns the figure in to where it rests (0.9 s).
         let (page, _, since) = self.page_motion.get();
         let turned = if page == super::Route::Skins {
@@ -77,87 +109,237 @@ impl MobileLauncher {
                     name,
                 );
             }
+            let fit_name = truncate_to_fit(p, Face::SemiBold, 20.0, name, ctl_w);
             p.text_line(
                 Face::SemiBold,
                 20.0,
                 26.0,
                 tx,
-                cy + 4.0,
+                cy + 2.0,
                 palette::text(),
-                name,
+                &fit_name,
             );
             p.text_line(
                 Face::Regular,
                 ui_theme::small(),
                 18.0,
                 tx,
-                cy + 32.0,
+                cy + 28.0,
                 palette::muted(),
                 provider,
             );
         }
 
-        let btn_h = if compact_v { 38.0 } else { 44.0 };
-        let mut by = cy + if compact_v { 58.0 } else { 66.0 };
+        let head_h = if compact_v { 50.0 } else { 58.0 };
+        let mut by = cy + head_h;
+        let btn_gap = if compact_v { 8.0 } else { 10.0 };
+        let max_btn_h = if compact_v { 38.0 } else { 42.0 };
+        let btn_h = ((tile_h - head_h - 24.0 - 2.0 * btn_gap) / 3.0)
+            .floor()
+            .clamp(28.0, max_btn_h);
         let upload = self.backend.skin_upload();
+        let mut status_room = (x + w - 22.0 - tx).max(0.0);
         let status = match account {
             Some(Account::Microsoft { .. } | Account::Offline { .. }) => {
+                let gx = tx + ctl_w + col_gap;
+                status_room = (gx - 8.0 - tx).max(ctl_w);
+
                 draw_button(
                     ui,
                     hits,
                     ButtonId::PickSkin,
                     tx,
                     by,
-                    170.0,
+                    ctl_w,
                     btn_h,
                     Tone::Secondary,
                     "Choose Skin File",
                 );
-                if self.skin_pick.is_some() {
-                    for (i, (slim, label)) in [(false, "Classic Arms"), (true, "Slim Arms")]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        draw_button(
-                            ui,
-                            hits,
-                            ButtonId::SkinArms(slim),
-                            tx + 182.0 + i as f32 * 136.0,
-                            by,
-                            128.0,
-                            btn_h,
-                            if self.skin_slim == slim {
-                                Tone::Banner
-                            } else {
-                                Tone::Ghost
-                            },
-                            label,
-                        );
-                    }
-                    by += btn_h + 10.0;
-                    if self.skin_uploading {
-                        Some(("Putting it on...".to_owned(), palette::muted()))
+                by += btn_h + btn_gap;
+
+                draw_switch(
+                    ui,
+                    hits,
+                    [
+                        Some(ButtonId::SkinArms(false)),
+                        Some(ButtonId::SkinArms(true)),
+                    ],
+                    tx,
+                    by,
+                    ctl_w,
+                    btn_h,
+                    ["Classic", "Slim"],
+                    effective_slim,
+                );
+                by += btn_h + btn_gap;
+
+                let slot_dirty = self.skin_pick.is_some()
+                    || selected_slot.is_some_and(|s| s.slim != effective_slim);
+                let dirty = slot_dirty
+                    || self.skin_retry
+                    || selected_slot.is_some_and(|s| !s.worn);
+                let has_png = self.skin_pick.is_some() || selected_slot.is_some();
+                let can_save = !self.skin_uploading && dirty && has_png;
+
+                if can_save {
+                    draw_button(
+                        ui,
+                        hits,
+                        ButtonId::UseSkin,
+                        tx,
+                        by,
+                        ctl_w,
+                        btn_h,
+                        Tone::Primary,
+                        "Save",
+                    );
+                } else if let Some(p) = ui.paint() {
+                    p.rounded(tx, by, ctl_w, btn_h, 10.0, palette::surface());
+                    p.border(tx, by, ctl_w, btn_h, 10.0, palette::border_subtle());
+                    let label = if self.skin_uploading {
+                        "Saving..."
                     } else {
-                        draw_button(
-                            ui,
-                            hits,
-                            ButtonId::UseSkin,
-                            tx,
-                            by,
-                            170.0,
-                            btn_h,
-                            Tone::Primary,
-                            "Use This Skin",
+                        "Save"
+                    };
+                    let tw = p.measure(Face::Medium, ui_theme::sizes().ui, label);
+                    let lx = tx + ((ctl_w - tw) * 0.5).round();
+                    p.text_line(
+                        Face::Medium,
+                        ui_theme::sizes().ui,
+                        btn_h,
+                        lx,
+                        by,
+                        palette::muted(),
+                        label,
+                    );
+                }
+
+                // Four saved-skin slots (2x2) on the right.
+                let gw = (x + w - gx).max(120.0);
+                let slot_gap = if compact_v { 8.0 } else { 12.0 };
+                let slot_w = ((gw - slot_gap) * 0.5).floor().max(54.0);
+                let slot_h = ((tile_h - slot_gap) * 0.5).floor().max(44.0);
+                let slot_texel = ((slot_h - 24.0) / 34.0).floor().max(1.5);
+                for (i, slot) in slots.iter().enumerate() {
+                    let sx = gx + (i % 2) as f32 * (slot_w + slot_gap);
+                    let sy = cy + (i / 2) as f32 * (slot_h + slot_gap);
+                    let hit = HitRect {
+                        id: ButtonId::SkinSlot(i),
+                        x: sx,
+                        y: sy,
+                        w: slot_w,
+                        h: slot_h,
+                    };
+                    if let Some(p) = ui.paint() {
+                        let selected = i == selected_idx;
+                        let hovered = hit.contains(p.cursor);
+                        let (fill, border_col) = match (selected, hovered) {
+                            (true, true) => (
+                                color::with_alpha(palette::accent(), 0.26),
+                                palette::accent_star(),
+                            ),
+                            (true, false) => (
+                                color::with_alpha(palette::accent(), 0.18),
+                                palette::accent_star(),
+                            ),
+                            (false, true) => (palette::surface_hover(), palette::accent()),
+                            (false, false) => (palette::card(), palette::border()),
+                        };
+                        p.rounded(sx, sy, slot_w, slot_h, 12.0, fill);
+                        p.border(sx, sy, slot_w, slot_h, 12.0, border_col);
+
+                        let fcx = sx + (slot_w * 0.5).round();
+                        let fcy = sy + (slot_h * 0.5 + 4.0).round();
+                        if let Some(saved) = slot {
+                            draw_skin_3d(
+                                p,
+                                fcx,
+                                fcy,
+                                slot_texel,
+                                &saved.skin,
+                                saved.slim,
+                                0.45,
+                                0.18,
+                            );
+                        } else {
+                            draw_skin_3d(
+                                p,
+                                fcx,
+                                fcy,
+                                slot_texel,
+                                blank_skin(),
+                                false,
+                                0.45,
+                                0.18,
+                            );
+                        }
+
+                        let num = ["1", "2", "3", "4"][i];
+                        let num_ink = if selected {
+                            palette::text()
+                        } else {
+                            palette::muted()
+                        };
+                        p.text_line(
+                            Face::Medium,
+                            ui_theme::small(),
+                            18.0,
+                            sx + 10.0,
+                            sy + 5.0,
+                            num_ink,
+                            num,
                         );
-                        match upload {
-                            SkinUpload::Failed(why) => Some((why, col_danger)),
-                            _ => None,
+                        if selected && slot_dirty {
+                            let nw = p.measure(Face::Medium, ui_theme::small(), num);
+                            p.rounded(
+                                sx + 14.0 + nw,
+                                sy + 11.0,
+                                6.0,
+                                6.0,
+                                3.0,
+                                palette::accent_star(),
+                            );
+                        }
+
+                        if slot.as_ref().is_some_and(|s| s.worn) {
+                            let tag = "Worn";
+                            let tw = p.measure(Face::Medium, ui_theme::small(), tag);
+                            p.text_line(
+                                Face::Medium,
+                                ui_theme::small(),
+                                18.0,
+                                sx + slot_w - tw - 10.0,
+                                sy + 5.0,
+                                col_success,
+                                tag,
+                            );
+                        } else if slot.is_none() {
+                            let plus = "+";
+                            let pw = p.measure(Face::SemiBold, 16.0, plus);
+                            p.text_line(
+                                Face::SemiBold,
+                                16.0,
+                                18.0,
+                                sx + slot_w - pw - 10.0,
+                                sy + 5.0,
+                                num_ink,
+                                plus,
+                            );
                         }
                     }
-                } else if upload == SkinUpload::Done {
-                    Some(("Skin updated.".to_owned(), col_success))
+                    hits.push(hit);
+                }
+
+                if self.skin_uploading {
+                    Some(("Putting it on...".to_owned(), palette::muted()))
                 } else {
-                    None
+                    match upload {
+                        SkinUpload::Failed(why) => Some((why, col_danger)),
+                        SkinUpload::Done if !slot_dirty => {
+                            Some(("Skin updated.".to_owned(), col_success))
+                        }
+                        _ => None,
+                    }
                 }
             }
             Some(Account::Ely { .. }) => {
@@ -182,14 +364,13 @@ impl MobileLauncher {
             .map(|why| (why, col_danger))
             .or(status);
         if let (Some((text, col)), Some(p)) = (status, ui.paint()) {
-            let room = (x + w - 22.0 - tx).max(0.0);
-            let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), &text, room);
+            let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), &text, status_room);
             p.text_line(
                 Face::Regular,
                 ui_theme::small(),
                 18.0,
                 tx,
-                by + btn_h + 10.0,
+                by + btn_h + 6.0,
                 col,
                 &fit,
             );
@@ -357,39 +538,12 @@ impl MobileLauncher {
                       id: ButtonId,
                       labels: [&str; 2],
                       right: bool| {
-            let (by, half) = (ctl_y(cy), col_w * 0.5);
-            if let Some(p) = ui.paint() {
-                p.rounded(col_x, by, col_w, ctl_h, 10.0, palette::surface());
-                p.border(col_x, by, col_w, ctl_h, 10.0, palette::border());
-                let chosen_x = col_x + if right { half } else { 0.0 };
-                let chosen = color::with_alpha(palette::accent(), 0.26);
-                p.rounded(
-                    chosen_x + 3.0,
-                    by + 3.0,
-                    half - 6.0,
-                    ctl_h - 6.0,
-                    7.0,
-                    chosen,
-                );
-                for (i, label) in labels.into_iter().enumerate() {
-                    let ink = if (i == 1) == right {
-                        palette::text()
-                    } else {
-                        palette::muted()
-                    };
-                    let tw = p.measure(Face::Medium, ui_size, label);
-                    let lx = col_x + i as f32 * half + ((half - tw) * 0.5).round();
-                    p.text_line(Face::Medium, ui_size, ctl_h, lx, by, ink, label);
-                }
-            }
-            let x = col_x + if right { 0.0 } else { half };
-            hits.push(HitRect {
-                id,
-                x,
-                y: by,
-                w: half,
-                h: ctl_h,
-            });
+            let ids = if right {
+                [Some(id), None]
+            } else {
+                [None, Some(id)]
+            };
+            draw_switch(ui, hits, ids, col_x, ctl_y(cy), col_w, ctl_h, labels, right);
         };
         if !typing_args && let Some(cy) = rows.next(row_h, row_h) {
             name(ui, cy, row_h, "Launcher Font");

@@ -202,6 +202,15 @@ pub struct PickedSkin {
     pub skin: std::sync::Arc<[u8]>,
 }
 
+/// One of an account's four saved skin slots on Skins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkinSlot {
+    pub png: Vec<u8>,
+    pub skin: std::sync::Arc<[u8]>,
+    pub slim: bool,
+    pub worn: bool,
+}
+
 /// Where putting on a skin ([`Backend::use_skin`]) stands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SkinUpload {
@@ -275,6 +284,16 @@ pub trait Backend: Send {
     /// The account's whole skin (64x64 RGBA, once loaded) and whether its arms are slim.
     fn player_skin(&self, _account: &Account) -> Option<(std::sync::Arc<[u8]>, bool)> {
         None
+    }
+    /// The account's four saved skin slots on Skins.
+    fn skin_slots(&self, _account: &Account) -> [Option<SkinSlot>; 4] {
+        [None, None, None, None]
+    }
+    /// Keeps `png` and `slim` in `slot` (0..4) for the active account and puts it on
+    /// ([`Self::use_skin`]).
+    fn save_skin_slot(&mut self, slot: usize, png: Vec<u8>, slim: bool) {
+        let _ = slot;
+        self.use_skin(png, slim);
     }
     /// The arguments the game starts with, as the player typed them.
     fn game_args(&self) -> String {

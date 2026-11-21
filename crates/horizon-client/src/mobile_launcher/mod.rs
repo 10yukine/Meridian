@@ -179,6 +179,7 @@ enum ButtonId {
     // Skins
     PickSkin,
     SkinArms(bool),
+    SkinSlot(usize),
     UseSkin,
     OpenElySkins,
     // Home's game log
@@ -263,8 +264,14 @@ pub struct MobileLauncher {
     profile_rename: Option<(String, String)>,
     /// The skin file chosen on Skins.
     skin_pick: Option<PickedSkin>,
+    /// Which of the account's four skin slots is selected (0..4).
+    skin_slot: usize,
     /// Put the chosen skin on with slim arms (the player's choice; Classic at first).
     skin_slim: bool,
+    /// The player flipped the Classic/Slim switch on the selected slot.
+    skin_slim_edited: bool,
+    /// The last skin upload failed, so Save stays on to retry it.
+    skin_retry: bool,
     /// How the Skins page's figure is turned (about its height) and tilted, in radians.
     skin_yaw: f32,
     skin_pitch: f32,
@@ -355,7 +362,10 @@ impl MobileLauncher {
             freed: None,
             profile_rename: None,
             skin_pick: None,
+            skin_slot: 0,
             skin_slim: false,
+            skin_slim_edited: false,
+            skin_retry: false,
             skin_yaw: 0.5,
             skin_pitch: 0.2,
             skin_error: None,
@@ -373,6 +383,33 @@ impl MobileLauncher {
     fn save_game_args(&mut self) {
         self.game_args_focused = false;
         self.game_args_error = self.backend.set_game_args(&self.game_args_draft).err();
+    }
+
+    /// Selects the active account's worn skin slot (or slot 1) and matches the arms switch to it.
+    fn sync_skin_account(&mut self) {
+        self.skin_pick = None;
+        self.skin_error = None;
+        self.skin_retry = false;
+        self.skin_slim_edited = false;
+        let slots = self
+            .backend
+            .account()
+            .map(|a| self.backend.skin_slots(&a))
+            .unwrap_or_default();
+        let idx = slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|s| s.worn))
+            .unwrap_or(0);
+        self.skin_slot = idx;
+        self.skin_slim = slots[idx]
+            .as_ref()
+            .map(|s| s.slim)
+            .or_else(|| {
+                self.backend
+                    .account()
+                    .and_then(|a| self.backend.player_skin(&a).map(|(_, slim)| slim))
+            })
+            .unwrap_or(false);
     }
 
     /// Once a frame: takes the skin file the platform's picker handed over.
@@ -393,7 +430,27 @@ impl MobileLauncher {
             // Put on: the account's own head shows it now.
             if self.backend.skin_upload() == SkinUpload::Done {
                 self.skin_pick = None;
+                self.skin_retry = false;
+            } else {
+                let slot = self.skin_slot.min(3);
+                if self
+                    .backend
+                    .account()
+                    .is_some_and(|a| self.backend.skin_slots(&a)[slot].is_some())
+                {
+                    self.skin_pick = None;
+                }
+                self.skin_retry = true;
             }
+        }
+        if !self.skin_slim_edited
+            && self.skin_pick.is_none()
+            && let Some(account) = self.backend.account()
+            && let Some(slot) = &self.backend.skin_slots(&account)[self.skin_slot.min(3)]
+            && self.skin_slim != slot.slim
+        {
+            self.skin_slim = slot.slim;
+            changed = true;
         }
         changed
     }
@@ -873,6 +930,9 @@ impl MobileLauncher {
                 self.confirm_remove_profile = None;
                 self.profile_rename = None;
                 self.mod_search_focused = false;
+                if self.route != Route::Skins {
+                    self.sync_skin_account();
+                }
                 self.route = Route::Skins;
             }
             ButtonId::OpenSettings => {
@@ -1044,15 +1104,19 @@ impl MobileLauncher {
                     self.status_note = Some(err);
                 } else {
                     self.status_note = None;
+                    self.sync_skin_account();
                     self.route = Route::Home;
                 }
             }
             ButtonId::RemoveAccount(idx) => {
                 if let Err(err) = self.backend.remove_account(idx) {
                     self.status_note = Some(err);
-                } else if self.backend.accounts().is_empty() {
-                    self.route = Route::Home;
-                    self.adding_account = false;
+                } else {
+                    self.sync_skin_account();
+                    if self.backend.accounts().is_empty() {
+                        self.route = Route::Home;
+                        self.adding_account = false;
+                    }
                 }
             }
             ButtonId::AccountsPrevPage => {
@@ -1197,13 +1261,53 @@ impl MobileLauncher {
                 self.skin_error = None;
                 return Some(Action::PickSkin);
             }
-            ButtonId::SkinArms(slim) => self.skin_slim = slim,
+            ButtonId::SkinArms(slim) => {
+                self.skin_slim = slim;
+                self.skin_slim_edited = true;
+            }
+            ButtonId::SkinSlot(idx) => {
+                let idx = idx.min(3);
+                self.skin_slot = idx;
+                self.skin_pick = None;
+                self.skin_error = None;
+                self.skin_retry = false;
+                self.skin_slim_edited = false;
+                let filled = self
+                    .backend
+                    .account()
+                    .and_then(|a| self.backend.skin_slots(&a)[idx].clone());
+                if let Some(slot) = filled {
+                    self.skin_slim = slot.slim;
+                } else {
+                    return Some(Action::PickSkin);
+                }
+            }
             ButtonId::UseSkin => {
-                if let Some(pick) = &self.skin_pick
-                    && !self.skin_uploading
-                {
-                    self.backend.use_skin(pick.png.clone(), self.skin_slim);
-                    self.skin_uploading = true;
+                if !self.skin_uploading {
+                    let slot_idx = self.skin_slot.min(3);
+                    let saved = self
+                        .backend
+                        .account()
+                        .and_then(|a| self.backend.skin_slots(&a)[slot_idx].clone());
+                    let png = self
+                        .skin_pick
+                        .as_ref()
+                        .map(|pick| pick.png.clone())
+                        .or_else(|| saved.as_ref().map(|slot| slot.png.clone()));
+                    if let Some(png) = png {
+                        let slim = match (
+                            self.skin_pick.is_some() || self.skin_slim_edited,
+                            saved.as_ref(),
+                        ) {
+                            (false, Some(slot)) => slot.slim,
+                            _ => self.skin_slim,
+                        };
+                        self.skin_slim = slim;
+                        self.skin_slim_edited = false;
+                        self.skin_retry = false;
+                        self.backend.save_skin_slot(slot_idx, png, slim);
+                        self.skin_uploading = true;
+                    }
                 }
             }
             ButtonId::OpenElySkins => return Some(Action::OpenUrl(ELY_SKINS.into())),

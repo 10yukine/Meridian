@@ -5,8 +5,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(30);
 
 enum Status {
     Loading,
-    /// The face, and the whole skin (64x64 RGBA) for the Skins page's figure.
-    Ready(Head, Arc<[u8]>),
+    /// The face, the whole skin (64x64 RGBA) for the Skins page's figure, and the PNG file.
+    Ready(Head, Arc<[u8]>, Arc<[u8]>),
     RetryAt(Instant),
 }
 
@@ -39,7 +39,7 @@ impl Cache {
         }
         let mut status = entry.status.lock().unwrap();
         match *status {
-            Status::Ready(face, _) => return Some(face),
+            Status::Ready(face, _, _) => return Some(face),
             Status::Loading => return None,
             Status::RetryAt(at) if Instant::now() < at => return None,
             Status::RetryAt(_) => {}
@@ -53,7 +53,7 @@ impl Cache {
                 let result = load(&url);
                 *worker_status.lock().unwrap() = result.map_or_else(
                     || Status::RetryAt(Instant::now() + RETRY_DELAY),
-                    |(face, skin)| Status::Ready(face, skin),
+                    |(face, skin, png)| Status::Ready(face, skin, png),
                 );
             })
             .is_err()
@@ -68,7 +68,17 @@ impl Cache {
         let entries = self.0.lock().unwrap();
         let entry = entries.iter().find(|entry| &entry.player == player)?;
         match &*entry.status.lock().unwrap() {
-            Status::Ready(_, skin) => Some(skin.clone()),
+            Status::Ready(_, skin, _) => Some(skin.clone()),
+            _ => None,
+        }
+    }
+
+    /// The PNG file and decoded 64x64 RGBA skin [`Self::get`] loaded for `player`, once it has.
+    pub(super) fn png(&self, player: &Account) -> Option<(Arc<[u8]>, Arc<[u8]>)> {
+        let entries = self.0.lock().unwrap();
+        let entry = entries.iter().find(|entry| &entry.player == player)?;
+        match &*entry.status.lock().unwrap() {
+            Status::Ready(_, skin, png) => Some((png.clone(), skin.clone())),
             _ => None,
         }
     }
@@ -117,23 +127,40 @@ pub(super) fn offline_skin(root: &Path, player: &Account) -> Option<String> {
     Some(format!("file:{}", file.display()))
 }
 
-fn load(url: &str) -> Option<(Head, Arc<[u8]>)> {
-    if let Some(path) = url.strip_prefix("file:") {
-        return decode(&fs::read(path).ok()?);
-    }
-    let response = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .get(url)
-        .call()
-        .ok()?;
-    let mut png = Vec::new();
-    response
-        .into_reader()
-        .take(1 << 20)
-        .read_to_end(&mut png)
-        .ok()?;
-    decode(&png)
+/// A UUID written with or without dashes.
+pub(super) fn parse_uuid(text: &str) -> Option<u128> {
+    let hex: String = text.chars().filter(|&c| c != '-').collect();
+    (hex.len() == 32).then(|| u128::from_str_radix(&hex, 16).ok())?
+}
+
+/// The default skin file in `root`'s prepared resources for `uuid`, and whether its arms are slim.
+pub(super) fn default_skin_file(root: &Path, uuid: u128) -> (PathBuf, bool) {
+    let skin = horizon_protocol::crypto::default_skin(uuid);
+    let file =
+        crate::launch::resources_dir(root).join(format!("assets/minecraft/textures/{skin}.png"));
+    (file, skin.contains("/slim/"))
+}
+
+fn load(url: &str) -> Option<(Head, Arc<[u8]>, Arc<[u8]>)> {
+    let png = if let Some(path) = url.strip_prefix("file:") {
+        fs::read(path).ok()?
+    } else {
+        let response = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .get(url)
+            .call()
+            .ok()?;
+        let mut png = Vec::new();
+        response
+            .into_reader()
+            .take(1 << 20)
+            .read_to_end(&mut png)
+            .ok()?;
+        png
+    };
+    let (face, skin) = decode(&png)?;
+    Some((face, skin, png.into()))
 }
 
 #[cfg(test)]

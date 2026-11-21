@@ -3,18 +3,20 @@ use super::{Action, AuthForm, ButtonId, LICENSES, MobileLauncher, Route, SOURCE_
 use crate::hud::{HudAtlas, HudBatch};
 use crate::launcher_backend::{
     Account, Backend, ELY_SKINS, Head, ModInfo, ModSearch, PickedSkin, Profile, ProfileMod,
-    ProfileState, Progress, Setup, SignIn, SkinUpload, Stage, VANILLA, profile_id,
+    ProfileState, Progress, Setup, SignIn, SkinSlot, SkinUpload, Stage, VANILLA, profile_id,
     valid_offline_name,
 };
 use crate::ui_theme::Ui;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 /// The stub's skin side, shared with the test: the file the picker "chose", the uploads asked
-/// for, and how the last one went.
+/// for, each account's four slots, and how the last upload went.
 #[derive(Default)]
 struct SkinStub {
     picked: Option<Result<PickedSkin, String>>,
     uploads: Vec<(Vec<u8>, bool)>,
+    slots: BTreeMap<String, [Option<SkinSlot>; 4]>,
     status: SkinUpload,
 }
 
@@ -199,6 +201,35 @@ impl Backend for StubBackend {
     }
     fn skin_upload(&self) -> SkinUpload {
         self.skins.lock().unwrap().status.clone()
+    }
+    fn skin_slots(&self, account: &Account) -> [Option<SkinSlot>; 4] {
+        let key = format!("{account:?}");
+        self.skins
+            .lock()
+            .unwrap()
+            .slots
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn save_skin_slot(&mut self, slot: usize, png: Vec<u8>, slim: bool) {
+        if let Some(account) = self.account()
+            && slot < 4
+        {
+            let key = format!("{account:?}");
+            let mut skins = self.skins.lock().unwrap();
+            let entry = skins.slots.entry(key).or_default();
+            for existing in entry.iter_mut().flatten() {
+                existing.worn = false;
+            }
+            entry[slot] = Some(SkinSlot {
+                png: png.clone(),
+                skin: vec![9; 64 * 64 * 4].into(),
+                slim,
+                worn: true,
+            });
+        }
+        self.use_skin(png, slim);
     }
     fn game_log(&self, _profile: &str) -> Vec<String> {
         self.log.clone()
@@ -1159,11 +1190,106 @@ fn skins_put_on_a_chosen_png_and_send_ely_to_its_website() {
         !ids(&l).contains(&ButtonId::PickSkin),
         "Ely.by: on its website"
     );
+    assert!(
+        !ids(&l).contains(&ButtonId::SkinSlot(0)),
+        "Ely.by: no slots"
+    );
     l.backend.switch_account(2).unwrap();
     assert!(
         ids(&l).contains(&ButtonId::PickSkin),
         "offline: kept on this phone"
     );
+    assert!(ids(&l).contains(&ButtonId::SkinSlot(0)));
+}
+
+#[test]
+fn skin_slots_select_preview_save_and_keep_failed_uploads() {
+    let skins = Arc::new(Mutex::new(SkinStub::default()));
+    let steve = Account::Microsoft {
+        name: "Steve".into(),
+    };
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![steve.clone()],
+        active: Some(0),
+        setup: Setup::Ready,
+        skins: skins.clone(),
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    let ids = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui))
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    click_button(&mut l, size, ButtonId::OpenSkins);
+    assert_eq!(l.skin_slot, 0);
+
+    // Tapping an empty slot selects it and opens the file picker straight away.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::SkinSlot(1)),
+        Some(Action::PickSkin)
+    );
+    assert_eq!(l.skin_slot, 1);
+
+    // Save writes the picked skin into the selected slot (slot 2) and puts it on.
+    skins.lock().unwrap().picked = Some(Ok(PickedSkin {
+        png: b"slot-two.png".to_vec(),
+        face: [7; 8 * 8 * 4],
+        skin: vec![9; 64 * 64 * 4].into(),
+    }));
+    l.poll();
+    click_button(&mut l, size, ButtonId::SkinArms(true));
+    click_button(&mut l, size, ButtonId::UseSkin);
+    skins.lock().unwrap().status = SkinUpload::Done;
+    l.poll();
+    let slots = l.backend.skin_slots(&steve);
+    assert!(slots[0].is_none());
+    assert_eq!(slots[1].as_ref().unwrap().png, b"slot-two.png");
+    assert!(slots[1].as_ref().unwrap().slim);
+    assert!(slots[1].as_ref().unwrap().worn);
+    assert!(!ids(&l).contains(&ButtonId::UseSkin));
+
+    // Flipping the arms switch on an already-saved slot turns Save on and updates that slot.
+    click_button(&mut l, size, ButtonId::SkinArms(false));
+    assert!(ids(&l).contains(&ButtonId::UseSkin));
+    click_button(&mut l, size, ButtonId::UseSkin);
+    skins.lock().unwrap().status = SkinUpload::Done;
+    l.poll();
+    assert!(!l.backend.skin_slots(&steve)[1].as_ref().unwrap().slim);
+
+    // Saving a new skin in slot 1 while the upload fails still keeps the file in slot 1 and
+    // leaves Save enabled so the player can retry.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::SkinSlot(0)),
+        Some(Action::PickSkin)
+    );
+    skins.lock().unwrap().picked = Some(Ok(PickedSkin {
+        png: b"slot-one.png".to_vec(),
+        face: [7; 8 * 8 * 4],
+        skin: vec![9; 64 * 64 * 4].into(),
+    }));
+    l.poll();
+    click_button(&mut l, size, ButtonId::UseSkin);
+    skins.lock().unwrap().status = SkinUpload::Failed("Rate limited.".into());
+    l.poll();
+    assert_eq!(
+        l.backend.skin_slots(&steve)[0].as_ref().unwrap().png,
+        b"slot-one.png"
+    );
+    assert!(ids(&l).contains(&ButtonId::UseSkin), "Save stays on to retry");
+
+    // Tapping a filled slot previews it and sets the arms switch to its saved model without
+    // uploading until Save is pressed.
+    let uploads_before = skins.lock().unwrap().uploads.len();
+    click_button(&mut l, size, ButtonId::SkinArms(true));
+    click_button(&mut l, size, ButtonId::SkinSlot(1));
+    assert_eq!(l.skin_slot, 1);
+    assert!(!l.skin_slim);
+    assert_eq!(skins.lock().unwrap().uploads.len(), uploads_before);
 }
 
 #[test]
