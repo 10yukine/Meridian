@@ -1,0 +1,2854 @@
+//! Meridian mobile launcher UI (`docs/launcher-spec.md`): neutral greys and one violet accent
+//! (`widgets::palette`) over `crate::ui_theme`, so no prepared pack is required.
+//!
+//! Shell layout:
+//! - Left sidebar (above top bar, under bottom bar): Meridian North Star logo, then Home, Mods,
+//!   Skins, and Settings in one stack.
+//! - Top bar (right of sidebar): "Meridian Launcher" title, optional background install pill,
+//!   version badge (top right).
+//! - Bottom dock bar (full width): Player head (account switcher), single-line Profile bar
+//!   (opens an upward bar-width Profile dropdown), and Play/Install CTA.
+
+mod auth;
+mod home;
+mod install;
+mod mods;
+mod motion;
+mod settings;
+#[cfg(test)]
+mod tests;
+mod widgets;
+
+use crate::launcher_backend::{
+    Account, Backend, ELY_SKINS, GameOptions, ImportKind, Language, LanguageDownload, ModSearch,
+    NEEDS_OWNER, PickedSkin, Profile, ProfileState, Setup, SignIn, SkinUpload, VANILLA,
+    i18n::{self, tr, trf},
+};
+use crate::menu_style;
+use crate::ui_theme::{self, Face, Ui, color};
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+use std::time::Instant;
+use widgets::{
+    Canvas, HitRect, RailIcon, Tone, account_provider_tag, account_short, draw_backdrop,
+    draw_button, draw_icon_chevron, draw_nav_item, draw_north_star_badge, draw_play_button,
+    draw_player_head, effective_profile_state, palette, profile_stats_line, stage_fraction,
+    stage_name, truncate_to_fit,
+};
+
+/// About's links: the source, and the licenses of what Meridian is built from.
+const SOURCE_CODE: &str = "https://github.com/10yukine/Meridian";
+const LICENSES: &str = "https://github.com/10yukine/Meridian/blob/main/THIRD_PARTY_NOTICES.md";
+/// How far the screen's rounded corners, camera cutout or home bar reach in from each edge (dp).
+/// Controls stay inside; backgrounds still reach the edges. All zero on a phone whose system keeps
+/// the window clear of them (Android's default cutout mode); an iPhone in landscape is about
+/// 59 left and right and 21 at the bottom.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SafeInsets {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl SafeInsets {
+    /// Meridian: an iPhone 15's landscape safe area. Every phone keeps at least this much clear, so
+    /// the launcher looks the same on Android as on an iPhone.
+    pub const PHONE: Self = Self {
+        top: 0.0,
+        right: 59.0,
+        bottom: 21.0,
+        left: 59.0,
+    };
+
+    /// Each side's larger inset.
+    pub fn max(self, other: Self) -> Self {
+        Self {
+            top: self.top.max(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+            left: self.left.max(other.left),
+        }
+    }
+}
+
+/// Where a page of the signed-in shell goes, and what it shows.
+struct Page<'a> {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    modal_x: f32,
+    modal_w: f32,
+    setup: &'a Setup,
+    profiles: &'a [Profile],
+    accounts: &'a [Account],
+    active: Option<usize>,
+    account: &'a Option<Account>,
+    col_success: u32,
+    col_danger: u32,
+}
+
+/// Settings' Animations switch, as kept in `horizon.txt`.
+const ANIMATIONS_KEY: &str = "launcherAnimations";
+/// How far sideways (dp) a finger on a Mods list moves before the list turns its page.
+const SWIPE: f32 = 40.0;
+
+/// Action requested by clicking on [`MobileLauncher`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// Prepared files and selected profile are ready: launch the game in `profile_dir`.
+    Play,
+    /// Open an external web link (for example Microsoft's device-code verification page).
+    OpenUrl(String),
+    /// Open the platform's file picker for a PNG skin (`MobileLauncher::poll` takes the file).
+    PickSkin,
+    /// Put this on the clipboard (Copy on the game log).
+    CopyText(String),
+    /// Export redacted diagnostics (game log, crash reports, platform exits) and open the share
+    /// sheet ([`MobileLauncher::diagnostics_saved`] takes the outcome).
+    ExportDiagnostics,
+    /// Open Android's file picker to import a world, resource pack, shader pack or Pojav layout
+    /// into the selected profile ([`MobileLauncher::file_transfer_finished`] takes the outcome).
+    ImportFile(ImportKind),
+    /// Zip `world` from the selected profile's `saves/` and open the share sheet
+    /// ([`MobileLauncher::file_transfer_finished`] takes the outcome).
+    ExportWorld(String),
+    /// Close the launcher window.
+    Quit,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SettingsTab {
+    #[default]
+    Launcher,
+    Game,
+    Files,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route {
+    Home,
+    Install,
+    Mods,
+    Skins,
+    AccountSwitcher,
+    Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthForm {
+    Offline,
+    Ely,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ElyField {
+    Username,
+    Password,
+    Otp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SignInProvider {
+    Microsoft,
+    Ely,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ButtonId {
+    // Persistent shell (top, sidebar, bottom)
+    GoHome,
+    OpenMods,
+    OpenSkins,
+    OpenSettings,
+    OpenAccountSwitcher,
+    ToggleProfilePicker,
+    // Onboarding & Auth
+    SignInMicrosoft,
+    OpenOfflineEntry,
+    ToggleMoreAuth,
+    OpenElyEntry,
+    CancelAddAccount,
+    FocusOfflineName,
+    ConfirmOffline,
+    CancelOffline,
+    FocusElyUsername,
+    FocusElyPassword,
+    FocusElyOtp,
+    ConfirmEly,
+    CancelEly,
+    OpenBrowserUrl,
+    CopySignInCode,
+    CancelSignIn,
+    RetrySignIn,
+    // Home & Profiles
+    OpenNewProfile,
+    SelectProfile(usize),
+    ProfileScrollUp,
+    ProfileScrollDown,
+    InstallSelected,
+    PlaySelected,
+    ViewInstallScreen,
+    Quit,
+    // Install screen
+    CancelSetup,
+    RetrySetup,
+    // Account switcher
+    SwitchAccount(usize),
+    RemoveAccount(usize),
+    /// The page dots under Accounts: the next page, then the first again.
+    AccountsNext,
+    AddAccount,
+    // New Profile makes one at once; its tab renames it in place and deletes it.
+    RenameTabProfile,
+    DeleteTabProfile,
+    // Mod manager
+    ModManagerPickProfile(usize),
+    ToggleProfileMod(usize),
+    RemoveProfileMod(usize),
+    /// The page dots under a list: the next page, then the first again.
+    ProfileModsNext,
+    FocusModSearch,
+    SubmitModSearch,
+    AddRegistryMod(usize),
+    RegistryModsNext,
+    // Overlays
+    CloseProfilePopup,
+    CancelRemoveProfile,
+    ConfirmRemoveProfile,
+    FocusRenameInput,
+    SaveRenameProfile,
+    // Settings
+    SettingsBack,
+    ToggleLauncherFont,
+    /// Settings' Animations switch.
+    ToggleAnimations,
+    /// Settings: free the install cache (asks first).
+    FreeSpace,
+    ConfirmFreeSpace,
+    CancelFreeSpace,
+    // Skins
+    PickSkin,
+    SkinArms(bool),
+    SkinSlot(usize),
+    UseSkin,
+    OpenElySkins,
+    // Home's game log
+    LogLevel(u8),
+    CopyLog,
+    // Settings: the game's arguments, About's links, diagnostics export
+    FocusGameArgs,
+    OpenSourceCode,
+    OpenLicenses,
+    ExportDiagnostics,
+    ToggleLanguagePicker,
+    CloseLanguagePicker,
+    SelectLanguage(usize),
+    LanguageScrollUp,
+    LanguageScrollDown,
+    SelectSettingsTab(SettingsTab),
+    ToggleGameOption(u8),
+    ImportFile(ImportKind),
+    CycleExportWorld,
+    ExportWorld,
+}
+
+/// The last question shown over the page, kept so it can draw while fading out (0.14 s).
+#[derive(Clone)]
+enum ClosedDialog {
+    FreeSpace { bytes: u64 },
+    Language,
+    Remove { name: String, worlds: usize },
+}
+
+/// Interactive Meridian launcher backed by [`Backend`].
+pub struct MobileLauncher {
+    backend: Box<dyn Backend>,
+    /// Folder holding `horizon.txt` for persisted launcher UI preferences (`None` in unit tests).
+    prefs_dir: Option<PathBuf>,
+    route: Route,
+    profile_popup_open: bool,
+    language_popup_open: bool,
+    language_scroll: usize,
+    /// Whether the active atlas has the prepared pack's font sheets (Unifont / pixel bitmap).
+    pub(super) pack_font_ready: Cell<bool>,
+    // Auth & account addition
+    adding_account: bool,
+    accounts_before_add: usize,
+    show_more_auth: bool,
+    auth_form: Option<AuthForm>,
+    sign_in_provider: SignInProvider,
+    offline_name: String,
+    offline_error: Option<String>,
+    ely_field: ElyField,
+    ely_username: String,
+    ely_password: String,
+    ely_otp: String,
+    ely_error: Option<String>,
+    status_note: Option<String>,
+    code_copied: bool,
+    // Paging & dropdown scroll
+    profile_scroll: usize,
+    account_page: usize,
+    /// The page a drag scrolled and how far: Settings' rows scrolled past, or the game log's
+    /// lines back from its end on Home. Another page starts unscrolled.
+    page_scroll: (Route, usize),
+    /// The drag not yet a whole row ([`Self::scroll`]).
+    scroll_carry: f32,
+    /// How far the list a drag scrolls can go, from the last layout.
+    scroll_max: Cell<usize>,
+    /// How far Mods' profile tabs are scrolled sideways (UI px), and the tab last scrolled into
+    /// view (and whether it was being renamed), as laid out.
+    tab_scroll: Cell<f32>,
+    tab_revealed: Cell<Option<(String, bool)>>,
+    /// Mods' two lists as laid out: where they start and the line between them (dp), and how
+    /// many pages each has (the profile's, then the registry's). None without them.
+    mod_lists: Cell<Option<(f32, f32)>>,
+    mod_pages: Cell<[usize; 2]>,
+    /// Accounts' list as laid out: where its rows start (dp) and how many pages it has.
+    account_list_top: Cell<Option<f32>>,
+    account_pages: Cell<usize>,
+    /// The paged list a drag began on (0: profile mods, 1: registry mods, 2: accounts) and how
+    /// far it has moved sideways; None once it turned the page, so a swipe turns one.
+    swipe: Option<(usize, Option<f32>)>,
+    /// Each paged list's page dots panning: from where, to which page, since when (0: profile
+    /// mods, 1: registry mods, 2: accounts).
+    dots: Cell<[(f32, usize, Instant); 3]>,
+    /// The motion of changes (`motion.rs`), and each moving thing's last value, the one before
+    /// it and when it changed: the page shown, the rail's selected item, the profile pop-up, a
+    /// question over the page, the sign-in step, signing in, Mods' profile and its mod count.
+    motion: motion::Motion,
+    /// The screen's safe area, from the platform ([`Self::set_safe_insets`]).
+    safe: SafeInsets,
+    page_motion: Cell<(Route, Route, Instant)>,
+    rail_motion: Cell<(usize, usize, Instant)>,
+    popup_motion: Cell<(bool, bool, Instant)>,
+    account_motion: Cell<(bool, bool, Instant)>,
+    dialog_motion: Cell<(bool, bool, Instant)>,
+    last_dialog: RefCell<Option<ClosedDialog>>,
+    step_motion: Cell<(u8, u8, Instant)>,
+    shell_motion: Cell<(bool, bool, Instant)>,
+    tab_motion: Cell<(u64, u64, Instant)>,
+    added_motion: Cell<((u64, usize), (u64, usize), Instant)>,
+    /// The last registry mod added (`(profile_id, mod_id)`), so both panes animate it.
+    last_added_mod: Option<(String, String)>,
+    // Mod manager state
+    mods_profile_id: Option<String>,
+    mods_list_page: usize,
+    mod_search_query: String,
+    mod_search_focused: bool,
+    mod_registry_page: usize,
+    mods_error: Option<String>,
+    // Modals: the profile to delete, its id and name.
+    confirm_remove_profile: Option<(String, String)>,
+    confirm_free_space: bool,
+    /// What Settings' "Free up space" did: the bytes freed, or why not.
+    freed: Option<Result<u64, String>>,
+    /// The Mods tab being renamed in place: its id and the name typed so far (empty: the old
+    /// name stays).
+    profile_rename: Option<(String, String)>,
+    /// The skin file chosen on Skins.
+    skin_pick: Option<PickedSkin>,
+    /// Which of the account's four skin slots is selected (0..4).
+    skin_slot: usize,
+    /// Put the chosen skin on with slim arms (the player's choice; Classic at first).
+    skin_slim: bool,
+    /// The player flipped the Classic/Slim switch on the selected slot.
+    skin_slim_edited: bool,
+    /// The last skin upload failed, so Save stays on to retry it.
+    skin_retry: bool,
+    /// How the Skins page's figure is turned (about its height) and tilted, in radians.
+    skin_yaw: f32,
+    skin_pitch: f32,
+    /// Why the chosen file can't be a skin, or no picker opened.
+    skin_error: Option<String>,
+    /// Putting `skin_pick` on was started and hasn't finished.
+    skin_uploading: bool,
+    /// The game log's lines shown from this level up: 0 all, 1 warnings, 2 errors.
+    log_level: u8,
+    /// The last tap copied the game log.
+    log_copied: bool,
+    /// The game's arguments are being typed on Settings: what so far, and why the last was
+    /// turned down.
+    game_args_focused: bool,
+    game_args_draft: String,
+    game_args_error: Option<String>,
+    /// Settings' Diagnostics export is running on a host worker.
+    diagnostics_exporting: bool,
+    /// What Settings' last Diagnostics export did: the shared ZIP's file name, or why not.
+    diagnostics: Option<Result<String, String>>,
+    /// Play is warming the selected profile's wasm mod cache before handing off to the game.
+    compiling_mods: bool,
+    /// Settings' active sub-tab (`Launcher`, `Game`, or `Files`).
+    pub(super) settings_tab: SettingsTab,
+    /// Settings -> Game error message, if saving failed.
+    pub(super) game_options_error: Option<String>,
+    /// Settings -> Files import/export worker status.
+    pub(super) file_busy: bool,
+    pub(super) file_status: Option<Result<String, String>>,
+    /// Index into `backend.profile_worlds` for Export World.
+    pub(super) export_world_idx: usize,
+}
+
+#[cfg(not(test))]
+fn default_prefs_dir() -> Option<PathBuf> {
+    std::env::var_os("HORIZON_HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+}
+
+#[cfg(test)]
+fn default_prefs_dir() -> Option<PathBuf> {
+    None
+}
+
+impl MobileLauncher {
+    pub fn new(backend: Box<dyn Backend>) -> Self {
+        let prefs_dir = default_prefs_dir();
+        if let Some(dir) = &prefs_dir {
+            ui_theme::load_pixel_font_pref(dir);
+        }
+        let animations = prefs_dir
+            .as_deref()
+            .and_then(|dir| ui_theme::preference(dir, ANIMATIONS_KEY))
+            .is_none_or(|value| value != "off");
+        Self {
+            backend,
+            prefs_dir,
+            route: Route::Home,
+            profile_popup_open: false,
+            language_popup_open: false,
+            language_scroll: 0,
+            pack_font_ready: Cell::new(false),
+            adding_account: false,
+            accounts_before_add: 0,
+            show_more_auth: false,
+            auth_form: None,
+            sign_in_provider: SignInProvider::Microsoft,
+            offline_name: String::new(),
+            offline_error: None,
+            ely_field: ElyField::Username,
+            ely_username: String::new(),
+            ely_password: String::new(),
+            ely_otp: String::new(),
+            ely_error: None,
+            status_note: None,
+            code_copied: false,
+            profile_scroll: 0,
+            account_page: 0,
+            page_scroll: (Route::Home, 0),
+            scroll_carry: 0.0,
+            scroll_max: Cell::new(0),
+            tab_scroll: Cell::new(0.0),
+            tab_revealed: Cell::new(None),
+            mod_lists: Cell::new(None),
+            mod_pages: Cell::new([1, 1]),
+            account_list_top: Cell::new(None),
+            account_pages: Cell::new(1),
+            swipe: None,
+            dots: Cell::new([(0.0, 0, motion::long_ago()); 3]),
+            motion: motion::Motion::new(animations),
+            safe: SafeInsets::default(),
+            page_motion: Cell::new((Route::Home, Route::Home, motion::long_ago())),
+            rail_motion: Cell::new((0, 0, motion::long_ago())),
+            popup_motion: Cell::new((false, false, motion::long_ago())),
+            account_motion: Cell::new((false, false, motion::long_ago())),
+            dialog_motion: Cell::new((false, false, motion::long_ago())),
+            last_dialog: RefCell::new(None),
+            step_motion: Cell::new((0, 0, motion::long_ago())),
+            shell_motion: Cell::new((false, false, motion::long_ago())),
+            tab_motion: Cell::new((0, 0, motion::long_ago())),
+            added_motion: Cell::new(((0, 0), (0, 0), motion::long_ago())),
+            last_added_mod: None,
+            mods_profile_id: None,
+            mods_list_page: 0,
+            mod_search_query: String::new(),
+            mod_search_focused: false,
+            mod_registry_page: 0,
+            mods_error: None,
+            confirm_remove_profile: None,
+            confirm_free_space: false,
+            freed: None,
+            profile_rename: None,
+            skin_pick: None,
+            skin_slot: 0,
+            skin_slim: false,
+            skin_slim_edited: false,
+            skin_retry: false,
+            skin_yaw: 0.5,
+            skin_pitch: 0.2,
+            skin_error: None,
+            skin_uploading: false,
+            log_level: 0,
+            log_copied: false,
+            game_args_focused: false,
+            game_args_draft: String::new(),
+            game_args_error: None,
+            diagnostics_exporting: false,
+            diagnostics: None,
+            compiling_mods: false,
+            settings_tab: SettingsTab::Launcher,
+            game_options_error: None,
+            file_busy: false,
+            file_status: None,
+            export_world_idx: 0,
+        }
+    }
+
+    /// Keeps the game's arguments typed on Settings, and stops typing them; why not, if they
+    /// can't be kept.
+    fn save_game_args(&mut self) {
+        self.game_args_focused = false;
+        self.game_args_error = self.backend.set_game_args(&self.game_args_draft).err();
+    }
+
+    /// Selects the active account's worn skin slot (or slot 1) and matches the arms switch to it.
+    fn sync_skin_account(&mut self) {
+        self.skin_pick = None;
+        self.skin_error = None;
+        self.skin_retry = false;
+        self.skin_slim_edited = false;
+        let slots = self
+            .backend
+            .account()
+            .map(|a| self.backend.skin_slots(&a))
+            .unwrap_or_default();
+        let idx = slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|s| s.worn))
+            .unwrap_or(0);
+        self.skin_slot = idx;
+        self.skin_slim = slots[idx]
+            .as_ref()
+            .map(|s| s.slim)
+            .or_else(|| {
+                self.backend
+                    .account()
+                    .and_then(|a| self.backend.player_skin(&a).map(|(_, slim)| slim))
+            })
+            .unwrap_or(false);
+    }
+
+    /// Once a frame: takes the skin file the platform's picker handed over.
+    /// Whether anything changed.
+    pub fn poll(&mut self) -> bool {
+        let mut changed = true;
+        match self.backend.take_picked_skin() {
+            Some(Ok(pick)) => {
+                self.skin_pick = Some(pick);
+                self.skin_error = None;
+            }
+            Some(Err(why)) => self.skin_error = Some(why),
+            None => changed = false,
+        }
+        if self.skin_uploading && self.backend.skin_upload() != SkinUpload::Uploading {
+            self.skin_uploading = false;
+            changed = true;
+            // Put on: the account's own head shows it now.
+            if self.backend.skin_upload() == SkinUpload::Done {
+                self.skin_pick = None;
+                self.skin_retry = false;
+            } else {
+                let slot = self.skin_slot.min(3);
+                if self
+                    .backend
+                    .account()
+                    .is_some_and(|a| self.backend.skin_slots(&a)[slot].is_some())
+                {
+                    self.skin_pick = None;
+                }
+                self.skin_retry = true;
+            }
+        }
+        // Only on Skins: the slots are read from disk once, then copied out on every call.
+        if self.route == Route::Skins
+            && !self.skin_slim_edited
+            && self.skin_pick.is_none()
+            && let Some(account) = self.backend.account()
+            && let Some(slot) = &self.backend.skin_slots(&account)[self.skin_slot.min(3)]
+            && self.skin_slim != slot.slim
+        {
+            self.skin_slim = slot.slim;
+            changed = true;
+        }
+        changed
+    }
+
+    /// Whether the screen changes without input: an install, a sign-in, a skin upload, a
+    /// diagnostics export or a language download under way. The host draws ten frames a second
+    /// then, and one otherwise.
+    pub fn moving(&self) -> bool {
+        matches!(self.backend.setup(), Setup::Running(_))
+            || matches!(
+                self.backend.sign_in(),
+                SignIn::Starting | SignIn::Code { .. }
+            )
+            || self.skin_uploading
+            || self.diagnostics_exporting
+            || self.file_busy
+            || matches!(
+                self.backend.language_download(),
+                LanguageDownload::Downloading(_)
+            )
+            || self
+                .backend
+                .profiles()
+                .iter()
+                .any(|p| matches!(p.state, ProfileState::Installing(_)))
+    }
+
+    /// Records how the host's diagnostics export ended: the shared ZIP's file name, or why not.
+    pub fn diagnostics_saved(&mut self, result: Result<String, String>) {
+        self.diagnostics_exporting = false;
+        self.diagnostics = Some(result);
+    }
+
+    /// Records how a Settings -> Files import or world export ended (or `None` if cancelled).
+    pub fn file_transfer_finished(&mut self, result: Option<Result<String, String>>) {
+        self.file_busy = false;
+        if let Some(result) = result {
+            self.file_status = Some(result);
+        }
+    }
+
+    /// Whether the launcher needs the prepared pack's font sheets (Unifont / pixel bitmap):
+    /// when the Pixel font is on, the Language picker is open (to display all 87 native scripts),
+    /// or the chosen language uses glyphs outside the bundled Geist faces.
+    pub fn needs_full_atlas(&self) -> bool {
+        ui_theme::pixel_font()
+            || self.language_popup_open
+            || !self.backend.language().bundled_font_supported()
+    }
+
+    fn sync_language(&self) {
+        let lang = self.backend.language();
+        if i18n::is_loaded(lang) && (lang.bundled_font_supported() || self.pack_font_ready.get()) {
+            i18n::set(lang);
+        } else {
+            i18n::set(Language::English);
+        }
+    }
+
+    /// Play stopped on the game's arguments: Settings shows why, under them.
+    pub fn game_args_refused(&mut self, why: impl Into<String>) {
+        self.profile_popup_open = false;
+        self.route = Route::Settings;
+        self.game_args_error = Some(why.into());
+    }
+
+    /// Whether something on screen moves by itself (page dots panning): the host draws every
+    /// frame until it stops.
+    pub fn animating(&self) -> bool {
+        let dots = self.dots.get();
+        self.motion.running()
+            || dots
+                .iter()
+                .any(|&(_, _, since)| since.elapsed().as_secs_f32() < mods::DOTS_SECS)
+    }
+
+    /// Where list `list`'s page dots are: at `page`, or panning there, eased, after it turned.
+    fn dots_at(&self, list: usize, page: usize) -> f32 {
+        let at = |(from, to, since): (f32, usize, Instant)| {
+            let t = since.elapsed().as_secs_f32() / mods::DOTS_SECS;
+            let eased = 1.0 - (1.0 - t.min(1.0)).powi(3);
+            from + (to as f32 - from) * eased
+        };
+        let mut dots = self.dots.get();
+        if dots[list].1 != page {
+            dots[list] = (at(dots[list]), page, Instant::now());
+            self.dots.set(dots);
+        }
+        at(dots[list])
+    }
+
+    /// The platform has no file picker to open.
+    pub fn no_file_picker(&mut self) {
+        self.sync_language();
+        self.skin_error = Some(tr("This device has no file picker.").into());
+    }
+
+    /// Bind launcher UI preferences (`horizon.txt`) to an explicit folder and load them immediately.
+    pub fn with_prefs_dir(mut self, dir: PathBuf) -> Self {
+        ui_theme::load_pixel_font_pref(&dir);
+        self.prefs_dir = Some(dir);
+        self
+    }
+
+    /// A drag, `delta_x`/`delta_y` UI pixels (positive: the finger moved right/down, toward
+    /// earlier rows): it scrolls the profile dropdown while that is open, else Mods' profile
+    /// tabs sideways, Settings' rows or Home's game log.
+    pub fn scroll(&mut self, delta_x: f32, delta_y: f32) {
+        let row = match (self.profile_popup_open, self.route) {
+            _ if self.confirm_free_space || self.confirm_remove_profile.is_some() => return,
+            _ if self.language_popup_open => 36.0,
+            (true, _) => 34.0,
+            (false, Route::Skins) => {
+                // The figure turns as far as the finger moves sideways, and tilts a little.
+                self.skin_yaw += delta_x * 0.012;
+                self.skin_pitch = (self.skin_pitch + delta_y * 0.006).clamp(0.0, 0.6);
+                return;
+            }
+            (false, Route::Mods) => {
+                match self.swipe {
+                    // Begun on a list: far enough sideways, it shows that list's next page (the
+                    // finger moved left) or the one before.
+                    Some((list, Some(moved))) => {
+                        let moved = moved + delta_x;
+                        if moved.abs() < SWIPE {
+                            self.swipe = Some((list, Some(moved)));
+                            return;
+                        }
+                        self.swipe = Some((list, None));
+                        let last = self.mod_pages.get()[list].saturating_sub(1);
+                        let page = if list == 0 {
+                            &mut self.mods_list_page
+                        } else {
+                            &mut self.mod_registry_page
+                        };
+                        let at = (*page).min(last);
+                        *page = if moved < 0.0 {
+                            (at + 1).min(last)
+                        } else {
+                            at.saturating_sub(1)
+                        };
+                    }
+                    Some((_, None)) => {}
+                    None => {
+                        let max = self.scroll_max.get() as f32;
+                        self.tab_scroll
+                            .set((self.tab_scroll.get() - delta_x).clamp(0.0, max));
+                    }
+                }
+                return;
+            }
+            (false, Route::AccountSwitcher) => {
+                if let Some((2, Some(moved))) = self.swipe {
+                    let moved = moved + delta_x;
+                    if moved.abs() < SWIPE {
+                        self.swipe = Some((2, Some(moved)));
+                        return;
+                    }
+                    self.swipe = Some((2, None));
+                    let last = self.account_pages.get().saturating_sub(1);
+                    let at = self.account_page.min(last);
+                    self.account_page = if moved < 0.0 {
+                        (at + 1).min(last)
+                    } else {
+                        at.saturating_sub(1)
+                    };
+                }
+                return;
+            }
+            (false, Route::Home) => 16.0,
+            (false, Route::Settings) => 50.0,
+            _ => return,
+        };
+        self.scroll_carry += delta_y;
+        let rows = (self.scroll_carry / row).trunc();
+        self.scroll_carry -= rows * row;
+        let max = self.scroll_max.get() as f32;
+        if self.language_popup_open {
+            self.language_scroll = (self.language_scroll as f32 - rows).clamp(0.0, max) as usize;
+        } else if self.profile_popup_open {
+            self.profile_scroll = (self.profile_scroll as f32 - rows).clamp(0.0, max) as usize;
+        } else {
+            // The game log counts back from its end: a drag down shows earlier lines there too.
+            let rows = if self.route == Route::Home {
+                rows
+            } else {
+                -rows
+            };
+            let at = (self.page_offset() as f32 + rows).clamp(0.0, max);
+            self.page_scroll = (self.route, at as usize);
+        }
+    }
+
+    /// A drag began at `at` (dp). On Mods and Accounts, one begun on a paged list turns its
+    /// pages ([`Self::scroll`]); above Mods' lists it scrolls the profile tabs.
+    pub fn drag_from(&mut self, at: (f32, f32)) {
+        self.swipe = match self.route {
+            Route::Mods => self
+                .mod_lists
+                .get()
+                .filter(|&(top, _)| at.1 >= top)
+                .map(|(_, split)| (usize::from(at.0 >= split), Some(0.0))),
+            Route::AccountSwitcher => self
+                .account_list_top
+                .get()
+                .filter(|&top| at.1 >= top)
+                .map(|_| (2, Some(0.0))),
+            _ => None,
+        };
+    }
+
+    /// A sign-in that failed, or the welcome screen's one still running, is dropped before
+    /// another way in opens. The active account's own sign-in, while adding one, keeps going.
+    fn drop_stale_sign_in(&mut self) {
+        let stale = match self.backend.sign_in() {
+            SignIn::Failed(_) => true,
+            SignIn::Starting | SignIn::Code { .. } => !self.adding_account,
+            SignIn::Idle | SignIn::Done(_) => false,
+        };
+        if stale {
+            self.backend.dismiss_sign_in();
+        }
+    }
+
+    /// How far a drag scrolled this page ([`Self::page_scroll`]).
+    fn page_offset(&self) -> usize {
+        if self.page_scroll.0 == self.route {
+            self.page_scroll.1
+        } else {
+            0
+        }
+    }
+
+    pub fn backend(&self) -> &dyn Backend {
+        &*self.backend
+    }
+
+    /// The screen's safe area, as the platform reports it.
+    pub fn set_safe_insets(&mut self, insets: SafeInsets) {
+        self.safe = insets;
+    }
+
+    fn is_onboarding(&self, accounts: &[Account]) -> bool {
+        accounts.is_empty() || (self.adding_account && accounts.len() <= self.accounts_before_add)
+    }
+
+    fn clear_ely_secrets(&mut self) {
+        self.ely_password.clear();
+        self.ely_otp.clear();
+    }
+
+    fn active_text_mut(&mut self) -> Option<&mut String> {
+        if self.profile_popup_open {
+            return None;
+        }
+        if self.profile_rename.is_some() {
+            return self.profile_rename.as_mut().map(|(_, text)| text);
+        }
+        let accounts = self.backend.accounts();
+        if self.is_onboarding(&accounts) {
+            return match self.auth_form {
+                Some(AuthForm::Offline) => Some(&mut self.offline_name),
+                Some(AuthForm::Ely) => Some(match self.ely_field {
+                    ElyField::Username => &mut self.ely_username,
+                    ElyField::Password => &mut self.ely_password,
+                    ElyField::Otp => &mut self.ely_otp,
+                }),
+                None => None,
+            };
+        }
+        match self.route {
+            Route::Mods if self.mod_search_focused => Some(&mut self.mod_search_query),
+            Route::Settings if self.game_args_focused => Some(&mut self.game_args_draft),
+            _ => None,
+        }
+    }
+
+    fn max_chars_for_active(&self) -> usize {
+        if self.profile_rename.is_some() {
+            return 32;
+        }
+        if self.game_args_focused {
+            return 512;
+        }
+        match self.auth_form {
+            Some(AuthForm::Offline) => 16,
+            Some(AuthForm::Ely) => match self.ely_field {
+                ElyField::Username | ElyField::Password => 128,
+                ElyField::Otp => 6,
+            },
+            None => 64,
+        }
+    }
+
+    fn char_allowed_for_active(&self, ch: char) -> bool {
+        if self.profile_rename.is_some() {
+            return !ch.is_control();
+        }
+        if self.auth_form == Some(AuthForm::Offline) {
+            return ch.is_ascii_alphanumeric() || ch == '_';
+        }
+        if self.auth_form == Some(AuthForm::Ely) && self.ely_field == ElyField::Otp {
+            return ch.is_ascii_digit();
+        }
+        !ch.is_control()
+    }
+
+    pub fn typed(&mut self, text: &str) {
+        for ch in text.chars() {
+            if ch == '\r' || ch == '\n' {
+                self.submit_active_form();
+                return;
+            }
+            if ch == '\t' && self.auth_form == Some(AuthForm::Ely) {
+                self.ely_field = match self.ely_field {
+                    ElyField::Username => ElyField::Password,
+                    ElyField::Password => ElyField::Otp,
+                    ElyField::Otp => ElyField::Username,
+                };
+                continue;
+            }
+            if !self.char_allowed_for_active(ch) {
+                continue;
+            }
+            let max_len = self.max_chars_for_active();
+            if let Some(buf) = self.active_text_mut()
+                && buf.chars().count() < max_len
+            {
+                buf.push(ch);
+            }
+        }
+    }
+
+    /// A line for the player on the screen's status note (the last game closed unexpectedly).
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.status_note = Some(text.into());
+    }
+
+    /// Marks whether Play is warming the selected profile's wasm mod cache before starting.
+    pub fn set_compiling_mods(&mut self, compiling: bool) {
+        self.compiling_mods = compiling;
+    }
+
+    /// Whether a text field has the focus: the phone's keyboard shows for it.
+    pub fn wants_text(&mut self) -> bool {
+        self.active_text_mut().is_some()
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(buf) = self.active_text_mut() {
+            buf.pop();
+        }
+    }
+
+    fn submit_active_form(&mut self) {
+        if self.profile_rename.is_some() {
+            self.handle_button(ButtonId::SaveRenameProfile);
+            return;
+        }
+        let accounts = self.backend.accounts();
+        if self.is_onboarding(&accounts) {
+            match self.auth_form {
+                Some(AuthForm::Offline) => {
+                    self.handle_button(ButtonId::ConfirmOffline);
+                }
+                Some(AuthForm::Ely) => self.submit_ely(),
+                None => {}
+            }
+            return;
+        }
+        match self.route {
+            Route::Mods if self.mod_search_focused => {
+                self.handle_button(ButtonId::SubmitModSearch);
+            }
+            Route::Settings if self.game_args_focused => self.save_game_args(),
+            _ => {}
+        }
+    }
+
+    fn submit_ely(&mut self) {
+        self.sync_language();
+        let user = self.ely_username.trim().to_owned();
+        if user.is_empty() {
+            self.ely_field = ElyField::Username;
+            self.ely_error = Some(tr("Enter your Ely.by username or email.").to_owned());
+            return;
+        }
+        if self.ely_password.is_empty() {
+            self.ely_field = ElyField::Password;
+            self.ely_error = Some(tr("Enter your Ely.by password.").to_owned());
+            return;
+        }
+        let result = self
+            .backend
+            .sign_in_ely(&user, &self.ely_password, self.ely_otp.trim());
+        self.clear_ely_secrets();
+        match result {
+            Ok(()) => {
+                self.ely_error = None;
+                self.sign_in_provider = SignInProvider::Ely;
+                if self.backend.account().is_some()
+                    && !matches!(
+                        self.backend.sign_in(),
+                        SignIn::Starting | SignIn::Code { .. }
+                    )
+                {
+                    self.auth_form = None;
+                    self.adding_account = false;
+                    self.route = Route::Home;
+                }
+            }
+            Err(err) => {
+                self.ely_error = Some(err);
+            }
+        }
+    }
+
+    fn selected_profile_snapshot(&self) -> (Vec<Profile>, String, usize) {
+        let profiles = self.backend.profiles();
+        let selected_id = self.backend.selected_profile();
+        let idx = profiles
+            .iter()
+            .position(|p| p.id == selected_id)
+            .unwrap_or(0);
+        let id = profiles
+            .get(idx)
+            .map_or_else(|| VANILLA.to_owned(), |p| p.id.clone());
+        (profiles, id, idx)
+    }
+
+    pub(super) fn effective_mods_profile_id(&self, profiles: &[Profile]) -> String {
+        if let Some(id) = &self.mods_profile_id
+            && profiles.iter().any(|p| &p.id == id)
+        {
+            return id.clone();
+        }
+        let sel = self.backend.selected_profile();
+        if sel != VANILLA && profiles.iter().any(|p| p.id == sel) {
+            return sel;
+        }
+        profiles
+            .iter()
+            .find(|p| p.id != VANILLA)
+            .or_else(|| profiles.first())
+            .map_or_else(|| VANILLA.to_owned(), |p| p.id.clone())
+    }
+
+    pub fn draw(&self, ui: &mut Ui) {
+        self.layout(&mut Canvas::Draw(ui));
+    }
+
+    pub fn click(&mut self, ui: &Ui) -> Option<Action> {
+        let hits = self.layout(&mut Canvas::Hit(ui));
+        let id = hits
+            .iter()
+            .rev()
+            .find(|h| h.contains(ui.cursor))
+            .map(|h| h.id)?;
+        self.handle_button(id)
+    }
+
+    fn handle_button(&mut self, id: ButtonId) -> Option<Action> {
+        self.sync_language();
+        if self.adding_account && self.backend.accounts().len() > self.accounts_before_add {
+            self.adding_account = false;
+            self.auth_form = None;
+        }
+        // A tap anywhere else keeps the name being typed on a Mods tab.
+        if !matches!(id, ButtonId::FocusRenameInput | ButtonId::SaveRenameProfile)
+            && let Some((tab, name)) = self.profile_rename.take()
+            && !name.trim().is_empty()
+            && let Err(err) = self.backend.rename_profile(&tab, name.trim())
+        {
+            self.mods_error = Some(err);
+        }
+        // A tap anywhere else keeps the game's arguments typed so far.
+        if self.game_args_focused && id != ButtonId::FocusGameArgs {
+            self.save_game_args();
+        }
+        // Any other tap answers "Free up space?" with no.
+        self.confirm_free_space = matches!(id, ButtonId::FreeSpace | ButtonId::ConfirmFreeSpace);
+        if !matches!(
+            id,
+            ButtonId::ToggleLanguagePicker
+                | ButtonId::LanguageScrollUp
+                | ButtonId::LanguageScrollDown
+        ) {
+            self.language_popup_open = false;
+        }
+        self.log_copied = false;
+
+        match id {
+            ButtonId::GoHome | ButtonId::SettingsBack => {
+                self.profile_popup_open = false;
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                self.mod_search_focused = false;
+                self.route = Route::Home;
+            }
+            ButtonId::ToggleLanguagePicker => {
+                self.language_popup_open = !self.language_popup_open;
+                if self.language_popup_open {
+                    self.language_scroll = self.backend.language().index().saturating_sub(2);
+                }
+            }
+            ButtonId::CloseLanguagePicker => {
+                self.language_popup_open = false;
+            }
+            ButtonId::SelectLanguage(idx) => {
+                if let Some(&lang) = Language::ALL.get(idx)
+                    && (lang.bundled_font_supported() || self.pack_font_ready.get())
+                {
+                    self.backend.set_language(lang);
+                    self.sync_language();
+                }
+            }
+            ButtonId::LanguageScrollUp => {
+                let max_scroll = self.scroll_max.get();
+                self.language_scroll = self.language_scroll.min(max_scroll).saturating_sub(4);
+            }
+            ButtonId::LanguageScrollDown => {
+                let max_scroll = self.scroll_max.get();
+                self.language_scroll = (self.language_scroll + 4).min(max_scroll);
+            }
+            ButtonId::ToggleProfilePicker => {
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                self.mod_search_focused = false;
+                self.profile_popup_open = !self.profile_popup_open;
+                if self.profile_popup_open {
+                    let (_, _, sel_idx) = self.selected_profile_snapshot();
+                    self.profile_scroll = sel_idx.saturating_sub(2);
+                }
+            }
+            ButtonId::CloseProfilePopup => {
+                self.profile_popup_open = false;
+            }
+            ButtonId::FreeSpace | ButtonId::CancelFreeSpace => {}
+            ButtonId::ConfirmFreeSpace => {
+                self.confirm_free_space = false;
+                self.freed = Some(self.backend.free_space());
+            }
+            ButtonId::ToggleAnimations => {
+                let on = !self.motion.on.get();
+                self.motion.on.set(on);
+                if let Some(dir) = &self.prefs_dir {
+                    ui_theme::set_preference(
+                        dir,
+                        ANIMATIONS_KEY,
+                        Some(if on { "on" } else { "off" }),
+                    );
+                }
+            }
+            ButtonId::ToggleLauncherFont => {
+                let next = !ui_theme::pixel_font();
+                if let Some(dir) = &self.prefs_dir {
+                    ui_theme::save_pixel_font_pref(dir, next);
+                } else {
+                    ui_theme::set_pixel_font(next);
+                }
+            }
+            ButtonId::ViewInstallScreen => {
+                self.profile_popup_open = false;
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                if matches!(
+                    self.backend.setup(),
+                    Setup::Running(_) | Setup::Failed { .. }
+                ) {
+                    self.route = Route::Install;
+                } else {
+                    self.route = Route::Home;
+                }
+            }
+            ButtonId::OpenMods => {
+                self.profile_popup_open = false;
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                self.mods_profile_id = Some(self.backend.selected_profile());
+                self.mods_list_page = 0;
+                self.mod_registry_page = 0;
+                self.mods_error = None;
+                self.mod_search_focused = false;
+                if matches!(self.backend.mod_search(), ModSearch::Idle) {
+                    self.backend.search_mods(&self.mod_search_query);
+                }
+                self.route = Route::Mods;
+            }
+            ButtonId::OpenSkins => {
+                self.profile_popup_open = false;
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                self.mod_search_focused = false;
+                if self.route != Route::Skins {
+                    self.sync_skin_account();
+                }
+                self.route = Route::Skins;
+            }
+            ButtonId::OpenSettings => {
+                self.profile_popup_open = false;
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                self.mod_search_focused = false;
+                self.route = Route::Settings;
+            }
+            ButtonId::OpenAccountSwitcher => {
+                self.profile_popup_open = false;
+                self.confirm_remove_profile = None;
+                self.profile_rename = None;
+                self.mod_search_focused = false;
+                self.route = if self.route == Route::AccountSwitcher {
+                    Route::Home
+                } else {
+                    Route::AccountSwitcher
+                };
+            }
+            ButtonId::SignInMicrosoft => {
+                self.sign_in_provider = SignInProvider::Microsoft;
+                self.auth_form = None;
+                self.offline_error = None;
+                self.ely_error = None;
+                self.clear_ely_secrets();
+                self.status_note = None;
+                self.code_copied = false;
+                self.backend.sign_in_microsoft();
+            }
+            ButtonId::OpenOfflineEntry => {
+                self.drop_stale_sign_in();
+                self.ely_error = None;
+                self.clear_ely_secrets();
+                // A release build without a game owner on the phone: why, at once (the backend
+                // refuses the account too).
+                self.offline_error =
+                    (!self.backend.game_allowed()).then(|| tr(NEEDS_OWNER).to_owned());
+                self.auth_form = Some(AuthForm::Offline);
+                self.status_note = None;
+            }
+            ButtonId::ToggleMoreAuth => {
+                self.show_more_auth = !self.show_more_auth;
+            }
+            ButtonId::OpenElyEntry => {
+                self.drop_stale_sign_in();
+                self.offline_error = None;
+                self.ely_error = (!self.backend.game_allowed()).then(|| tr(NEEDS_OWNER).to_owned());
+                self.ely_field = ElyField::Username;
+                self.clear_ely_secrets();
+                self.auth_form = Some(AuthForm::Ely);
+                self.status_note = None;
+            }
+            ButtonId::CancelAddAccount => {
+                self.adding_account = false;
+                self.auth_form = None;
+                self.clear_ely_secrets();
+                self.route = Route::Home;
+            }
+            ButtonId::FocusOfflineName => {}
+            ButtonId::ConfirmOffline => {
+                let name = self.offline_name.trim().to_owned();
+                match self.backend.sign_in_offline(&name) {
+                    Ok(_) => {
+                        self.auth_form = None;
+                        self.offline_error = None;
+                        self.adding_account = false;
+                        self.show_more_auth = false;
+                        self.status_note = None;
+                        self.route = Route::Home;
+                    }
+                    Err(err) => {
+                        self.offline_error = Some(err);
+                    }
+                }
+            }
+            ButtonId::CancelOffline => {
+                self.auth_form = None;
+                self.offline_error = None;
+            }
+            ButtonId::FocusElyUsername => self.ely_field = ElyField::Username,
+            ButtonId::FocusElyPassword => self.ely_field = ElyField::Password,
+            ButtonId::FocusElyOtp => self.ely_field = ElyField::Otp,
+            ButtonId::ConfirmEly => self.submit_ely(),
+            ButtonId::CancelEly => {
+                self.auth_form = None;
+                self.ely_error = None;
+                self.clear_ely_secrets();
+            }
+            ButtonId::OpenBrowserUrl => {
+                if let SignIn::Code { url, .. } = self.backend.sign_in() {
+                    self.status_note =
+                        Some(trf("Open {url} and enter the code.", &[("url", &url)]));
+                    return Some(Action::OpenUrl(url));
+                }
+            }
+            ButtonId::CopySignInCode => {
+                if let SignIn::Code { code, .. } = self.backend.sign_in() {
+                    self.code_copied = true;
+                    self.status_note = Some(tr("Code copied — paste it in your browser.").into());
+                    return Some(Action::CopyText(code));
+                }
+            }
+            ButtonId::CancelSignIn => {
+                self.backend.dismiss_sign_in();
+                self.status_note = None;
+                self.code_copied = false;
+                self.adding_account = false;
+                if self.sign_in_provider == SignInProvider::Ely {
+                    self.auth_form = Some(AuthForm::Ely);
+                    self.ely_error = None;
+                    self.clear_ely_secrets();
+                }
+            }
+            ButtonId::RetrySignIn => {
+                self.status_note = None;
+                self.code_copied = false;
+                match self.sign_in_provider {
+                    SignInProvider::Microsoft => self.backend.sign_in_microsoft(),
+                    SignInProvider::Ely => {
+                        self.auth_form = Some(AuthForm::Ely);
+                        self.ely_field = ElyField::Password;
+                        self.ely_error = None;
+                        self.clear_ely_secrets();
+                    }
+                }
+            }
+            ButtonId::SelectProfile(idx) => {
+                if let Some(p) = self.backend.profiles().get(idx) {
+                    let _ = self.backend.select_profile(&p.id);
+                    self.status_note = None;
+                    self.profile_popup_open = false;
+                }
+            }
+            ButtonId::ProfileScrollUp => {
+                self.profile_scroll = self.profile_scroll.saturating_sub(1);
+            }
+            ButtonId::ProfileScrollDown => {
+                let max_idx = self.backend.profiles().len().saturating_sub(1);
+                self.profile_scroll = (self.profile_scroll + 1).min(max_idx);
+            }
+            ButtonId::InstallSelected => {
+                self.profile_popup_open = false;
+                let (profiles, sel_id, _) = self.selected_profile_snapshot();
+                let setup = self.backend.setup();
+                if sel_id == VANILLA || !matches!(setup, Setup::Ready) {
+                    if !matches!(setup, Setup::Running(_)) {
+                        self.backend.install_profile(VANILLA);
+                        if matches!(self.backend.setup(), Setup::Needed | Setup::Failed { .. }) {
+                            self.backend.start_setup();
+                        }
+                    }
+                    self.route = Route::Install;
+                } else if profiles.iter().any(|p| p.id == sel_id) {
+                    self.backend.install_profile(&sel_id);
+                }
+            }
+            ButtonId::PlaySelected => {
+                self.profile_popup_open = false;
+                let (profiles, sel_id, _) = self.selected_profile_snapshot();
+                let setup = self.backend.setup();
+                let ready = matches!(setup, Setup::Ready)
+                    && profiles.iter().find(|p| p.id == sel_id).is_some_and(|p| {
+                        effective_profile_state(p, &setup) == ProfileState::Installed
+                    });
+                if ready {
+                    return Some(Action::Play);
+                }
+            }
+            ButtonId::RetrySetup => {
+                self.status_note = None;
+                self.backend.start_setup();
+                self.route = Route::Install;
+            }
+            ButtonId::CancelSetup => {
+                self.backend.cancel_setup();
+                self.route = Route::Home;
+            }
+            ButtonId::SwitchAccount(idx) => {
+                if let Err(err) = self.backend.switch_account(idx) {
+                    self.status_note = Some(err);
+                } else {
+                    self.status_note = None;
+                    self.sync_skin_account();
+                    self.route = Route::Home;
+                }
+            }
+            ButtonId::RemoveAccount(idx) => {
+                if let Err(err) = self.backend.remove_account(idx) {
+                    self.status_note = Some(err);
+                } else {
+                    self.sync_skin_account();
+                    if self.backend.accounts().is_empty() {
+                        self.route = Route::Home;
+                        self.adding_account = false;
+                    }
+                }
+            }
+            ButtonId::AccountsNext => {
+                self.account_page = (self.account_page + 1) % self.account_pages.get().max(1);
+            }
+            ButtonId::AddAccount => {
+                self.accounts_before_add = self.backend.accounts().len();
+                self.adding_account = true;
+                self.drop_stale_sign_in();
+                self.route = Route::Home;
+                self.auth_form = None;
+                self.show_more_auth = false;
+                self.offline_error = None;
+                self.ely_error = None;
+                self.clear_ely_secrets();
+            }
+            ButtonId::OpenNewProfile => {
+                self.profile_popup_open = false;
+                let profiles = self.backend.profiles();
+                // "Profile 1", "Profile 2"...: the first name no profile has (its folder is made
+                // unique by `profile_id`).
+                let name = (1..)
+                    .map(|n| format!("Profile {n}"))
+                    .find(|name| profiles.iter().all(|p| !p.name.eq_ignore_ascii_case(name)))
+                    .unwrap_or_default();
+                match self.backend.create_profile(&name, None, &[]) {
+                    Ok(id) => {
+                        let _ = self.backend.select_profile(&id);
+                        self.route = Route::Mods;
+                        self.mods_profile_id = Some(id.clone());
+                        self.mods_list_page = 0;
+                        self.mods_error = None;
+                        // Its name, ready to type over; tapping away keeps "Profile 1".
+                        self.profile_rename = Some((id, String::new()));
+                    }
+                    Err(err) => self.mods_error = Some(err),
+                }
+            }
+            ButtonId::ModManagerPickProfile(idx) => {
+                if let Some(p) = self.backend.profiles().get(idx) {
+                    self.mods_profile_id = Some(p.id.clone());
+                    self.mods_list_page = 0;
+                    self.mods_error = None;
+                }
+            }
+            ButtonId::ToggleProfileMod(idx) => {
+                let profiles = self.backend.profiles();
+                let pid = self.effective_mods_profile_id(&profiles);
+                if let Some(pm) = self.backend.mods(&pid).get(idx)
+                    && let Err(err) = self.backend.set_mod_enabled(&pid, &pm.info.id, !pm.enabled)
+                {
+                    self.mods_error = Some(err);
+                }
+            }
+            ButtonId::RemoveProfileMod(idx) => {
+                let profiles = self.backend.profiles();
+                let pid = self.effective_mods_profile_id(&profiles);
+                if let Some(pm) = self.backend.mods(&pid).get(idx)
+                    && let Err(err) = self.backend.remove_mod(&pid, &pm.info.id)
+                {
+                    self.mods_error = Some(err);
+                }
+            }
+            ButtonId::ProfileModsNext => {
+                self.mods_list_page = (self.mods_list_page + 1) % self.mod_pages.get()[0].max(1);
+            }
+            ButtonId::FocusModSearch => {
+                self.mod_search_focused = true;
+            }
+            ButtonId::SubmitModSearch => {
+                self.mod_search_focused = false;
+                self.mod_registry_page = 0;
+                self.backend.search_mods(self.mod_search_query.trim());
+            }
+            ButtonId::AddRegistryMod(idx) => {
+                let profiles = self.backend.profiles();
+                let pid = self.effective_mods_profile_id(&profiles);
+                if let ModSearch::Done(mods) = self.backend.mod_search()
+                    && let Some(m) = mods.get(idx)
+                {
+                    match self.backend.add_mod(&pid, &m.id) {
+                        Ok(()) => {
+                            self.mods_error = None;
+                            self.last_added_mod = Some((pid, m.id.clone()));
+                        }
+                        Err(err) => self.mods_error = Some(err),
+                    }
+                }
+            }
+            ButtonId::RegistryModsNext => {
+                self.mod_registry_page =
+                    (self.mod_registry_page + 1) % self.mod_pages.get()[1].max(1);
+            }
+            ButtonId::RenameTabProfile => {
+                let pid = self.effective_mods_profile_id(&self.backend.profiles());
+                if pid != VANILLA {
+                    self.profile_rename = Some((pid, String::new()));
+                }
+            }
+            ButtonId::FocusRenameInput => {}
+            ButtonId::SaveRenameProfile => {
+                if let Some((tab, name)) = self.profile_rename.take()
+                    && !name.trim().is_empty()
+                {
+                    match self.backend.rename_profile(&tab, name.trim()) {
+                        Ok(()) => self.mods_error = None,
+                        Err(err) => {
+                            // Still typing: the reason shows under the tabs.
+                            self.mods_error = Some(err);
+                            self.profile_rename = Some((tab, name));
+                        }
+                    }
+                }
+            }
+            ButtonId::DeleteTabProfile => {
+                let profiles = self.backend.profiles();
+                let pid = self.effective_mods_profile_id(&profiles);
+                if pid != VANILLA
+                    && let Some(p) = profiles.iter().find(|p| p.id == pid)
+                {
+                    self.confirm_remove_profile = Some((p.id.clone(), p.name.clone()));
+                }
+            }
+            ButtonId::CancelRemoveProfile => {
+                self.confirm_remove_profile = None;
+            }
+            ButtonId::ConfirmRemoveProfile => {
+                if let Some((id, name)) = self.confirm_remove_profile.take() {
+                    match self.backend.remove_profile(&id) {
+                        Ok(()) => {
+                            self.status_note = Some(trf(
+                                "Removed {name} and its saved worlds.",
+                                &[("name", &name)],
+                            ));
+                        }
+                        Err(err) => {
+                            self.status_note = Some(err);
+                        }
+                    }
+                }
+            }
+            ButtonId::Quit => return Some(Action::Quit),
+            ButtonId::PickSkin => {
+                self.skin_error = None;
+                return Some(Action::PickSkin);
+            }
+            ButtonId::SkinArms(slim) => {
+                self.skin_slim = slim;
+                self.skin_slim_edited = true;
+            }
+            ButtonId::SkinSlot(idx) => {
+                let idx = idx.min(3);
+                self.skin_slot = idx;
+                self.skin_pick = None;
+                self.skin_error = None;
+                self.skin_retry = false;
+                self.skin_slim_edited = false;
+                let filled = self
+                    .backend
+                    .account()
+                    .and_then(|a| self.backend.skin_slots(&a)[idx].clone());
+                if let Some(slot) = filled {
+                    self.skin_slim = slot.slim;
+                } else {
+                    return Some(Action::PickSkin);
+                }
+            }
+            ButtonId::UseSkin => {
+                if !self.skin_uploading {
+                    let slot_idx = self.skin_slot.min(3);
+                    let saved = self
+                        .backend
+                        .account()
+                        .and_then(|a| self.backend.skin_slots(&a)[slot_idx].clone());
+                    let png = self
+                        .skin_pick
+                        .as_ref()
+                        .map(|pick| pick.png.clone())
+                        .or_else(|| saved.as_ref().map(|slot| slot.png.clone()));
+                    if let Some(png) = png {
+                        let slim = match (
+                            self.skin_pick.is_some() || self.skin_slim_edited,
+                            saved.as_ref(),
+                        ) {
+                            (false, Some(slot)) => slot.slim,
+                            _ => self.skin_slim,
+                        };
+                        self.skin_slim = slim;
+                        self.skin_slim_edited = false;
+                        self.skin_retry = false;
+                        self.backend.save_skin_slot(slot_idx, png, slim);
+                        self.skin_uploading = true;
+                    }
+                }
+            }
+            ButtonId::OpenElySkins => return Some(Action::OpenUrl(ELY_SKINS.into())),
+            ButtonId::LogLevel(level) => self.log_level = level,
+            ButtonId::FocusGameArgs => {
+                if !self.game_args_focused {
+                    self.game_args_draft = self.backend.game_args();
+                    self.game_args_focused = true;
+                    self.game_args_error = None;
+                }
+            }
+            ButtonId::OpenSourceCode => return Some(Action::OpenUrl(SOURCE_CODE.into())),
+            ButtonId::OpenLicenses => return Some(Action::OpenUrl(LICENSES.into())),
+            ButtonId::ExportDiagnostics => {
+                if !self.diagnostics_exporting {
+                    self.diagnostics_exporting = true;
+                    self.diagnostics = None;
+                    return Some(Action::ExportDiagnostics);
+                }
+            }
+            ButtonId::CopyLog => {
+                let lines = self.backend.game_log(&self.backend.selected_profile());
+                let shown: Vec<&str> = lines
+                    .iter()
+                    .zip(widgets::log_levels(&lines))
+                    .filter(|(_, level)| *level >= self.log_level)
+                    .map(|(line, _)| line.as_str())
+                    .collect();
+                self.log_copied = true;
+                return Some(Action::CopyText(shown.join("\n")));
+            }
+            ButtonId::SelectSettingsTab(tab) => {
+                self.settings_tab = tab;
+                self.page_scroll = (Route::Settings, 0);
+                self.game_args_focused = false;
+                self.game_options_error = None;
+            }
+            ButtonId::ToggleGameOption(which) => {
+                let profile = self.backend.selected_profile();
+                let mut opts: GameOptions = self.backend.game_options(&profile);
+                match which {
+                    0 => opts.dynamic_lights = !opts.dynamic_lights,
+                    1 => opts.coords = !opts.coords,
+                    2 => opts.sort = !opts.sort,
+                    3 => opts.far_terrain = !opts.far_terrain,
+                    4 => opts.auto_jump = !opts.auto_jump,
+                    _ => return None,
+                }
+                self.game_options_error = self.backend.set_game_options(&profile, opts).err();
+            }
+            ButtonId::ImportFile(kind) => {
+                if !self.file_busy {
+                    self.file_busy = true;
+                    self.file_status = None;
+                    return Some(Action::ImportFile(kind));
+                }
+            }
+            ButtonId::CycleExportWorld => {
+                let worlds = self.backend.profile_worlds(&self.backend.selected_profile());
+                if !worlds.is_empty() {
+                    self.export_world_idx = (self.export_world_idx + 1) % worlds.len();
+                }
+            }
+            ButtonId::ExportWorld => {
+                if !self.file_busy {
+                    let worlds = self.backend.profile_worlds(&self.backend.selected_profile());
+                    if let Some(world) = worlds.get(self.export_world_idx % worlds.len().max(1)) {
+                        self.file_busy = true;
+                        self.file_status = None;
+                        return Some(Action::ExportWorld(world.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn layout(&self, ui: &mut Canvas<'_, '_>) -> Vec<HitRect> {
+        self.pack_font_ready
+            .set(ui_theme::pack_font_ready(ui.ro().atlas));
+        self.sync_language();
+        let mut hits = Vec::new();
+        // The list a drag scrolls sets it as it's laid out.
+        self.scroll_max.set(0);
+        let styles = &menu_style::get().settings;
+        let col_success = color::hex(styles.success, 255);
+        let col_danger = color::hex(styles.danger, 255);
+
+        let (ui_w, ui_h) = (ui.ro().w, ui.ro().h);
+        if let Some(p) = ui.paint() {
+            draw_backdrop(p, ui_w, ui_h);
+        }
+
+        let kb_h = ui_h < 300.0;
+        let short_h = ui_h < 580.0;
+        let compact_w = ui_w < 860.0;
+        let wide_w = ui_w >= 1200.0;
+        let pad = if kb_h {
+            10.0
+        } else if compact_w {
+            12.0
+        } else if short_h {
+            14.0
+        } else {
+            18.0
+        };
+        let top_h = if kb_h {
+            34.0
+        } else if ui_h < 380.0 {
+            42.0
+        } else if short_h {
+            46.0
+        } else {
+            54.0
+        };
+        // Controls stay inside the safe area; the bars' backgrounds reach the screen's edges.
+        let safe = self.safe;
+        let (x0, x1) = (safe.left, ui_w - safe.right);
+        let (y0, y1) = (safe.top, ui_h - safe.bottom);
+        let safe_w = (x1 - x0).max(0.0);
+
+        let accounts = self.backend.accounts();
+        let active_idx = self.backend.active_account();
+        let account = active_idx.and_then(|i| accounts.get(i).cloned());
+        let onboarding = self.is_onboarding(&accounts);
+        let setup = self.backend.setup();
+        let sign_in = self.backend.sign_in();
+        let profiles = self.backend.profiles();
+        // Into the launcher after signing in: the whole screen zooms in (0.30 s).
+        let (was_onboarding, shell_since) = motion::changed(&self.shell_motion, onboarding);
+        let shell_start = motion::mark(ui);
+
+        if onboarding {
+            // Each sign-in step slides in 18 dp from its side (deeper from the right) while the
+            // top bar stays.
+            let progress = matches!(
+                sign_in,
+                SignIn::Starting | SignIn::Code { .. } | SignIn::Failed(_)
+            ) && (account.is_none() || self.adding_account);
+            let step: u8 = if self.route == Route::Settings {
+                3
+            } else if progress {
+                2
+            } else if self.auth_form.is_some() {
+                1
+            } else {
+                0
+            };
+            let (from_step, step_since) = motion::changed(&self.step_motion, step);
+            self.draw_onboarding_top_bar(ui, &mut hits, ui_w, x0, x1, y0, pad, top_h);
+            let card_start = motion::mark(ui);
+            let slid = self.motion.ease(step_since, 0.0, 0.24);
+            let side = if step >= from_step { 18.0 } else { -18.0 };
+            let slide = |ui: &mut Canvas<'_, '_>| {
+                motion::shape(
+                    ui,
+                    card_start,
+                    slid,
+                    side * (1.0 - slid),
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                );
+            };
+            let v_margin = if kb_h {
+                4.0
+            } else if short_h {
+                8.0
+            } else {
+                18.0
+            };
+            let content_top = y0 + top_h + v_margin;
+            let content_h = (y1 - content_top - v_margin).max(0.0);
+            let card_w = (safe_w - pad * 2.0).min(if wide_w { 760.0 } else { 640.0 });
+            let card_x = x0 + ((safe_w - card_w) * 0.5).round();
+
+            if self.route == Route::Settings {
+                if self.language_popup_open {
+                    self.draw_language_popup(
+                        ui,
+                        &mut hits,
+                        card_x,
+                        content_top,
+                        card_w,
+                        content_h,
+                        col_success,
+                    );
+                } else {
+                    self.draw_settings_view(
+                        ui,
+                        &mut hits,
+                        card_x,
+                        content_top,
+                        card_w,
+                        content_h,
+                        true,
+                        &setup,
+                        col_success,
+                        col_danger,
+                    );
+                }
+                slide(ui);
+                return hits;
+            }
+            match &sign_in {
+                SignIn::Starting | SignIn::Code { .. } | SignIn::Failed(_)
+                    if account.is_none() || self.adding_account =>
+                {
+                    self.draw_signin_progress(
+                        ui,
+                        &mut hits,
+                        card_x,
+                        content_top,
+                        card_w,
+                        content_h,
+                        &sign_in,
+                    );
+                    slide(ui);
+                    return hits;
+                }
+                _ => {}
+            }
+            match self.auth_form {
+                Some(AuthForm::Offline) => self.draw_offline_entry(
+                    ui,
+                    &mut hits,
+                    card_x,
+                    content_top,
+                    card_w,
+                    content_h,
+                    col_danger,
+                ),
+                Some(AuthForm::Ely) => self.draw_ely_entry(
+                    ui,
+                    &mut hits,
+                    card_x,
+                    content_top,
+                    card_w,
+                    content_h,
+                    col_danger,
+                ),
+                None => self.draw_welcome(
+                    ui,
+                    &mut hits,
+                    card_x,
+                    content_top,
+                    card_w,
+                    content_h,
+                    !accounts.is_empty() && self.adding_account,
+                ),
+            }
+            slide(ui);
+            return hits;
+        }
+
+        // Signed-in shell: the top bar (the logo, then the pages), the page under it, the dock
+        // across the bottom. While the keyboard is up for a field, the form gets the room above it:
+        // no dock rising behind it with the account switcher. The top bar stays, so the page keeps
+        // its place.
+        // ponytail: "keyboard up" is the keyboard-lifted height (kb_h); a tablet's keyboard leaves
+        // more room and keeps the dock. Pass the keyboard's height from the host if that matters.
+        let typing = kb_h
+            && !self.profile_popup_open
+            && (self.profile_rename.is_some()
+                || self.route == Route::Mods && self.mod_search_focused
+                || self.route == Route::Settings && self.game_args_focused);
+        let bottom_h = if typing {
+            0.0
+        } else if kb_h {
+            46.0
+        } else if ui_h < 380.0 {
+            54.0
+        } else if short_h {
+            58.0
+        } else {
+            68.0
+        };
+        let dock_y = y1 - bottom_h;
+
+        let mut bg_hits = Vec::new();
+        // A question over the page: the page shows, blurred, and only the question takes taps.
+        let popup = self.confirm_free_space
+            || self.confirm_remove_profile.is_some()
+            || self.language_popup_open;
+
+        // Profile pop-up (0.20 s in, 0.13 s out) and Accounts (0.33 s) openness: shared by the
+        // dock's rotating chevrons and the profile pop-up itself.
+        let (was_popup, popup_since) = motion::changed(&self.popup_motion, self.profile_popup_open);
+        let popup_open = if self.profile_popup_open {
+            self.motion.ease(popup_since, 0.0, 0.20)
+        } else if was_popup {
+            1.0 - self.motion.ease(popup_since, 0.0, 0.13)
+        } else {
+            0.0
+        };
+        let accounts_open_now = self.route == Route::AccountSwitcher;
+        let (was_accounts, accounts_since) =
+            motion::changed(&self.account_motion, accounts_open_now);
+        let accounts_open = if accounts_open_now {
+            self.motion.ease(accounts_since, 0.0, 0.33)
+        } else if was_accounts {
+            1.0 - self.motion.ease(accounts_since, 0.0, 0.33)
+        } else {
+            0.0
+        };
+
+        // The top bar, then the dock across the bottom.
+        {
+            let chrome_hits = if self.profile_popup_open || popup {
+                &mut bg_hits
+            } else {
+                &mut hits
+            };
+            self.draw_top_bar(ui, chrome_hits, ui_w, x0, x1, y0, top_h, pad);
+        }
+        let (prof_x, prof_w) = if typing {
+            (0.0, 0.0)
+        } else {
+            self.draw_bottom_bar(
+                ui,
+                if popup { &mut bg_hits } else { &mut hits },
+                ui_w,
+                x0,
+                x1,
+                ui_h - y1,
+                dock_y,
+                bottom_h,
+                pad,
+                compact_w,
+                (accounts_open, popup_open),
+                &account,
+                &setup,
+                &profiles,
+                col_success,
+                col_danger,
+            )
+        };
+
+        let v_margin = if kb_h {
+            4.0
+        } else if short_h {
+            6.0
+        } else {
+            12.0
+        };
+        let main_x = x0 + pad;
+        let main_y = y0 + top_h + v_margin;
+        let main_w = (safe_w - pad * 2.0).max(280.0);
+        let main_h = (dock_y - main_y - v_margin).max(0.0);
+        let modal_w = main_w.min(if wide_w { 720.0 } else { 600.0 });
+        let modal_x = main_x + ((main_w - modal_w) * 0.5).round();
+
+        let top_hits = if self.profile_popup_open || popup {
+            &mut bg_hits
+        } else {
+            &mut hits
+        };
+
+        let page = Page {
+            x: main_x,
+            y: main_y,
+            w: main_w,
+            h: main_h,
+            modal_x,
+            modal_w,
+            setup: &setup,
+            profiles: &profiles,
+            accounts: &accounts,
+            active: active_idx,
+            account: &account,
+            col_success,
+            col_danger,
+        };
+        // Changing pages fades through: the old page fades out (0.10 s, drifting 6 dp), then the
+        // new one fades in (0.26 s) rising 12 dp from the side it sits on in the rail. Home and
+        // its install card zoom instead; Accounts comes up from the dock.
+        let (before, since) = motion::changed(&self.page_motion, self.route);
+        let rank = |route: Route| match route {
+            Route::Home | Route::Install => 0,
+            Route::Mods => 1,
+            Route::Skins => 2,
+            Route::Settings => 3,
+            Route::AccountSwitcher => 4,
+        };
+        let down = rank(self.route) >= rank(before);
+        let zoom = matches!(
+            (before, self.route),
+            (Route::Home, Route::Install) | (Route::Install, Route::Home)
+        );
+        let (cx, cy) = (main_x + main_w * 0.5, main_y + main_h * 0.5);
+        let out = self.motion.ease(since, 0.0, 0.10);
+        if before != self.route && out < 1.0 && matches!(ui, Canvas::Draw(_)) {
+            let start = motion::mark(ui);
+            self.draw_page(before, ui, &mut Vec::new(), &page);
+            self.scroll_max.set(0);
+            let drift = if down { -6.0 } else { 6.0 } * out;
+            let (dy, scale) = if zoom {
+                (0.0, 1.0 - 0.03 * out)
+            } else {
+                (drift, 1.0)
+            };
+            motion::shape(ui, start, 1.0 - out, 0.0, dy, scale, cx, cy);
+        }
+        let shown = self.motion.ease(since, 0.07, 0.26);
+        let start = motion::mark(ui);
+        self.draw_page(self.route, ui, top_hits, &page);
+        let rise = (1.0 - shown) * if down { 12.0 } else { -12.0 };
+        let (dy, scale) = if zoom {
+            (0.0, 0.97 + 0.03 * shown)
+        } else {
+            (rise, 1.0)
+        };
+        motion::shape(ui, start, shown, 0.0, dy, scale, cx, cy);
+
+        let (was_dialog, dialog_since) = motion::changed(&self.dialog_motion, popup);
+        let entered = was_onboarding && !onboarding;
+        let pop_w = modal_w.min(safe_w - 32.0);
+        let pop_x = x0 + ((safe_w - pop_w) * 0.5).round();
+        let (pop_y, pop_h) = (y0, y1 - y0);
+        let (dialog_cx, dialog_cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+        if popup {
+            // A question zooms in (0.96 to 1, opaque a third of the way) while the dim eases in.
+            let shown = self.motion.ease(dialog_since, 0.0, 0.24);
+            // Everything drawn so far blurs (the host turns the blur on for a frame that marks
+            // where it ends), dimmed under the question, which sits in the middle of the screen.
+            if let Some(p) = ui.paint() {
+                p.batch.blur_at = p.batch.vertices.len() as u32;
+                p.rounded(
+                    0.0,
+                    0.0,
+                    ui_w,
+                    ui_h,
+                    0.0,
+                    color::with_alpha(palette::bg_outer(), 0.55 * shown),
+                );
+            }
+            let card_start = motion::mark(ui);
+            if self.confirm_free_space {
+                let bytes = self.backend.reclaimable().unwrap_or(0);
+                *self.last_dialog.borrow_mut() = Some(ClosedDialog::FreeSpace { bytes });
+                self.draw_free_space_confirm(ui, &mut hits, pop_x, pop_y, pop_w, pop_h, bytes);
+            } else if self.language_popup_open {
+                *self.last_dialog.borrow_mut() = Some(ClosedDialog::Language);
+                self.draw_language_popup(ui, &mut hits, pop_x, pop_y, pop_w, pop_h, col_success);
+            } else if let Some((ref id, ref name)) = self.confirm_remove_profile {
+                // As counted now, not when the bin was tapped.
+                let worlds = profiles
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .map_or(0, |p| p.worlds);
+                *self.last_dialog.borrow_mut() = Some(ClosedDialog::Remove {
+                    name: name.clone(),
+                    worlds,
+                });
+                self.draw_remove_confirm(
+                    ui, &mut hits, pop_x, pop_y, pop_w, pop_h, name, worlds, col_danger,
+                );
+            }
+            let scale = 0.96 + 0.04 * shown;
+            motion::shape(
+                ui,
+                card_start,
+                shown * 3.0,
+                0.0,
+                0.0,
+                scale,
+                dialog_cx,
+                dialog_cy,
+            );
+            if entered {
+                self.enter_shell(ui, shell_start, shell_since, ui_w, ui_h);
+            }
+            return hits;
+        }
+        if self.profile_popup_open || (popup_open > 0.0 && !typing && matches!(ui, Canvas::Draw(_)))
+        {
+            // The pop-up rises out of the profile pill (0.20 s) and lowers back into it (0.13 s);
+            // while closing, it takes no taps and leaves the page's scroll_max alone.
+            if let Some(p) = ui.paint() {
+                p.rounded(
+                    0.0,
+                    0.0,
+                    ui_w,
+                    dock_y,
+                    0.0,
+                    color::with_alpha(palette::bg_outer(), 0.58 * popup_open),
+                );
+            }
+            let saved_scroll = self.scroll_max.get();
+            let mut closing_hits = Vec::new();
+            let popup_hits = if self.profile_popup_open {
+                &mut hits
+            } else {
+                &mut closing_hits
+            };
+            let start = motion::mark(ui);
+            self.draw_profile_popup(
+                ui,
+                popup_hits,
+                ui_w,
+                y0 + top_h,
+                dock_y,
+                prof_x,
+                prof_w,
+                &setup,
+                &profiles,
+                col_success,
+                col_danger,
+            );
+            if !self.profile_popup_open {
+                self.scroll_max.set(saved_scroll);
+            }
+            let (cx, cy) = (prof_x + prof_w * 0.5, dock_y);
+            let rise = 10.0 * (1.0 - popup_open);
+            motion::shape(
+                ui,
+                start,
+                popup_open,
+                0.0,
+                rise,
+                0.97 + 0.03 * popup_open,
+                cx,
+                cy,
+            );
+        }
+        if was_dialog {
+            let out = 1.0 - self.motion.ease(dialog_since, 0.0, 0.14);
+            if out > 0.0
+                && matches!(ui, Canvas::Draw(_))
+                && let Some(closed) = self.last_dialog.borrow().clone()
+            {
+                if let Some(p) = ui.paint() {
+                    p.rounded(
+                        0.0,
+                        0.0,
+                        ui_w,
+                        ui_h,
+                        0.0,
+                        color::with_alpha(palette::bg_outer(), 0.55 * out),
+                    );
+                }
+                let saved_scroll = self.scroll_max.get();
+                let card_start = motion::mark(ui);
+                let mut inert = Vec::new();
+                match closed {
+                    ClosedDialog::FreeSpace { bytes } => self.draw_free_space_confirm(
+                        ui, &mut inert, pop_x, pop_y, pop_w, pop_h, bytes,
+                    ),
+                    ClosedDialog::Language => self.draw_language_popup(
+                        ui,
+                        &mut inert,
+                        pop_x,
+                        pop_y,
+                        pop_w,
+                        pop_h,
+                        col_success,
+                    ),
+                    ClosedDialog::Remove { ref name, worlds } => self.draw_remove_confirm(
+                        ui, &mut inert, pop_x, pop_y, pop_w, pop_h, name, worlds, col_danger,
+                    ),
+                }
+                self.scroll_max.set(saved_scroll);
+                let scale = 0.96 + 0.04 * out;
+                motion::shape(
+                    ui,
+                    card_start,
+                    out * 3.0,
+                    0.0,
+                    0.0,
+                    scale,
+                    dialog_cx,
+                    dialog_cy,
+                );
+            }
+        }
+        if entered {
+            self.enter_shell(ui, shell_start, shell_since, ui_w, ui_h);
+        }
+        hits
+    }
+
+    /// Into the launcher after signing in: everything since `start` zooms from 0.985 to 1.
+    fn enter_shell(&self, ui: &mut Canvas<'_, '_>, start: usize, since: Instant, w: f32, h: f32) {
+        let shown = self.motion.ease(since, 0.0, 0.30);
+        motion::shape(
+            ui,
+            start,
+            1.0,
+            0.0,
+            0.0,
+            0.985 + 0.015 * shown,
+            w * 0.5,
+            h * 0.5,
+        );
+    }
+
+    /// One page of the signed-in shell, `route`'s, in `a`'s place.
+    fn draw_page(
+        &self,
+        route: Route,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        a: &Page<'_>,
+    ) {
+        match route {
+            Route::Install => match a.setup {
+                Setup::Running(progress) => self.draw_setup_running(
+                    ui,
+                    hits,
+                    a.modal_x,
+                    a.y,
+                    a.modal_w,
+                    a.h,
+                    progress,
+                    a.col_success,
+                ),
+                Setup::Failed { stage, error } => self.draw_setup_failed(
+                    ui,
+                    hits,
+                    a.modal_x,
+                    a.y,
+                    a.modal_w,
+                    a.h,
+                    *stage,
+                    error,
+                    a.col_danger,
+                ),
+                Setup::Needed | Setup::Ready => self.draw_home(
+                    ui,
+                    hits,
+                    a.x,
+                    a.y,
+                    a.w,
+                    a.h,
+                    a.setup,
+                    a.profiles,
+                    a.col_success,
+                    a.col_danger,
+                ),
+            },
+            Route::AccountSwitcher => self.draw_account_switcher(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                a.accounts,
+                a.active,
+                a.col_success,
+            ),
+            Route::Mods => self.draw_mods_view(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                a.profiles,
+                a.col_success,
+                a.col_danger,
+            ),
+            Route::Skins => {
+                self.draw_skins_view(
+                    ui,
+                    hits,
+                    a.x,
+                    a.y,
+                    a.w,
+                    a.h,
+                    a.account,
+                    a.col_success,
+                    a.col_danger,
+                );
+            }
+            Route::Settings => self.draw_settings_view(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                false,
+                a.setup,
+                a.col_success,
+                a.col_danger,
+            ),
+            Route::Home => self.draw_home(
+                ui,
+                hits,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                a.setup,
+                a.profiles,
+                a.col_success,
+                a.col_danger,
+            ),
+        }
+    }
+
+    /// Before sign-in: the logo and name, the version and Settings. The background spans the
+    /// screen from its top; the rest stays in the safe area (`x0..x1`, from `y0`).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_onboarding_top_bar(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        ui_w: f32,
+        x0: f32,
+        x1: f32,
+        y0: f32,
+        pad: f32,
+        top_h: f32,
+    ) {
+        let (left, right) = (x0 + pad, x1 - pad);
+        let tight_top = top_h < 40.0;
+        let btn_h = (top_h - if tight_top { 6.0 } else { 10.0 }).clamp(26.0, 42.0);
+        let btn_y = y0 + ((top_h - btn_h) * 0.5).round();
+        let settings_label = tr("Settings");
+        let settings_w = (ui
+            .ro()
+            .measure(Face::Medium, ui_theme::body(), settings_label)
+            + 24.0)
+            .max(86.0);
+        if let Some(p) = ui.paint() {
+            p.rounded(0.0, 0.0, ui_w, y0 + top_h, 0.0, palette::rail());
+            p.rounded(
+                0.0,
+                y0 + top_h - 1.0,
+                ui_w,
+                1.0,
+                0.0,
+                palette::border_subtle(),
+            );
+            let badge_sz = (top_h - if tight_top { 8.0 } else { 14.0 }).clamp(24.0, 36.0);
+            draw_north_star_badge(p, left, y0 + ((top_h - badge_sz) * 0.5).round(), badge_sz);
+            let title_sz = if tight_top { 15.5 } else { 18.5 };
+            p.text_line(
+                Face::SemiBold,
+                title_sz,
+                top_h,
+                left + badge_sz + 10.0,
+                y0,
+                palette::text(),
+                tr("Meridian Launcher"),
+            );
+            let ver = concat!("Minecraft 26.3   v", env!("CARGO_PKG_VERSION"));
+            let vw = p.measure(Face::Regular, ui_theme::small(), ver);
+            p.text_line(
+                Face::Regular,
+                ui_theme::small(),
+                top_h,
+                right - settings_w - 14.0 - vw,
+                y0,
+                palette::muted(),
+                ver,
+            );
+        }
+        draw_button(
+            ui,
+            hits,
+            ButtonId::OpenSettings,
+            right - settings_w,
+            btn_y,
+            settings_w,
+            btn_h,
+            if self.route == Route::Settings {
+                Tone::Banner
+            } else {
+                Tone::Ghost
+            },
+            settings_label,
+        );
+    }
+
+    /// The top bar: the logo, a divider, then Home, Mods, Skins and Settings left-aligned after
+    /// it. Its background spans the screen from its top; the controls stay in the safe area
+    /// (`x0..x1`, from `y0`).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_top_bar(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        ui_w: f32,
+        x0: f32,
+        x1: f32,
+        y0: f32,
+        top_h: f32,
+        pad: f32,
+    ) {
+        let (left, right) = (x0 + pad, x1 - pad);
+        let logo = (top_h - 14.0).clamp(22.0, 30.0);
+        let logo_y = y0 + ((top_h - logo) * 0.5).round();
+        if let Some(p) = ui.paint() {
+            p.rounded(0.0, 0.0, ui_w, y0 + top_h, 0.0, palette::rail());
+            p.rounded(
+                0.0,
+                y0 + top_h - 1.0,
+                ui_w,
+                1.0,
+                0.0,
+                palette::border_subtle(),
+            );
+            draw_north_star_badge(p, left, logo_y, logo);
+            let div_h = (logo * 0.65).round();
+            let div_y = y0 + ((top_h - div_h) * 0.5).round();
+            p.rounded(
+                left + logo + 12.0,
+                div_y,
+                1.0,
+                div_h,
+                0.0,
+                palette::border_subtle(),
+            );
+        }
+        hits.push(HitRect {
+            id: ButtonId::GoHome,
+            x: left,
+            y: logo_y,
+            w: logo,
+            h: logo,
+        });
+
+        let nav_h = (top_h - 10.0).clamp(24.0, 32.0);
+        let nav_y = y0 + ((top_h - nav_h) * 0.5).round();
+        let gap = 6.0;
+        let nav_x = left + logo + 24.0;
+        let item_w = (((right - nav_x).max(160.0) - gap * 3.0) * 0.25)
+            .floor()
+            .clamp(56.0, 104.0);
+
+        // Home, Mods, Skins, Settings.
+        let page = self.route;
+        let nav_items = [
+            (
+                ButtonId::GoHome,
+                RailIcon::Home,
+                tr("Home"),
+                matches!(page, Route::Home | Route::Install),
+            ),
+            (
+                ButtonId::OpenMods,
+                RailIcon::Mods,
+                tr("Mods"),
+                page == Route::Mods,
+            ),
+            (
+                ButtonId::OpenSkins,
+                RailIcon::Skins,
+                tr("Skins"),
+                page == Route::Skins,
+            ),
+            (
+                ButtonId::OpenSettings,
+                RailIcon::Settings,
+                tr("Settings"),
+                page == Route::Settings,
+            ),
+        ];
+        // The selection slides from the item it left (0.26 s); icons and labels recolour at once.
+        let selected = nav_items.iter().position(|item| item.3).unwrap_or(0);
+        let (from, since) = motion::changed(&self.rail_motion, selected);
+        let mut piece = None;
+        for (i, (id, icon, label, active)) in nav_items.into_iter().enumerate() {
+            let x = nav_x + i as f32 * (item_w + gap);
+            let drawn = draw_nav_item(ui, hits, id, x, nav_y, item_w, nav_h, active, icon, label);
+            piece = piece.or(drawn);
+        }
+        let slid = self.motion.ease(since, 0.0, 0.26);
+        if let (Some(range), Some(p)) = (piece, ui.paint())
+            && slid < 1.0
+        {
+            let dx = (from as f32 - selected as f32) * (item_w + gap) * (1.0 - slid);
+            motion::shape_range(p, range, 1.0, dx, 0.0, 1.0, nav_x, 0.0, 0.0);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_bottom_bar(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        ui_w: f32,
+        x0: f32,
+        x1: f32,
+        below: f32,
+        y: f32,
+        h: f32,
+        pad: f32,
+        compact_w: bool,
+        chevrons: (f32, f32),
+        account: &Option<Account>,
+        setup: &Setup,
+        profiles: &[Profile],
+        col_success: u32,
+        col_danger: u32,
+    ) -> (f32, f32) {
+        // The background spans the screen and reaches `below` further down, under a home bar;
+        // the controls stay inside `x0..x1`.
+        if let Some(p) = ui.paint() {
+            p.rounded(0.0, y, ui_w, h + below, 0.0, palette::rail());
+            p.rounded(0.0, y, ui_w, 1.0, 0.0, palette::border_subtle());
+        }
+        let right = x1 - pad;
+        let pad = x0 + pad;
+        // A narrow safe area (an iPhone's, about 734 dp) keeps the profile pill wide.
+        let narrow = x1 - x0 < 760.0;
+
+        let tight_dock = h < 54.0;
+        let bar_h = (h - if tight_dock { 8.0 } else { 14.0 }).clamp(36.0, 50.0);
+        let by = y + ((h - bar_h) * 0.5).round();
+        let gap = if compact_w { 10.0 } else { 14.0 };
+        let acct_w = if narrow {
+            152.0
+        } else if compact_w {
+            168.0
+        } else {
+            200.0
+        };
+        let play_w = if narrow {
+            144.0
+        } else if compact_w {
+            156.0
+        } else {
+            180.0
+        };
+        let play_x = right - play_w;
+
+        let mid_left = pad + acct_w + gap;
+        let mid_right = play_x - gap;
+        let mid_avail = (mid_right - mid_left).max(160.0);
+        let prof_w = mid_avail.min(if compact_w { 390.0 } else { 448.0 });
+        let ideal_prof_x = ((x0 + x1 - prof_w) * 0.5).round();
+        let prof_x = ideal_prof_x.clamp(mid_left, (mid_right - prof_w).max(mid_left));
+
+        // 1. Bottom-left: Borderless Player Head + Account Switcher
+        let acct_hit = HitRect {
+            id: ButtonId::OpenAccountSwitcher,
+            x: pad,
+            y: by,
+            w: acct_w,
+            h: bar_h,
+        };
+        let (acct_name, acct_sub) = match account {
+            Some(a) => (account_short(a), account_provider_tag(a)),
+            None => (tr("Account"), tr("Not signed in")),
+        };
+        if let Some(p) = ui.paint() {
+            let active = self.route == Route::AccountSwitcher;
+            let hovered = acct_hit.contains(p.cursor);
+            if active || hovered {
+                p.rounded(
+                    pad,
+                    by,
+                    acct_w,
+                    bar_h,
+                    10.0,
+                    if active {
+                        color::with_alpha(palette::accent(), 0.16)
+                    } else {
+                        palette::surface()
+                    },
+                );
+                if active {
+                    p.border(
+                        pad,
+                        by,
+                        acct_w,
+                        bar_h,
+                        10.0,
+                        color::with_alpha(palette::accent_star(), 0.65),
+                    );
+                }
+            }
+
+            let head_sz = (bar_h - 8.0).clamp(28.0, 38.0);
+            let head_y = by + ((bar_h - head_sz) * 0.5).round();
+            let head = account.as_ref().and_then(|a| self.backend.player_head(a));
+            draw_player_head(p, pad + 6.0, head_y, head_sz, head.as_ref(), acct_name);
+
+            let tx = pad + head_sz + 14.0;
+            let max_tw = (acct_w - head_sz - 24.0).max(40.0);
+            let fit_n = truncate_to_fit(p, Face::SemiBold, 13.5, acct_name, max_tw - 14.0);
+            let nw = p.measure(Face::SemiBold, 13.5, &fit_n);
+            let name_y = by
+                + if bar_h < 42.0 {
+                    3.0
+                } else if bar_h < 46.0 {
+                    5.0
+                } else {
+                    7.0
+                };
+            let name_h = if bar_h < 42.0 { 16.0 } else { 18.0 };
+            p.text_line(
+                Face::SemiBold,
+                13.5,
+                name_h,
+                tx,
+                name_y,
+                palette::text(),
+                &fit_n,
+            );
+            let (acx, acy) = (tx + nw + 8.0, name_y + name_h * 0.5);
+            let chev_start = p.batch.vertices.len();
+            draw_icon_chevron(p, acx, acy, 6.0, palette::muted(), false);
+            let chev_end = p.batch.vertices.len();
+            motion::shape_range(
+                p,
+                chev_start..chev_end,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                acx,
+                acy,
+                std::f32::consts::PI * chevrons.0,
+            );
+
+            let fit_sub = truncate_to_fit(p, Face::Regular, 10.5, acct_sub, max_tw);
+            p.text_line(
+                Face::Regular,
+                10.5,
+                14.0,
+                tx,
+                name_y + name_h,
+                palette::muted(),
+                &fit_sub,
+            );
+        }
+        hits.push(acct_hit);
+
+        // 2. Bottom-center: Single-line Profile Selector Pill (toggles upward bar-width dropdown)
+        let selected_id = self.backend.selected_profile();
+        let selected = profiles
+            .iter()
+            .find(|p| p.id == selected_id)
+            .or_else(|| profiles.first());
+        let sel_name = selected.map_or(tr("Vanilla"), |p| p.name.as_str());
+        let sel_id = selected.map_or(VANILLA, |p| p.id.as_str());
+        let sel_state = selected.map_or(ProfileState::Available, |p| {
+            effective_profile_state(p, setup)
+        });
+        let pill_h = (bar_h - if bar_h < 42.0 { 2.0 } else { 6.0 }).clamp(34.0, 44.0);
+        let pill_y = by + ((bar_h - pill_h) * 0.5).round();
+        let prof_hit = HitRect {
+            id: ButtonId::ToggleProfilePicker,
+            x: prof_x,
+            y: pill_y,
+            w: prof_w,
+            h: pill_h,
+        };
+        if let Some(p) = ui.paint() {
+            let open = self.profile_popup_open;
+            let hovered = prof_hit.contains(p.cursor);
+            let fill = if open {
+                color::with_alpha(palette::accent(), 0.16)
+            } else if hovered {
+                palette::surface_hover()
+            } else {
+                palette::surface()
+            };
+            let bdr = if open || hovered {
+                color::with_alpha(palette::accent_star(), 0.75)
+            } else {
+                palette::border()
+            };
+            p.rounded(prof_x, pill_y, prof_w, pill_h, 11.0, fill);
+            p.border(prof_x, pill_y, prof_w, pill_h, 11.0, bdr);
+            let state_dot = match &sel_state {
+                ProfileState::Installed => col_success,
+                ProfileState::Installing(_) | ProfileState::Available => palette::accent_star(),
+                ProfileState::Failed(_) => col_danger,
+            };
+            p.rounded(
+                prof_x + 14.0,
+                pill_y + ((pill_h - 8.0) * 0.5).round(),
+                8.0,
+                8.0,
+                4.0,
+                state_dot,
+            );
+
+            let summary = match (&sel_state, selected) {
+                (ProfileState::Installing(prog), _) => {
+                    let pct = (stage_fraction(prog) * 100.0).round() as u32;
+                    trf("Installing {pct}%", &[("pct", &pct.to_string())])
+                }
+                (_, Some(prof)) => profile_stats_line(prof),
+                _ => "...".to_owned(),
+            };
+
+            let tx = prof_x + 30.0;
+            let chev_x = prof_x + prof_w - 18.0;
+            let max_tw = (chev_x - 10.0 - tx).max(60.0);
+            let name_fit = truncate_to_fit(p, Face::SemiBold, 13.5, sel_name, max_tw * 0.46);
+            let nw = p.measure(Face::SemiBold, 13.5, &name_fit);
+            p.text_line(
+                Face::SemiBold,
+                13.5,
+                pill_h,
+                tx,
+                pill_y,
+                palette::text(),
+                &name_fit,
+            );
+            let rem_w = max_tw - nw;
+            if rem_w > 46.0 {
+                let sub = format!("   {summary}");
+                let fit_s = truncate_to_fit(p, Face::Regular, ui_theme::small(), &sub, rem_w);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    pill_h,
+                    tx + nw,
+                    pill_y,
+                    palette::muted(),
+                    &fit_s,
+                );
+            }
+            let (pcx, pcy) = (chev_x, pill_y + pill_h * 0.5);
+            let chev_start = p.batch.vertices.len();
+            draw_icon_chevron(p, pcx, pcy, 7.0, palette::muted(), false);
+            let chev_end = p.batch.vertices.len();
+            motion::shape_range(
+                p,
+                chev_start..chev_end,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                pcx,
+                pcy,
+                std::f32::consts::PI * chevrons.1,
+            );
+        }
+        hits.push(prof_hit);
+
+        // 3. Bottom-right: Primary Play / Install CTA
+        let base_ready = matches!(setup, Setup::Ready);
+        if self.compiling_mods {
+            draw_button(
+                ui,
+                hits,
+                ButtonId::PlaySelected,
+                play_x,
+                by,
+                play_w,
+                bar_h,
+                Tone::Banner,
+                tr("Compiling mods…"),
+            );
+        } else if account.is_none() {
+            draw_play_button(
+                ui,
+                hits,
+                ButtonId::OpenAccountSwitcher,
+                play_x,
+                by,
+                play_w,
+                bar_h,
+                tr("Pick Account"),
+                false,
+            );
+        } else if sel_id == VANILLA || !base_ready {
+            match setup {
+                Setup::Needed => draw_play_button(
+                    ui,
+                    hits,
+                    ButtonId::InstallSelected,
+                    play_x,
+                    by,
+                    play_w,
+                    bar_h,
+                    if sel_id == VANILLA {
+                        tr("Install Game")
+                    } else {
+                        tr("Install Base Game")
+                    },
+                    false,
+                ),
+                Setup::Running(prog) => {
+                    let pct = (stage_fraction(prog) * 100.0).round() as u32;
+                    draw_button(
+                        ui,
+                        hits,
+                        ButtonId::ViewInstallScreen,
+                        play_x,
+                        by,
+                        play_w,
+                        bar_h,
+                        Tone::Banner,
+                        &trf(
+                            "{stage} {pct}%",
+                            &[("stage", stage_name(prog.stage)), ("pct", &pct.to_string())],
+                        ),
+                    );
+                }
+                Setup::Failed { .. } => draw_button(
+                    ui,
+                    hits,
+                    ButtonId::InstallSelected,
+                    play_x,
+                    by,
+                    play_w,
+                    bar_h,
+                    Tone::Danger,
+                    tr("Retry Install"),
+                ),
+                Setup::Ready => draw_play_button(
+                    ui,
+                    hits,
+                    ButtonId::PlaySelected,
+                    play_x,
+                    by,
+                    play_w,
+                    bar_h,
+                    tr("Play"),
+                    true,
+                ),
+            }
+        } else {
+            match sel_state {
+                ProfileState::Available => draw_play_button(
+                    ui,
+                    hits,
+                    ButtonId::InstallSelected,
+                    play_x,
+                    by,
+                    play_w,
+                    bar_h,
+                    tr("Install Profile"),
+                    false,
+                ),
+                ProfileState::Installing(ref prog) => {
+                    let frac = stage_fraction(prog);
+                    let pct = (frac * 100.0).round() as u32;
+                    if let Some(p) = ui.paint() {
+                        p.rounded(play_x, by, play_w, bar_h, 11.0, palette::surface());
+                        p.border(play_x, by, play_w, bar_h, 11.0, palette::accent_star());
+                        if frac > 0.0 {
+                            p.rounded(
+                                play_x + 3.0,
+                                by + 3.0,
+                                ((play_w - 6.0) * frac).max(12.0),
+                                bar_h - 6.0,
+                                8.0,
+                                color::with_alpha(palette::accent_fill(), 0.78),
+                            );
+                        }
+                        let txt = trf("Installing {pct}%...", &[("pct", &pct.to_string())]);
+                        let room = (play_w - 16.0).max(16.0);
+                        let sz = p.fit(Face::SemiBold, 14.0, &txt, room);
+                        let fit = truncate_to_fit(p, Face::SemiBold, sz, &txt, room);
+                        let tw = p.measure(Face::SemiBold, sz, &fit);
+                        p.text_line(
+                            Face::SemiBold,
+                            sz,
+                            bar_h,
+                            play_x + ((play_w - tw) * 0.5).round(),
+                            by,
+                            palette::text(),
+                            &fit,
+                        );
+                    }
+                }
+                ProfileState::Failed(_) => draw_button(
+                    ui,
+                    hits,
+                    ButtonId::InstallSelected,
+                    play_x,
+                    by,
+                    play_w,
+                    bar_h,
+                    Tone::Danger,
+                    tr("Retry Install"),
+                ),
+                ProfileState::Installed => draw_play_button(
+                    ui,
+                    hits,
+                    ButtonId::PlaySelected,
+                    play_x,
+                    by,
+                    play_w,
+                    bar_h,
+                    tr("Play"),
+                    true,
+                ),
+            }
+        }
+        (prof_x, prof_w)
+    }
+}

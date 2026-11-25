@@ -1,0 +1,2903 @@
+use super::widgets::{Canvas, count_label, log_levels, profile_stats_line};
+use super::{
+    Action, AuthForm, ButtonId, LICENSES, MobileLauncher, Route, SOURCE_CODE, SafeInsets,
+    SettingsTab,
+};
+use crate::hud::{HudAtlas, HudBatch};
+use crate::launcher_backend::{
+    Account, Backend, ELY_SKINS, GameOptions, Head, ImportKind, Language, LanguageDownload,
+    ModInfo, ModSearch, PickedSkin, Profile, ProfileMod, ProfileState, Progress, Setup, SignIn,
+    SkinSlot, SkinUpload, Stage, VANILLA, i18n, profile_id, valid_offline_name,
+};
+use crate::ui_theme::Ui;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+/// The stub's skin side, shared with the test: the file the picker "chose", the uploads asked
+/// for, each account's four slots, and how the last upload went.
+#[derive(Default)]
+struct SkinStub {
+    picked: Option<Result<PickedSkin, String>>,
+    uploads: Vec<(Vec<u8>, bool)>,
+    slots: BTreeMap<String, [Option<SkinSlot>; 4]>,
+    status: SkinUpload,
+}
+
+struct StubBackend {
+    accounts: Vec<Account>,
+    active: Option<usize>,
+    sign_in: SignIn,
+    setup: Setup,
+    profiles: Vec<Profile>,
+    selected_profile: String,
+    mods: Vec<ProfileMod>,
+    search: ModSearch,
+    /// The install cache [`Backend::free_space`] frees.
+    reclaim: u64,
+    skins: Arc<Mutex<SkinStub>>,
+    /// The selected profile's game log.
+    log: Vec<String>,
+    /// The game's arguments, as kept.
+    args: String,
+    /// [`Backend::game_allowed`]: false is a release build no game owner signed in on.
+    allowed: bool,
+    language: Language,
+    language_download: LanguageDownload,
+    game_options: GameOptions,
+    worlds: Vec<String>,
+}
+
+impl Default for StubBackend {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            active: None,
+            sign_in: SignIn::Idle,
+            setup: Setup::Needed,
+            profiles: vec![Profile {
+                id: VANILLA.into(),
+                name: "Vanilla".into(),
+                description: "Minecraft as it comes, no mods.".into(),
+                mods: 0,
+                size: 672_000_000,
+                worlds: 1,
+                state: ProfileState::Available,
+            }],
+            selected_profile: VANILLA.into(),
+            mods: vec![ProfileMod {
+                info: ModInfo {
+                    id: "faster-chunks".into(),
+                    name: "Faster Chunks".into(),
+                    description: "Builds chunk meshes sooner.".into(),
+                    version: "1.0.0".into(),
+                    size: 2_400_000,
+                },
+                enabled: true,
+                local: false,
+                builtin: false,
+            }],
+            search: ModSearch::Done(vec![
+                ModInfo {
+                    id: "faster-chunks".into(),
+                    name: "Faster Chunks".into(),
+                    description: "Builds chunk meshes sooner.".into(),
+                    version: "1.0.0".into(),
+                    size: 2_400_000,
+                },
+                ModInfo {
+                    id: "zoom".into(),
+                    name: "Zoom".into(),
+                    description: "Hold a key to zoom in.".into(),
+                    version: "1.0.0".into(),
+                    size: 300_000,
+                },
+            ]),
+            reclaim: 0,
+            skins: Arc::default(),
+            log: Vec::new(),
+            args: String::new(),
+            allowed: true,
+            language: Language::English,
+            language_download: LanguageDownload::Idle,
+            game_options: GameOptions::default(),
+            worlds: Vec::new(),
+        }
+    }
+}
+
+impl Backend for StubBackend {
+    fn account(&self) -> Option<Account> {
+        self.active.and_then(|i| self.accounts.get(i).cloned())
+    }
+    fn accounts(&self) -> Vec<Account> {
+        self.accounts.clone()
+    }
+    fn active_account(&self) -> Option<usize> {
+        self.active
+    }
+    fn switch_account(&mut self, index: usize) -> Result<(), String> {
+        if index < self.accounts.len() {
+            self.active = Some(index);
+            Ok(())
+        } else {
+            Err("No such account.".into())
+        }
+    }
+    fn remove_account(&mut self, index: usize) -> Result<(), String> {
+        if index >= self.accounts.len() {
+            return Err("No such account.".into());
+        }
+        self.accounts.remove(index);
+        self.active = if self.accounts.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        Ok(())
+    }
+    fn player_head(&self, _account: &Account) -> Option<Head> {
+        Some([220u8; 8 * 8 * 4])
+    }
+    fn sign_in_microsoft(&mut self) {
+        self.sign_in = SignIn::Code {
+            url: "https://www.microsoft.com/link".into(),
+            code: "TESTCODE".into(),
+        };
+    }
+    fn sign_in_ely(&mut self, username: &str, password: &str, _otp: &str) -> Result<(), String> {
+        if password == "badpass" {
+            self.sign_in = SignIn::Failed("Invalid credentials".into());
+            return Ok(());
+        }
+        let acct = Account::Ely {
+            name: username.to_owned(),
+        };
+        self.accounts.push(acct.clone());
+        self.active = Some(self.accounts.len() - 1);
+        self.sign_in = SignIn::Done(acct);
+        Ok(())
+    }
+    fn sign_in(&self) -> SignIn {
+        self.sign_in.clone()
+    }
+    fn game_allowed(&self) -> bool {
+        self.allowed
+    }
+    fn sign_in_offline(&mut self, name: &str) -> Result<Account, String> {
+        if !valid_offline_name(name) {
+            return Err("Bad offline name".into());
+        }
+        let a = Account::Offline {
+            name: name.to_owned(),
+        };
+        self.accounts.push(a.clone());
+        self.active = Some(self.accounts.len() - 1);
+        Ok(a)
+    }
+    fn sign_out(&mut self) {
+        if let Some(i) = self.active {
+            let _ = self.remove_account(i);
+        }
+        self.sign_in = SignIn::Idle;
+    }
+    fn dismiss_sign_in(&mut self) {
+        self.sign_in = SignIn::Idle;
+    }
+    fn setup(&self) -> Setup {
+        self.setup.clone()
+    }
+    fn start_setup(&mut self) {
+        self.setup = Setup::Running(Progress {
+            stage: Stage::Download,
+            done: 268_800_000,
+            total: 672_000_000,
+            bytes_per_second: 67_200_000,
+            note: Some("Retrying asset host".into()),
+        });
+    }
+    fn cancel_setup(&mut self) {
+        self.setup = Setup::Needed;
+    }
+    fn reclaimable(&self) -> Option<u64> {
+        Some(self.reclaim)
+    }
+    fn free_space(&mut self) -> Result<u64, String> {
+        Ok(std::mem::take(&mut self.reclaim))
+    }
+    fn take_picked_skin(&mut self) -> Option<Result<PickedSkin, String>> {
+        self.skins.lock().unwrap().picked.take()
+    }
+    fn use_skin(&mut self, png: Vec<u8>, slim: bool) {
+        let mut skins = self.skins.lock().unwrap();
+        skins.uploads.push((png, slim));
+        skins.status = SkinUpload::Uploading;
+    }
+    fn skin_upload(&self) -> SkinUpload {
+        self.skins.lock().unwrap().status.clone()
+    }
+    fn skin_slots(&self, account: &Account) -> [Option<SkinSlot>; 4] {
+        let key = format!("{account:?}");
+        self.skins
+            .lock()
+            .unwrap()
+            .slots
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn save_skin_slot(&mut self, slot: usize, png: Vec<u8>, slim: bool) {
+        if let Some(account) = self.account()
+            && slot < 4
+        {
+            let key = format!("{account:?}");
+            let mut skins = self.skins.lock().unwrap();
+            let entry = skins.slots.entry(key).or_default();
+            for existing in entry.iter_mut().flatten() {
+                existing.worn = false;
+            }
+            entry[slot] = Some(SkinSlot {
+                png: png.clone(),
+                skin: vec![9; 64 * 64 * 4].into(),
+                slim,
+                worn: true,
+            });
+        }
+        self.use_skin(png, slim);
+    }
+    fn game_log(&self, _profile: &str) -> Vec<String> {
+        self.log.clone()
+    }
+    fn game_args(&self) -> String {
+        self.args.clone()
+    }
+    fn set_game_args(&mut self, text: &str) -> Result<(), String> {
+        crate::launcher_backend::launch::split_args(text)?;
+        self.args = text.trim().into();
+        Ok(())
+    }
+    fn language(&self) -> Language {
+        self.language
+    }
+    fn set_language(&mut self, language: Language) {
+        self.language = language;
+    }
+    fn language_download(&self) -> LanguageDownload {
+        self.language_download.clone()
+    }
+    fn profiles(&self) -> Vec<Profile> {
+        self.profiles.clone()
+    }
+    fn selected_profile(&self) -> String {
+        self.selected_profile.clone()
+    }
+    fn select_profile(&mut self, id: &str) -> Result<(), String> {
+        self.selected_profile = id.to_owned();
+        Ok(())
+    }
+    fn remove_profile(&mut self, id: &str) -> Result<(), String> {
+        self.profiles.retain(|p| p.id != id);
+        self.selected_profile = VANILLA.into();
+        Ok(())
+    }
+    fn create_profile(
+        &mut self,
+        name: &str,
+        _preset: Option<&str>,
+        _mods: &[String],
+    ) -> Result<String, String> {
+        let id = profile_id(name, &[]);
+        self.profiles.push(Profile {
+            id: id.clone(),
+            name: name.trim().into(),
+            description: "Custom".into(),
+            mods: 1,
+            size: 2_400_000,
+            worlds: 1,
+            state: ProfileState::Installed,
+        });
+        Ok(id)
+    }
+    fn rename_profile(&mut self, id: &str, name: &str) -> Result<(), String> {
+        if let Some(p) = self.profiles.iter_mut().find(|p| p.id == id) {
+            p.name = name.trim().into();
+        }
+        Ok(())
+    }
+    fn mods(&self, profile: &str) -> Vec<ProfileMod> {
+        if profile == VANILLA {
+            self.mods.iter().filter(|m| m.builtin).cloned().collect()
+        } else {
+            self.mods.clone()
+        }
+    }
+    fn set_mod_enabled(&mut self, _profile: &str, id: &str, enabled: bool) -> Result<(), String> {
+        if let Some(m) = self.mods.iter_mut().find(|m| m.info.id == id) {
+            m.enabled = enabled;
+        }
+        Ok(())
+    }
+    fn search_mods(&mut self, _query: &str) {}
+    fn mod_search(&self) -> ModSearch {
+        self.search.clone()
+    }
+    fn add_mod(&mut self, _profile: &str, id: &str) -> Result<(), String> {
+        self.mods.push(ProfileMod {
+            info: ModInfo {
+                id: id.into(),
+                name: "Zoom".into(),
+                description: "Zoom in.".into(),
+                version: "1.0.0".into(),
+                size: 300_000,
+            },
+            enabled: true,
+            local: false,
+            builtin: false,
+        });
+        Ok(())
+    }
+    fn remove_mod(&mut self, _profile: &str, id: &str) -> Result<(), String> {
+        self.mods.retain(|m| m.info.id != id);
+        Ok(())
+    }
+    fn game_options(&self, _profile: &str) -> GameOptions {
+        self.game_options
+    }
+    fn set_game_options(&mut self, _profile: &str, options: GameOptions) -> Result<(), String> {
+        self.game_options = options;
+        Ok(())
+    }
+    fn profile_worlds(&self, _profile: &str) -> Vec<String> {
+        self.worlds.clone()
+    }
+}
+
+fn with_ui<R>(size: [u32; 2], cursor_dp: (f32, f32), f: impl FnOnce(&mut Ui) -> R) -> R {
+    thread_local! {
+        static ATLAS: HudAtlas = HudAtlas::build(
+            &horizon_assets::resource_source::ResourceSource::directory(
+                std::path::PathBuf::from("/nonexistent/horizon-test-assets"),
+            ),
+        ).unwrap();
+    }
+    ATLAS.with(|atlas| {
+        let mut batch = HudBatch::scratch(size);
+        let dummy = Ui::new(atlas, &mut batch, (0.0, 0.0));
+        let density = dummy.density;
+        let cursor_gui = (
+            cursor_dp.0 * density / batch.scale,
+            cursor_dp.1 * density / batch.scale,
+        );
+        let mut ui = Ui::new(atlas, &mut batch, cursor_gui);
+        f(&mut ui)
+    })
+}
+
+fn click_button(launcher: &mut MobileLauncher, size: [u32; 2], id: ButtonId) -> Option<Action> {
+    let target = with_ui(size, (0.0, 0.0), |ui| {
+        let hits = launcher.layout(&mut Canvas::Hit(ui));
+        let hit = hits
+            .iter()
+            .find(|h| h.id == id)
+            .unwrap_or_else(|| panic!("expected button {id:?} present"));
+        (hit.x + hit.w * 0.5, hit.y + hit.h * 0.5)
+    });
+    with_ui(size, target, |ui| launcher.click(ui))
+}
+
+#[test]
+fn pluralization_handles_singular_and_plural_counts() {
+    assert_eq!(count_label(0, "world", "worlds"), "0 worlds");
+    assert_eq!(count_label(1, "world", "worlds"), "1 world");
+    assert_eq!(count_label(2, "world", "worlds"), "2 worlds");
+    assert_eq!(count_label(1, "mod", "mods"), "1 mod");
+    let prof = Profile {
+        id: "pack".into(),
+        name: "My Pack".into(),
+        description: String::new(),
+        mods: 1,
+        size: 3_800_000,
+        worlds: 1,
+        state: ProfileState::Installed,
+    };
+    assert_eq!(profile_stats_line(&prof), "1 mod, 1 world, 3.8 MB");
+}
+
+#[test]
+fn offline_flow_leads_to_home_and_starts_install() {
+    let mut launcher = MobileLauncher::new(Box::new(StubBackend::default()));
+    let size = [1040, 700];
+    click_button(&mut launcher, size, ButtonId::OpenOfflineEntry);
+    for _ in 0..6 {
+        launcher.backspace();
+    }
+    launcher.typed("A14Player");
+    click_button(&mut launcher, size, ButtonId::ConfirmOffline);
+
+    assert_eq!(
+        launcher.backend.account(),
+        Some(Account::Offline {
+            name: "A14Player".into()
+        })
+    );
+    click_button(&mut launcher, size, ButtonId::InstallSelected);
+    assert_eq!(launcher.route, Route::Install);
+    assert!(matches!(launcher.backend.setup(), Setup::Running(_)));
+}
+
+#[test]
+fn settings_navigation_preserves_running_setup_progress() {
+    let mut launcher = MobileLauncher::new(Box::new(StubBackend::default()));
+    let size = [1040, 700];
+    launcher.backend.sign_in_offline("Steve").unwrap();
+    launcher.backend.start_setup();
+    launcher.route = Route::Install;
+
+    click_button(&mut launcher, size, ButtonId::OpenSettings);
+    assert_eq!(launcher.route, Route::Settings);
+    assert!(matches!(launcher.backend.setup(), Setup::Running(_)));
+
+    click_button(&mut launcher, size, ButtonId::ViewInstallScreen);
+    assert_eq!(launcher.route, Route::Install);
+    assert!(matches!(launcher.backend.setup(), Setup::Running(_)));
+}
+
+#[test]
+fn ely_under_more_options_wipes_secrets_on_submit() {
+    let mut launcher = MobileLauncher::new(Box::new(StubBackend::default()));
+    let size = [1040, 700];
+    click_button(&mut launcher, size, ButtonId::ToggleMoreAuth);
+    click_button(&mut launcher, size, ButtonId::OpenElyEntry);
+    launcher.typed("elyuser\tsecret123\t654321");
+    click_button(&mut launcher, size, ButtonId::ConfirmEly);
+    assert!(launcher.ely_password.is_empty());
+    assert!(launcher.ely_otp.is_empty());
+    assert_eq!(
+        launcher.backend.account(),
+        Some(Account::Ely {
+            name: "elyuser".into()
+        })
+    );
+
+    let mut fail_l = MobileLauncher::new(Box::new(StubBackend::default()));
+    click_button(&mut fail_l, size, ButtonId::ToggleMoreAuth);
+    click_button(&mut fail_l, size, ButtonId::OpenElyEntry);
+    fail_l.typed("elyuser\tbadpass");
+    click_button(&mut fail_l, size, ButtonId::ConfirmEly);
+    assert!(matches!(fail_l.backend.sign_in(), SignIn::Failed(_)));
+    click_button(&mut fail_l, size, ButtonId::RetrySignIn);
+    assert_eq!(fail_l.auth_form, Some(AuthForm::Ely));
+}
+
+#[test]
+fn full_spec_flow_accounts_profiles_mods_skins_and_remove_confirmation() {
+    let mut launcher = MobileLauncher::new(Box::new(StubBackend::default()));
+    let size = [1040, 700];
+
+    launcher.backend.sign_in_offline("Steve").unwrap();
+    launcher.backend.sign_in_offline("Alex").unwrap();
+    click_button(&mut launcher, size, ButtonId::OpenAccountSwitcher);
+    click_button(&mut launcher, size, ButtonId::SwitchAccount(0));
+    assert_eq!(
+        launcher.backend().account(),
+        Some(Account::Offline {
+            name: "Steve".into()
+        })
+    );
+
+    // Host hooks: crash note and wants_text() suppressed while profile popup is open.
+    launcher.note("The game closed unexpectedly last time.");
+    assert_eq!(
+        launcher.status_note.as_deref(),
+        Some("The game closed unexpectedly last time.")
+    );
+    assert!(!launcher.wants_text());
+
+    // Floating profile popup via bottom profile bar + scrim/close dismiss + Settings font toggle + Skins
+    assert!(!launcher.profile_popup_open);
+    click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+    assert!(launcher.profile_popup_open);
+    assert!(!launcher.wants_text());
+    click_button(&mut launcher, size, ButtonId::CloseProfilePopup);
+    assert!(!launcher.profile_popup_open);
+
+    click_button(&mut launcher, size, ButtonId::OpenSettings);
+    assert_eq!(launcher.route, Route::Settings);
+    assert!(!crate::ui_theme::pixel_font());
+    click_button(&mut launcher, size, ButtonId::ToggleLauncherFont);
+    assert!(crate::ui_theme::pixel_font());
+    click_button(&mut launcher, size, ButtonId::ToggleLauncherFont);
+    assert!(!crate::ui_theme::pixel_font());
+
+    click_button(&mut launcher, size, ButtonId::OpenSkins);
+    assert_eq!(launcher.route, Route::Skins);
+    click_button(&mut launcher, size, ButtonId::GoHome);
+
+    // Open Mods once on Vanilla, then create a custom profile and confirm rail Mods switches to it.
+    click_button(&mut launcher, size, ButtonId::OpenMods);
+    assert_eq!(launcher.route, Route::Mods);
+
+    // Create profile with mixed-case display name distinct from its slug id
+    click_button(&mut launcher, size, ButtonId::OpenNewProfile);
+    launcher.typed("My Pack\n");
+    assert_eq!(launcher.backend().selected_profile(), "profile-1");
+    assert_eq!(launcher.backend().profiles()[1].name, "My Pack");
+    // A new profile starts empty: its mods come from the registry beside it (Add).
+    for id in ["faster-chunks", "zoom"] {
+        launcher.backend.add_mod("profile-1", id).unwrap();
+    }
+
+    // Switch back to Vanilla and back to My Pack via the floating Profile Switcher popup.
+    click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+    assert!(launcher.profile_popup_open);
+    click_button(&mut launcher, size, ButtonId::SelectProfile(0));
+    assert!(!launcher.profile_popup_open);
+    assert_eq!(launcher.backend().selected_profile(), VANILLA);
+    click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+    click_button(&mut launcher, size, ButtonId::SelectProfile(1));
+    assert!(!launcher.profile_popup_open);
+    assert_eq!(launcher.backend().selected_profile(), "profile-1");
+
+    click_button(&mut launcher, size, ButtonId::OpenMods);
+    assert_eq!(launcher.route, Route::Mods);
+    click_button(&mut launcher, size, ButtonId::ToggleProfileMod(0));
+    assert!(!launcher.backend().mods("profile-1")[0].enabled);
+    click_button(&mut launcher, size, ButtonId::RemoveProfileMod(0));
+    assert_eq!(launcher.backend().mods("profile-1").len(), 1);
+
+    // The pencil on its tab: a new name typed over, Done keeps it.
+    click_button(&mut launcher, size, ButtonId::RenameTabProfile);
+    launcher.typed("Survival Plus");
+    click_button(&mut launcher, size, ButtonId::SaveRenameProfile);
+    assert_eq!(launcher.backend().profiles()[1].name, "Survival Plus");
+
+    click_button(&mut launcher, size, ButtonId::DeleteTabProfile);
+    assert!(launcher.confirm_remove_profile.is_some());
+    click_button(&mut launcher, size, ButtonId::ConfirmRemoveProfile);
+    assert_eq!(launcher.backend().selected_profile(), VANILLA);
+    assert_eq!(launcher.backend().profiles().len(), 1);
+}
+
+fn assert_hits_fit_without_overlap(launcher: &MobileLauncher, size: [u32; 2], label: &str) {
+    with_ui(size, (0.0, 0.0), |ui| {
+        let hits = launcher.layout(&mut Canvas::Hit(ui));
+        assert!(!hits.is_empty(), "{label}: expected interactive hit rects");
+        for (i, a) in hits.iter().enumerate() {
+            assert!(
+                a.x >= 0.0 && a.y >= 0.0 && a.x + a.w <= ui.w && a.y + a.h <= ui.h,
+                "{label}: rect {:?} ({},{},{}x{}) out of {}x{} bounds",
+                a.id,
+                a.x,
+                a.y,
+                a.w,
+                a.h,
+                ui.w,
+                ui.h
+            );
+            for b in hits.iter().skip(i + 1) {
+                let overlap_x = a.x < b.x + b.w && b.x < a.x + a.w;
+                let overlap_y = a.y < b.y + b.h && b.y < a.y + a.h;
+                assert!(
+                    !(overlap_x && overlap_y),
+                    "{label}: {:?} ({},{},{}x{}) overlaps {:?} ({},{},{}x{})",
+                    a.id,
+                    a.x,
+                    a.y,
+                    a.w,
+                    a.h,
+                    b.id,
+                    b.x,
+                    b.y,
+                    b.w,
+                    b.h
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn all_screens_fit_without_overlap_on_desktop_and_phone_landscape() {
+    for size in [
+        [1040, 700],
+        [2400, 1080],
+        [914, 411],
+        [800, 360],
+        [2400, 560],
+        [1600, 450],
+    ] {
+        let mut l = MobileLauncher::new(Box::new(StubBackend::default()));
+        assert_hits_fit_without_overlap(&l, size, "welcome");
+
+        click_button(&mut l, size, ButtonId::ToggleMoreAuth);
+        assert_hits_fit_without_overlap(&l, size, "welcome-more-options");
+
+        click_button(&mut l, size, ButtonId::OpenElyEntry);
+        assert_hits_fit_without_overlap(&l, size, "ely-entry");
+
+        click_button(&mut l, size, ButtonId::CancelEly);
+        click_button(&mut l, size, ButtonId::OpenOfflineEntry);
+        assert_hits_fit_without_overlap(&l, size, "offline-entry");
+
+        click_button(&mut l, size, ButtonId::CancelOffline);
+        click_button(&mut l, size, ButtonId::SignInMicrosoft);
+        assert_hits_fit_without_overlap(&l, size, "ms-code");
+
+        let mut ready = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![
+                Account::Microsoft {
+                    name: "Steve".into(),
+                },
+                Account::Offline {
+                    name: "Alex".into(),
+                },
+            ],
+            active: Some(0),
+            sign_in: SignIn::Idle,
+            setup: Setup::Ready,
+            profiles: vec![
+                Profile {
+                    id: VANILLA.into(),
+                    name: "Vanilla".into(),
+                    description: "Base".into(),
+                    mods: 0,
+                    size: 672_000_000,
+                    worlds: 1,
+                    state: ProfileState::Installed,
+                },
+                Profile {
+                    id: "my-pack".into(),
+                    name: "My Pack".into(),
+                    description: "Custom".into(),
+                    mods: 2,
+                    size: 4_000_000,
+                    worlds: 3,
+                    state: ProfileState::Installed,
+                },
+            ],
+            selected_profile: "my-pack".into(),
+            ..StubBackend::default()
+        }));
+        assert_hits_fit_without_overlap(&ready, size, "home-ready");
+
+        click_button(&mut ready, size, ButtonId::ToggleProfilePicker);
+        assert_hits_fit_without_overlap(&ready, size, "profile-popup");
+
+        click_button(&mut ready, size, ButtonId::OpenAccountSwitcher);
+        assert!(!ready.profile_popup_open);
+        assert_hits_fit_without_overlap(&ready, size, "account-switcher");
+
+        click_button(&mut ready, size, ButtonId::OpenMods);
+        assert_hits_fit_without_overlap(&ready, size, "mod-manager");
+        click_button(&mut ready, size, ButtonId::RenameTabProfile);
+        assert_hits_fit_without_overlap(&ready, size, "rename-profile");
+        click_button(&mut ready, size, ButtonId::SaveRenameProfile);
+
+        click_button(&mut ready, size, ButtonId::ModManagerPickProfile(0));
+        assert_hits_fit_without_overlap(&ready, size, "mod-manager-vanilla");
+
+        click_button(&mut ready, size, ButtonId::OpenSkins);
+        assert_hits_fit_without_overlap(&ready, size, "skins");
+
+        click_button(&mut ready, size, ButtonId::OpenSettings);
+        assert_hits_fit_without_overlap(&ready, size, "settings");
+
+        click_button(&mut ready, size, ButtonId::OpenMods);
+        click_button(&mut ready, size, ButtonId::ModManagerPickProfile(1));
+        click_button(&mut ready, size, ButtonId::DeleteTabProfile);
+        assert_hits_fit_without_overlap(&ready, size, "confirm-remove-profile");
+        click_button(&mut ready, size, ButtonId::CancelRemoveProfile);
+
+        let mut installing = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Running(Progress {
+                stage: Stage::Download,
+                done: 268_800_000,
+                total: 672_000_000,
+                bytes_per_second: 67_200_000,
+                note: None,
+            }),
+            ..StubBackend::default()
+        }));
+        installing.route = Route::Install;
+        assert_hits_fit_without_overlap(&installing, size, "install-running");
+        click_button(&mut installing, size, ButtonId::OpenSettings);
+        assert_hits_fit_without_overlap(&installing, size, "settings-during-install");
+    }
+}
+
+fn assert_text_entry_visible(
+    launcher: &mut MobileLauncher,
+    size: [u32; 2],
+    label: &str,
+    required: &[ButtonId],
+) {
+    assert!(
+        launcher.wants_text(),
+        "{label}: expected wants_text() == true"
+    );
+    assert_hits_fit_without_overlap(launcher, size, label);
+    with_ui(size, (0.0, 0.0), |ui| {
+        let hits = launcher.layout(&mut Canvas::Hit(ui));
+        for &id in required {
+            let hit = hits
+                .iter()
+                .find(|h| h.id == id)
+                .unwrap_or_else(|| panic!("{label} @ {size:?}: missing required control {id:?}"));
+            assert!(
+                hit.w >= 48.0 && hit.h >= 30.0,
+                "{label} @ {size:?}: control {id:?} too small ({}x{})",
+                hit.w,
+                hit.h
+            );
+        }
+    });
+}
+
+#[test]
+fn text_entry_screens_fit_above_phone_keyboard() {
+    // Desktop/legacy pixel keyboard sizes + Android native-density A32 keyboard-up sizes (~200-250dp).
+    for size in [
+        [2400, 560],
+        [1600, 450],
+        [1280, 320],
+        [914, 250],
+        [914, 213],
+        [914, 200],
+    ] {
+        // 1. Play Offline name (empty with validation hint + filled valid name)
+        let mut auth = MobileLauncher::new(Box::new(StubBackend::default()));
+        click_button(&mut auth, size, ButtonId::OpenOfflineEntry);
+        assert_text_entry_visible(
+            &mut auth,
+            size,
+            "kb-offline-empty",
+            &[
+                ButtonId::FocusOfflineName,
+                ButtonId::ConfirmOffline,
+                ButtonId::CancelOffline,
+            ],
+        );
+        auth.typed("Player_One");
+        assert_text_entry_visible(
+            &mut auth,
+            size,
+            "kb-offline-filled",
+            &[
+                ButtonId::FocusOfflineName,
+                ButtonId::ConfirmOffline,
+                ButtonId::CancelOffline,
+            ],
+        );
+
+        // 2. Ely.by sign-in (username, password, 2FA focus states + error message)
+        click_button(&mut auth, size, ButtonId::CancelOffline);
+        click_button(&mut auth, size, ButtonId::ToggleMoreAuth);
+        click_button(&mut auth, size, ButtonId::OpenElyEntry);
+        for (tag, focus) in [
+            ("kb-ely-user", ButtonId::FocusElyUsername),
+            ("kb-ely-pass", ButtonId::FocusElyPassword),
+            ("kb-ely-otp", ButtonId::FocusElyOtp),
+        ] {
+            click_button(&mut auth, size, focus);
+            assert_text_entry_visible(
+                &mut auth,
+                size,
+                tag,
+                &[
+                    ButtonId::FocusElyUsername,
+                    ButtonId::FocusElyPassword,
+                    ButtonId::FocusElyOtp,
+                    ButtonId::ConfirmEly,
+                    ButtonId::CancelEly,
+                ],
+            );
+        }
+        auth.ely_error = Some("Invalid username or password.".into());
+        assert_text_entry_visible(
+            &mut auth,
+            size,
+            "kb-ely-error",
+            &[
+                ButtonId::FocusElyUsername,
+                ButtonId::FocusElyPassword,
+                ButtonId::FocusElyOtp,
+                ButtonId::ConfirmEly,
+                ButtonId::CancelEly,
+            ],
+        );
+
+        // 3. New Profile (clean + validation error + extra mods list) & host note()
+        let mut signed_in = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            profiles: vec![
+                Profile {
+                    id: VANILLA.into(),
+                    name: "Vanilla".into(),
+                    description: "Base".into(),
+                    mods: 0,
+                    size: 672_000_000,
+                    worlds: 1,
+                    state: ProfileState::Installed,
+                },
+                Profile {
+                    id: "my-pack".into(),
+                    name: "My Pack".into(),
+                    description: "Custom".into(),
+                    mods: 1,
+                    size: 3_000_000,
+                    worlds: 1,
+                    state: ProfileState::Installed,
+                },
+            ],
+            selected_profile: "my-pack".into(),
+            ..StubBackend::default()
+        }));
+        signed_in.note("The game closed unexpectedly last time.");
+        assert_eq!(
+            signed_in.status_note.as_deref(),
+            Some("The game closed unexpectedly last time.")
+        );
+
+        click_button(&mut signed_in, size, ButtonId::OpenMods);
+        click_button(&mut signed_in, size, ButtonId::OpenNewProfile);
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-new-profile",
+            &[ButtonId::FocusRenameInput, ButtonId::SaveRenameProfile],
+        );
+        signed_in.mods_error = Some("Enter 1 to 32 characters.".into());
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-new-profile-error",
+            &[ButtonId::FocusRenameInput, ButtonId::SaveRenameProfile],
+        );
+        click_button(&mut signed_in, size, ButtonId::SaveRenameProfile);
+        click_button(&mut signed_in, size, ButtonId::RenameTabProfile);
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-rename",
+            &[ButtonId::FocusRenameInput, ButtonId::SaveRenameProfile],
+        );
+
+        // 5. Mod Manager search input focused
+        click_button(&mut signed_in, size, ButtonId::SaveRenameProfile);
+        click_button(&mut signed_in, size, ButtonId::FocusModSearch);
+        assert_text_entry_visible(
+            &mut signed_in,
+            size,
+            "kb-mod-search",
+            &[ButtonId::FocusModSearch, ButtonId::SubmitModSearch],
+        );
+    }
+}
+
+#[test]
+fn new_profile_is_made_at_once_and_named_in_place_on_its_tab() {
+    let shows = |l: &MobileLauncher, size: [u32; 2], id: ButtonId| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui)).iter().any(|h| h.id == id)
+        })
+    };
+    // 914x213: the A32 with its keyboard up.
+    let (phone, keyboard) = ([914, 411], [914, 213]);
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    click_button(&mut l, phone, ButtonId::OpenMods);
+    click_button(&mut l, phone, ButtonId::OpenNewProfile);
+    // Made and shown at once, its name ready to type: only that row above the keyboard.
+    assert_eq!(l.backend().profiles()[1].name, "Profile 1");
+    assert_eq!(l.mods_profile_id.as_deref(), Some("profile-1"));
+    assert!(l.wants_text());
+    assert!(shows(&l, keyboard, ButtonId::FocusRenameInput));
+    assert!(!shows(&l, keyboard, ButtonId::OpenAccountSwitcher));
+
+    // Tapping away keeps the default name; the next one is "Profile 2".
+    click_button(&mut l, phone, ButtonId::ModManagerPickProfile(0));
+    assert!(!l.wants_text());
+    assert_eq!(l.backend().profiles()[1].name, "Profile 1");
+    click_button(&mut l, phone, ButtonId::OpenNewProfile);
+    assert_eq!(l.backend().profiles()[2].name, "Profile 2");
+
+    // Typing a name and Enter renames it in place.
+    l.typed("Pack\n");
+    assert_eq!(l.backend().profiles()[2].name, "Pack");
+    assert!(!l.wants_text());
+    // The pencil and the bin belong to the modded tab shown, never to Vanilla.
+    assert!(shows(&l, phone, ButtonId::RenameTabProfile));
+    click_button(&mut l, phone, ButtonId::ModManagerPickProfile(0));
+    assert!(!shows(&l, phone, ButtonId::RenameTabProfile));
+    assert!(!shows(&l, phone, ButtonId::DeleteTabProfile));
+}
+
+#[test]
+fn settings_frees_the_install_cache_only_when_asked_and_installed() {
+    let shows = |l: &MobileLauncher, size: [u32; 2], id: ButtonId| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui)).iter().any(|h| h.id == id)
+        })
+    };
+    let signed_in = |setup: Setup, reclaim: u64| {
+        MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup,
+            reclaim,
+            ..StubBackend::default()
+        }))
+    };
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        // Nothing to free, or still installing: no offer.
+        let mut none = signed_in(Setup::Ready, 0);
+        click_button(&mut none, size, ButtonId::OpenSettings);
+        assert!(!shows(&none, size, ButtonId::FreeSpace), "{size:?}");
+        let mut busy = signed_in(Setup::Needed, 800_000_000);
+        click_button(&mut busy, size, ButtonId::OpenSettings);
+        assert!(!shows(&busy, size, ButtonId::FreeSpace), "{size:?}");
+
+        let mut l = signed_in(Setup::Ready, 800_000_000);
+        click_button(&mut l, size, ButtonId::OpenSettings);
+        assert_hits_fit_without_overlap(&l, size, "settings-free-space");
+        // It asks first; any other tap is a no.
+        click_button(&mut l, size, ButtonId::FreeSpace);
+        assert!(shows(&l, size, ButtonId::ConfirmFreeSpace), "{size:?}");
+        assert_hits_fit_without_overlap(&l, size, "free-space-confirm");
+        click_button(&mut l, size, ButtonId::CancelFreeSpace);
+        assert!(!shows(&l, size, ButtonId::ConfirmFreeSpace));
+        assert_eq!(l.backend().reclaimable(), Some(800_000_000));
+        click_button(&mut l, size, ButtonId::FreeSpace);
+        click_button(&mut l, size, ButtonId::ConfirmFreeSpace);
+        assert_eq!(l.backend().reclaimable(), Some(0));
+        assert_eq!(l.freed, Some(Ok(800_000_000)));
+        assert!(!shows(&l, size, ButtonId::FreeSpace), "{size:?}");
+        assert_eq!(l.route, Route::Settings);
+    }
+}
+
+#[test]
+fn the_top_bar_lists_the_pages_left_to_right_after_the_logo() {
+    let launcher = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+
+    for size in [[1040, 700], [914, 411], [856, 384]] {
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = launcher.layout(&mut Canvas::Hit(ui));
+            let find = |id: ButtonId| -> Vec<&super::widgets::HitRect> {
+                hits.iter().filter(|h| h.id == id).collect()
+            };
+            // The logo and the Home tab both go Home; the logo comes first.
+            let home = find(ButtonId::GoHome);
+            assert_eq!(home.len(), 2, "{size:?}");
+            let (logo, home) = (home[0], home[1]);
+            let tabs = [
+                home,
+                find(ButtonId::OpenMods)[0],
+                find(ButtonId::OpenSkins)[0],
+                find(ButtonId::OpenSettings)[0],
+            ];
+            assert!(
+                logo.x + logo.w < home.x,
+                "{size:?}: the tabs follow the logo"
+            );
+            let step = tabs[1].x - tabs[0].x;
+            for pair in tabs.windows(2) {
+                assert_eq!(pair[0].y, pair[1].y, "{size:?}: one row");
+                assert!(
+                    step > 0.0 && (pair[1].x - pair[0].x - step).abs() < 0.5,
+                    "{size:?}: evenly spaced, left to right"
+                );
+            }
+            // The bar is at the top, above everything else that takes a tap.
+            let bar_bottom = tabs[0].y + tabs[0].h;
+            let below = hits
+                .iter()
+                .filter(|h| !tabs.iter().any(|t| std::ptr::eq(*t, *h)) && !std::ptr::eq(*h, logo));
+            for h in below {
+                assert!(
+                    h.y >= bar_bottom,
+                    "{size:?}: {:?} sits in the top bar",
+                    h.id
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn an_iphone_safe_area_keeps_every_control_inside_it() {
+    // iPhone 15/16 and 16 Pro Max in landscape, as Apple gives their safe areas (points = dp).
+    let phones = [
+        (
+            [852, 393],
+            SafeInsets {
+                top: 0.0,
+                right: 59.0,
+                bottom: 21.0,
+                left: 59.0,
+            },
+        ),
+        (
+            [956, 440],
+            SafeInsets {
+                top: 0.0,
+                right: 62.0,
+                bottom: 21.0,
+                left: 62.0,
+            },
+        ),
+        // Every Android phone takes the iPhone's (Meridian): the Galaxy A14 is 856x384 dp.
+        ([856, 384], SafeInsets::PHONE),
+    ];
+    for (size, safe) in phones {
+        let inside = |l: &MobileLauncher, label: &str| {
+            assert_hits_fit_without_overlap(l, size, label);
+            with_ui(size, (0.0, 0.0), |ui| {
+                for h in l.layout(&mut Canvas::Hit(ui)) {
+                    // The pop-up's surroundings close it: they reach the screen's edges.
+                    if h.id == ButtonId::CloseProfilePopup {
+                        continue;
+                    }
+                    assert!(
+                        h.x >= safe.left - 0.5
+                            && h.x + h.w <= ui.w - safe.right + 0.5
+                            && h.y >= safe.top - 0.5
+                            && h.y + h.h <= ui.h - safe.bottom + 0.5,
+                        "{label} {size:?}: {:?} at ({}, {}, {}x{}) leaves the safe area",
+                        h.id,
+                        h.x,
+                        h.y,
+                        h.w,
+                        h.h
+                    );
+                }
+            });
+        };
+        let mut l = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            ..StubBackend::default()
+        }));
+        l.set_safe_insets(safe);
+        inside(&l, "home");
+        for (id, label) in [
+            (ButtonId::OpenMods, "mods"),
+            (ButtonId::OpenSkins, "skins"),
+            (ButtonId::OpenSettings, "settings"),
+            (ButtonId::OpenAccountSwitcher, "accounts"),
+            (ButtonId::GoHome, "home-again"),
+            (ButtonId::ToggleProfilePicker, "profile-popup"),
+        ] {
+            click_button(&mut l, size, id);
+            inside(&l, label);
+        }
+        click_button(&mut l, size, ButtonId::CloseProfilePopup);
+        // A question over the page.
+        l.confirm_free_space = true;
+        inside(&l, "question");
+        l.confirm_free_space = false;
+        // Before sign-in: the welcome card and its top bar.
+        let mut welcome = MobileLauncher::new(Box::new(StubBackend::default()));
+        welcome.set_safe_insets(safe);
+        inside(&welcome, "welcome");
+    }
+}
+
+#[test]
+fn profile_dropdown_matches_bar_width_opens_upward_and_scrolls_long_lists() {
+    let mut profiles = vec![Profile {
+        id: VANILLA.into(),
+        name: "Vanilla".into(),
+        description: "Base".into(),
+        mods: 0,
+        size: 672_000_000,
+        worlds: 1,
+        state: ProfileState::Installed,
+    }];
+    for i in 1..=11 {
+        profiles.push(Profile {
+            id: format!("pack-{i}"),
+            name: format!("Modpack {i}"),
+            description: "Custom pack".into(),
+            mods: i,
+            size: (i as u64) * 12_000_000,
+            worlds: i % 3,
+            state: ProfileState::Installed,
+        });
+    }
+
+    for size in [[1040, 700], [914, 411]] {
+        let mut launcher = MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            profiles: profiles.clone(),
+            selected_profile: VANILLA.into(),
+            ..StubBackend::default()
+        }));
+
+        click_button(&mut launcher, size, ButtonId::ToggleProfilePicker);
+        assert!(launcher.profile_popup_open);
+        assert_hits_fit_without_overlap(&launcher, size, "profile-dropdown-long");
+
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = launcher.layout(&mut Canvas::Hit(ui));
+            let bar = hits
+                .iter()
+                .find(|h| h.id == ButtonId::ToggleProfilePicker)
+                .unwrap();
+            let first_row = hits
+                .iter()
+                .find(|h| h.id == ButtonId::SelectProfile(0))
+                .unwrap();
+            let scroll_down = hits
+                .iter()
+                .find(|h| h.id == ButtonId::ProfileScrollDown)
+                .expect("expected scrollbar down region when 12 profiles overflow dropdown");
+
+            // Dropdown opens upward strictly above the bottom bar and fits inside the bar's width.
+            assert!(
+                first_row.y + first_row.h < bar.y,
+                "size {size:?}: dropdown should open upward above the profile bar"
+            );
+            assert!(
+                first_row.x >= bar.x && scroll_down.x + scroll_down.w <= bar.x + bar.w,
+                "size {size:?}: dropdown rows + scrollbar must match profile bar horizontal bounds"
+            );
+        });
+
+        // Scroll down via scrollbar tap + a long drag up until the final profile is visible and selectable.
+        click_button(&mut launcher, size, ButtonId::ProfileScrollDown);
+        assert_eq!(launcher.profile_scroll, 1);
+        launcher.scroll(0.0, -1000.0);
+        assert_hits_fit_without_overlap(&launcher, size, "profile-dropdown-scrolled-bottom");
+        click_button(&mut launcher, size, ButtonId::SelectProfile(11));
+        assert!(!launcher.profile_popup_open);
+        assert_eq!(launcher.backend().selected_profile(), "pack-11");
+    }
+}
+
+#[test]
+fn launcher_font_choice_persists_in_horizon_txt_across_restarts() {
+    let unique = format!(
+        "meridian-font-pref-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let dir = std::env::temp_dir().join(unique);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("horizon.txt"),
+        "friendsRelay:wss://relay.example\n",
+    )
+    .unwrap();
+
+    let size = [914, 411];
+    crate::ui_theme::set_pixel_font(false);
+
+    let make_launcher = |dir: &std::path::Path| {
+        MobileLauncher::new(Box::new(StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            ..StubBackend::default()
+        }))
+        .with_prefs_dir(dir.to_path_buf())
+    };
+
+    let mut first = make_launcher(&dir);
+    assert!(!crate::ui_theme::pixel_font());
+    click_button(&mut first, size, ButtonId::OpenSettings);
+    click_button(&mut first, size, ButtonId::ToggleLauncherFont);
+    assert!(crate::ui_theme::pixel_font());
+    assert_eq!(
+        crate::ui_theme::preference(&dir, "launcherFont").as_deref(),
+        Some("pixel")
+    );
+    assert_eq!(
+        crate::ui_theme::preference(&dir, "friendsRelay").as_deref(),
+        Some("wss://relay.example")
+    );
+
+    // Simulate a fresh launcher process after switching back from the game.
+    crate::ui_theme::set_pixel_font(false);
+    let mut restarted = make_launcher(&dir);
+    assert!(crate::ui_theme::pixel_font());
+
+    // Toggle back to modern and verify that persists across the next restart too.
+    click_button(&mut restarted, size, ButtonId::OpenSettings);
+    click_button(&mut restarted, size, ButtonId::ToggleLauncherFont);
+    assert!(!crate::ui_theme::pixel_font());
+    assert_eq!(
+        crate::ui_theme::preference(&dir, "launcherFont").as_deref(),
+        Some("modern")
+    );
+
+    crate::ui_theme::set_pixel_font(true);
+    let _third = make_launcher(&dir);
+    assert!(!crate::ui_theme::pixel_font());
+
+    crate::ui_theme::set_pixel_font(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn skins_put_on_a_chosen_png_and_send_ely_to_its_website() {
+    let skins = Arc::new(Mutex::new(SkinStub::default()));
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![
+            Account::Microsoft {
+                name: "Steve".into(),
+            },
+            Account::Ely {
+                name: "Alex".into(),
+            },
+            Account::Offline {
+                name: "Notch".into(),
+            },
+        ],
+        active: Some(0),
+        setup: Setup::Ready,
+        skins: skins.clone(),
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    let ids = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui))
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    click_button(&mut l, size, ButtonId::OpenSkins);
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::PickSkin),
+        Some(Action::PickSkin)
+    );
+    // Nothing to put on until the picker hands a file over.
+    l.poll();
+    assert!(!ids(&l).contains(&ButtonId::UseSkin));
+
+    skins.lock().unwrap().picked = Some(Ok(PickedSkin {
+        png: b"skin.png".to_vec(),
+        face: [7; 8 * 8 * 4],
+        skin: vec![9; 64 * 64 * 4].into(),
+    }));
+    l.poll();
+    // Classic until the player picks Slim.
+    assert!(!l.skin_slim);
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "skin-chosen");
+    }
+    click_button(&mut l, size, ButtonId::SkinArms(true));
+    click_button(&mut l, size, ButtonId::UseSkin);
+    assert_eq!(
+        skins.lock().unwrap().uploads,
+        vec![(b"skin.png".to_vec(), true)]
+    );
+    // While it goes on there is no second button to tap.
+    assert!(!ids(&l).contains(&ButtonId::UseSkin));
+    skins.lock().unwrap().status = SkinUpload::Done;
+    l.poll();
+    assert!(
+        l.skin_pick.is_none(),
+        "uploaded: the account's own head shows it"
+    );
+
+    skins.lock().unwrap().picked = Some(Err("Choose a 64x64 PNG skin.".into()));
+    l.poll();
+    assert_eq!(l.skin_error.as_deref(), Some("Choose a 64x64 PNG skin."));
+
+    l.backend.switch_account(1).unwrap();
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::OpenElySkins),
+        Some(Action::OpenUrl(ELY_SKINS.into()))
+    );
+    assert!(
+        !ids(&l).contains(&ButtonId::PickSkin),
+        "Ely.by: on its website"
+    );
+    assert!(
+        !ids(&l).contains(&ButtonId::SkinSlot(0)),
+        "Ely.by: no slots"
+    );
+    l.backend.switch_account(2).unwrap();
+    assert!(
+        ids(&l).contains(&ButtonId::PickSkin),
+        "offline: kept on this phone"
+    );
+    assert!(ids(&l).contains(&ButtonId::SkinSlot(0)));
+}
+
+#[test]
+fn skin_slots_select_preview_save_and_keep_failed_uploads() {
+    let skins = Arc::new(Mutex::new(SkinStub::default()));
+    let steve = Account::Microsoft {
+        name: "Steve".into(),
+    };
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![steve.clone()],
+        active: Some(0),
+        setup: Setup::Ready,
+        skins: skins.clone(),
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    let ids = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui))
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    click_button(&mut l, size, ButtonId::OpenSkins);
+    assert_eq!(l.skin_slot, 0);
+
+    // Tapping an empty slot selects it and opens the file picker straight away.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::SkinSlot(1)),
+        Some(Action::PickSkin)
+    );
+    assert_eq!(l.skin_slot, 1);
+
+    // Save writes the picked skin into the selected slot (slot 2) and puts it on.
+    skins.lock().unwrap().picked = Some(Ok(PickedSkin {
+        png: b"slot-two.png".to_vec(),
+        face: [7; 8 * 8 * 4],
+        skin: vec![9; 64 * 64 * 4].into(),
+    }));
+    l.poll();
+    click_button(&mut l, size, ButtonId::SkinArms(true));
+    click_button(&mut l, size, ButtonId::UseSkin);
+    skins.lock().unwrap().status = SkinUpload::Done;
+    l.poll();
+    let slots = l.backend.skin_slots(&steve);
+    assert!(slots[0].is_none());
+    assert_eq!(slots[1].as_ref().unwrap().png, b"slot-two.png");
+    assert!(slots[1].as_ref().unwrap().slim);
+    assert!(slots[1].as_ref().unwrap().worn);
+    assert!(!ids(&l).contains(&ButtonId::UseSkin));
+
+    // Flipping the arms switch on an already-saved slot turns Save on and updates that slot.
+    click_button(&mut l, size, ButtonId::SkinArms(false));
+    assert!(ids(&l).contains(&ButtonId::UseSkin));
+    click_button(&mut l, size, ButtonId::UseSkin);
+    skins.lock().unwrap().status = SkinUpload::Done;
+    l.poll();
+    assert!(!l.backend.skin_slots(&steve)[1].as_ref().unwrap().slim);
+
+    // Saving a new skin in slot 1 while the upload fails still keeps the file in slot 1 and
+    // leaves Save enabled so the player can retry.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::SkinSlot(0)),
+        Some(Action::PickSkin)
+    );
+    skins.lock().unwrap().picked = Some(Ok(PickedSkin {
+        png: b"slot-one.png".to_vec(),
+        face: [7; 8 * 8 * 4],
+        skin: vec![9; 64 * 64 * 4].into(),
+    }));
+    l.poll();
+    click_button(&mut l, size, ButtonId::UseSkin);
+    skins.lock().unwrap().status = SkinUpload::Failed("Rate limited.".into());
+    l.poll();
+    assert_eq!(
+        l.backend.skin_slots(&steve)[0].as_ref().unwrap().png,
+        b"slot-one.png"
+    );
+    assert!(
+        ids(&l).contains(&ButtonId::UseSkin),
+        "Save stays on to retry"
+    );
+
+    // Tapping a filled slot previews it and sets the arms switch to its saved model without
+    // uploading until Save is pressed.
+    let uploads_before = skins.lock().unwrap().uploads.len();
+    click_button(&mut l, size, ButtonId::SkinArms(true));
+    click_button(&mut l, size, ButtonId::SkinSlot(1));
+    assert_eq!(l.skin_slot, 1);
+    assert!(!l.skin_slim);
+    assert_eq!(skins.lock().unwrap().uploads.len(), uploads_before);
+}
+
+#[test]
+fn log_lines_take_their_entrys_level() {
+    let lines: Vec<String> = [
+        "[08:53:52] [unnamed/INFO]: Horizon 0.1.0",
+        "[08:53:52] [Narrator/ERROR]: Error while loading the narrator",
+        "    at a stack frame",
+        "[08:53:52] [unnamed/WARN]: Missing downlevel flags",
+        "The underlying API does not support enough features",
+        "[08:53:53] [Render thread/FATAL]: Out of memory",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    assert_eq!(log_levels(&lines), [0, 2, 2, 1, 1, 2]);
+}
+
+#[test]
+fn home_shows_the_game_log_and_copies_the_level_chosen() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        log: [
+            "[1] [main/INFO]: started",
+            "[2] [main/ERROR]: broke",
+            "    at here",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        ..StubBackend::default()
+    }));
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "home-log");
+    }
+    let size = [914, 411];
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::CopyLog),
+        Some(Action::CopyText(
+            "[1] [main/INFO]: started\n[2] [main/ERROR]: broke\n    at here".into()
+        ))
+    );
+    assert!(l.log_copied);
+    click_button(&mut l, size, ButtonId::LogLevel(2));
+    assert!(!l.log_copied, "another tap: Copy again");
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::CopyLog),
+        Some(Action::CopyText(
+            "[2] [main/ERROR]: broke\n    at here".into()
+        ))
+    );
+}
+
+#[test]
+fn settings_keeps_game_arguments_and_links_about() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let ids = |l: &MobileLauncher, size: [u32; 2]| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui))
+                .iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        })
+    };
+    click_button(&mut l, [914, 411], ButtonId::OpenSettings);
+    // Below everything: the arguments, then About, at every phone size.
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "settings");
+        let shown = ids(&l, size);
+        for id in [
+            ButtonId::ToggleLauncherFont,
+            ButtonId::FocusGameArgs,
+            ButtonId::OpenSourceCode,
+            ButtonId::OpenLicenses,
+        ] {
+            assert!(shown.contains(&id), "{size:?}: {id:?}");
+        }
+    }
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::FocusGameArgs);
+    assert!(l.wants_text());
+    // With the keyboard up, the field is what shows; the rail stays.
+    let keyboard = ids(&l, [914, 213]);
+    assert!(keyboard.contains(&ButtonId::FocusGameArgs));
+    assert!(keyboard.contains(&ButtonId::OpenMods));
+    assert!(!keyboard.contains(&ButtonId::OpenAccountSwitcher));
+    l.typed(r#"--render-distance 8 --world "New World""#);
+    l.typed("\n");
+    assert!(!l.wants_text());
+    assert_eq!(
+        l.backend().game_args(),
+        r#"--render-distance 8 --world "New World""#
+    );
+    // An open quote is refused, with the reason, and the kept arguments stay.
+    click_button(&mut l, size, ButtonId::FocusGameArgs);
+    l.typed(r#" "x"#);
+    click_button(&mut l, size, ButtonId::GoHome);
+    assert!(l.game_args_error.is_some());
+    assert_eq!(
+        l.backend().game_args(),
+        r#"--render-distance 8 --world "New World""#
+    );
+    // Play refused on them (the host checks them as the game will): Settings says why.
+    click_button(&mut l, size, ButtonId::GoHome);
+    l.game_args_refused("missing value after --bogus");
+    assert_eq!(l.route, Route::Settings);
+    assert_eq!(
+        l.game_args_error.as_deref(),
+        Some("missing value after --bogus")
+    );
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::OpenSourceCode),
+        Some(Action::OpenUrl(SOURCE_CODE.into()))
+    );
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::OpenLicenses),
+        Some(Action::OpenUrl(LICENSES.into()))
+    );
+}
+
+#[test]
+fn a_question_pops_up_over_the_page_and_alone_takes_taps() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    click_button(&mut l, size, ButtonId::OpenNewProfile);
+    click_button(&mut l, size, ButtonId::SaveRenameProfile);
+    click_button(&mut l, size, ButtonId::DeleteTabProfile);
+    let shown = with_ui(size, (0.0, 0.0), |ui| {
+        l.layout(&mut Canvas::Hit(ui))
+            .iter()
+            .map(|h| h.id)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        shown,
+        [
+            ButtonId::CancelRemoveProfile,
+            ButtonId::ConfirmRemoveProfile
+        ]
+    );
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "delete-popup");
+    }
+    click_button(&mut l, size, ButtonId::CancelRemoveProfile);
+    assert_eq!(l.backend().profiles().len(), 2, "kept");
+}
+
+/// The ids laid out at `size`.
+fn shown(l: &MobileLauncher, size: [u32; 2]) -> Vec<ButtonId> {
+    with_ui(size, (0.0, 0.0), |ui| {
+        l.layout(&mut Canvas::Hit(ui))
+            .iter()
+            .map(|h| h.id)
+            .collect()
+    })
+}
+
+#[test]
+fn settings_fits_on_a_short_page_and_a_drag_scrolls_the_game_log_back() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        log: (0..60)
+            .map(|i| format!("[{i}] [main/INFO]: line {i}"))
+            .collect(),
+        ..StubBackend::default()
+    }));
+    // On a short page under the top bar, a drag reaches Settings' last rows.
+    let size = [914, 300];
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    let top = shown(&l, size);
+    assert!(top.contains(&ButtonId::ToggleLauncherFont), "{top:?}");
+    l.scroll(0.0, -10_000.0);
+    let bottom = shown(&l, size);
+    assert!(bottom.contains(&ButtonId::OpenLicenses), "{bottom:?}");
+    assert_hits_fit_without_overlap(&l, size, "settings-fits");
+
+    // Home starts at the log's end; a drag down goes back, as far as its first line.
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::GoHome);
+    assert_eq!(l.page_offset(), 0, "another page starts unscrolled");
+    shown(&l, size);
+    let back = l.scroll_max.get();
+    assert!(back > 0 && back < 60, "{back}");
+    l.scroll(0.0, 32.0);
+    assert_eq!(l.page_offset(), 2);
+    l.scroll(0.0, 10_000.0);
+    assert_eq!(l.page_offset(), back);
+}
+
+#[test]
+fn mods_tabs_scroll_sideways_on_one_row_and_a_new_profiles_name_shows() {
+    let mut profiles = StubBackend::default().profiles;
+    for i in 1..=9 {
+        profiles.push(Profile {
+            id: format!("pack-{i}"),
+            name: format!("A Longer Modpack Name {i}"),
+            description: String::new(),
+            mods: 1,
+            size: 1_000_000,
+            worlds: 0,
+            state: ProfileState::Installed,
+        });
+    }
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        profiles,
+        ..StubBackend::default()
+    }));
+    let size = [914, 411];
+    // The tabs shown, by index, and the rows they sit on.
+    let tabs = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = l.layout(&mut Canvas::Hit(ui));
+            let mut rows: Vec<f32> = Vec::new();
+            let mut shown = Vec::new();
+            for h in &hits {
+                if let ButtonId::ModManagerPickProfile(i) = h.id {
+                    shown.push(i);
+                    if !rows.contains(&h.y) {
+                        rows.push(h.y);
+                    }
+                }
+            }
+            (shown, rows.len())
+        })
+    };
+    click_button(&mut l, size, ButtonId::OpenMods);
+    let (first, rows) = tabs(&l);
+    assert_eq!(rows, 1);
+    assert!(first.contains(&0) && !first.contains(&9), "{first:?}");
+    assert_hits_fit_without_overlap(&l, size, "mods-many-tabs");
+    // A drag left brings the last tabs in; one right, the first again.
+    l.scroll(-10_000.0, 0.0);
+    let (last, rows) = tabs(&l);
+    assert_eq!(rows, 1);
+    assert!(last.contains(&9) && !last.contains(&0), "{last:?}");
+    assert_hits_fit_without_overlap(&l, size, "mods-tabs-scrolled");
+    l.scroll(10_000.0, 0.0);
+    assert!(tabs(&l).0.contains(&0));
+    // A new profile, last in the row, is scrolled to with its name field and Done.
+    click_button(&mut l, size, ButtonId::OpenNewProfile);
+    assert!(l.wants_text());
+    let ids = shown(&l, size);
+    assert!(
+        ids.contains(&ButtonId::FocusRenameInput) && ids.contains(&ButtonId::SaveRenameProfile)
+    );
+    assert_hits_fit_without_overlap(&l, size, "mods-tabs-renaming");
+}
+
+#[test]
+fn a_local_mod_has_its_switch_and_no_remove() {
+    let info = |id: &str| ModInfo {
+        id: id.into(),
+        name: id.into(),
+        description: String::new(),
+        version: "1.0.0".into(),
+        size: 1_000,
+    };
+    let mut profiles = StubBackend::default().profiles;
+    profiles.push(Profile {
+        id: "pack".into(),
+        name: "Pack".into(),
+        description: String::new(),
+        mods: 2,
+        size: 1_000_000,
+        worlds: 0,
+        state: ProfileState::Installed,
+    });
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        profiles,
+        selected_profile: "pack".into(),
+        mods: vec![
+            ProfileMod {
+                info: info("from-registry"),
+                enabled: true,
+                local: false,
+                builtin: false,
+            },
+            ProfileMod {
+                info: info("logical_zoom"),
+                enabled: false,
+                local: true,
+                builtin: false,
+            },
+        ],
+        ..StubBackend::default()
+    }));
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::RemoveProfileMod(0)));
+    assert!(ids.contains(&ButtonId::ToggleProfileMod(0)) && ids.contains(&ButtonId::ToggleProfileMod(1)));
+    assert!(!ids.contains(&ButtonId::RemoveProfileMod(1)));
+    assert_hits_fit_without_overlap(&l, size, "mods-local");
+    click_button(&mut l, size, ButtonId::ToggleProfileMod(1));
+    assert!(l.backend().mods("pack")[1].enabled);
+}
+
+#[test]
+fn a_builtin_mod_shows_on_modded_profiles_while_vanilla_stays_clean() {
+    let info = |id: &str| ModInfo {
+        id: id.into(),
+        name: "Smooth Zoom".into(),
+        description: "Hold C to zoom.".into(),
+        version: "0.1.0".into(),
+        size: 1_000,
+    };
+    let mut profiles = StubBackend::default().profiles;
+    profiles.push(Profile {
+        id: "pack".into(),
+        name: "Pack".into(),
+        description: String::new(),
+        mods: 1,
+        size: 1_000_000,
+        worlds: 0,
+        state: ProfileState::Installed,
+    });
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        profiles,
+        selected_profile: VANILLA.into(),
+        mods: vec![
+            ProfileMod {
+                info: info("logical_zoom"),
+                enabled: true,
+                local: false,
+                builtin: true,
+            },
+            ProfileMod {
+                info: info("from-registry"),
+                enabled: true,
+                local: false,
+                builtin: false,
+            },
+        ],
+        ..StubBackend::default()
+    }));
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    // Vanilla shows the clean no-mods page (built-in Smooth Zoom stays active without a Vanilla toggle card).
+    let ids = shown(&l, size);
+    assert!(!ids.contains(&ButtonId::ToggleProfileMod(0)));
+    assert!(!ids.contains(&ButtonId::RemoveProfileMod(0)));
+    assert!(ids.contains(&ButtonId::OpenNewProfile));
+    assert_hits_fit_without_overlap(&l, size, "mods-vanilla-clean");
+
+    // Switching to a modded profile shows both the built-in mod (no Remove) and the registry mod (Remove).
+    click_button(&mut l, size, ButtonId::ModManagerPickProfile(1));
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::ToggleProfileMod(0)) && ids.contains(&ButtonId::ToggleProfileMod(1)));
+    assert!(!ids.contains(&ButtonId::RemoveProfileMod(0)));
+    assert!(ids.contains(&ButtonId::RemoveProfileMod(1)));
+    assert_hits_fit_without_overlap(&l, size, "mods-pack-builtin");
+
+    // Compiling mods replaces the dock's Play CTA cleanly without overlapping any control.
+    l.set_compiling_mods(true);
+    l.note("Compiling mods…");
+    assert_hits_fit_without_overlap(&l, size, "mods-compiling-dock");
+    click_button(&mut l, size, ButtonId::GoHome);
+    assert_hits_fit_without_overlap(&l, size, "home-compiling-dock");
+}
+
+#[test]
+fn mods_lists_turn_pages_by_swipe_and_show_dots_instead_of_buttons() {
+    let info = |i: usize| ModInfo {
+        id: format!("mod-{i}"),
+        name: format!("Mod {i}"),
+        description: String::new(),
+        version: "1.0.0".into(),
+        size: 1_000,
+    };
+    let mut profiles = StubBackend::default().profiles;
+    profiles.push(Profile {
+        id: "pack".into(),
+        name: "Pack".into(),
+        description: String::new(),
+        mods: 7,
+        size: 1_000_000,
+        worlds: 0,
+        state: ProfileState::Installed,
+    });
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        profiles,
+        selected_profile: "pack".into(),
+        // The profile's mods aren't the registry's, so every result has its Add.
+        mods: (10..17)
+            .map(|i| ProfileMod {
+                info: info(i),
+                enabled: true,
+                local: false,
+                builtin: false,
+            })
+            .collect(),
+        search: ModSearch::Done((0..7).map(info).collect()),
+        ..StubBackend::default()
+    }));
+    // The A14's screen in dp.
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenMods);
+    let results = |l: &MobileLauncher| -> Vec<usize> {
+        shown(l, size)
+            .into_iter()
+            .filter_map(|id| match id {
+                ButtonId::AddRegistryMod(i) => Some(i),
+                _ => None,
+            })
+            .collect()
+    };
+    // Three results a page, the dots under them; the profile's list pages too.
+    assert_eq!(results(&l), [0, 1, 2]);
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::RegistryModsNext) && ids.contains(&ButtonId::ProfileModsNext));
+    assert_hits_fit_without_overlap(&l, size, "mods-pages");
+    let row = with_ui(size, (0.0, 0.0), |ui| {
+        let hits = l.layout(&mut Canvas::Hit(ui));
+        let h = hits
+            .iter()
+            .find(|h| h.id == ButtonId::AddRegistryMod(0))
+            .unwrap();
+        (h.x - 40.0, h.y + h.h * 0.5)
+    });
+    // A swipe left on the registry list: the next page once it has moved far enough, and one
+    // page a swipe however far it goes.
+    l.drag_from(row);
+    l.scroll(-25.0, 0.0);
+    assert_eq!(results(&l), [0, 1, 2]);
+    l.scroll(-25.0, 0.0);
+    assert_eq!(results(&l), [3, 4, 5]);
+    l.scroll(-400.0, 0.0);
+    assert_eq!(results(&l), [3, 4, 5]);
+    // A swipe right shows the page before; the profile's own list stayed on its first.
+    l.drag_from(row);
+    l.scroll(60.0, 0.0);
+    assert_eq!(results(&l), [0, 1, 2]);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleProfileMod(0)));
+    // A drag on the tabs leaves the pages be.
+    l.drag_from((row.0, 20.0));
+    l.scroll(-400.0, 0.0);
+    assert_eq!(results(&l), [0, 1, 2]);
+    // A tap on the dots shows the next page, and the first after the last.
+    click_button(&mut l, size, ButtonId::RegistryModsNext);
+    click_button(&mut l, size, ButtonId::RegistryModsNext);
+    assert_eq!(results(&l), [6]);
+    click_button(&mut l, size, ButtonId::RegistryModsNext);
+    assert_eq!(results(&l), [0, 1, 2]);
+    assert_eq!(super::mods::pages(3, 0.0, 160.0, 48.0), (3, 1, 152.0));
+    assert_eq!(super::mods::pages(4, 0.0, 160.0, 48.0), (3, 2, 144.0));
+    // No room for the dots: the rows that fit, and the swipe still turns the page.
+    assert_eq!(super::mods::pages(4, 0.0, 60.0, 48.0), (1, 4, 52.0));
+
+    // Five dots at most: the page shown keeps the middle, and an end dot is half size while
+    // more pages lie past it.
+    let row = |shown: f32, pages: usize| -> Vec<(usize, f32, f32)> {
+        super::mods::dot_row(shown, pages)
+            .into_iter()
+            .map(|(i, _, size, lit)| (i, size, lit))
+            .collect()
+    };
+    assert_eq!(
+        row(0.0, 16),
+        [
+            (0, 1.0, 1.0),
+            (1, 1.0, 0.0),
+            (2, 1.0, 0.0),
+            (3, 1.0, 0.0),
+            (4, 0.5, 0.0)
+        ]
+    );
+    let middle = row(8.0, 16);
+    assert_eq!(
+        middle.iter().map(|d| d.0).collect::<Vec<_>>(),
+        [6, 7, 8, 9, 10]
+    );
+    assert!(middle[0].1 == 0.5 && middle[4].1 == 0.5 && middle[2] == (8, 1.0, 1.0));
+    let last = row(15.0, 16);
+    assert!(last[0] == (11, 0.5, 0.0) && last[4] == (15, 1.0, 1.0));
+    assert_eq!(row(1.0, 3), [(0, 1.0, 0.0), (1, 1.0, 1.0), (2, 1.0, 0.0)]);
+    // Halfway through a pan: the dot leaving shrinks, the one coming grows, both pages half lit.
+    let panning = row(7.5, 16);
+    assert_eq!(panning.len(), 6);
+    assert!(panning[0].0 == 5 && panning[0].1 < 0.5 && panning[5].0 == 10);
+    assert!(panning[2].2 == 0.5 && panning[3].2 == 0.5);
+}
+
+#[test]
+fn account_switcher_pages_by_swipe_and_shows_dots_instead_of_buttons() {
+    let accounts: Vec<Account> = (0..7)
+        .map(|i| Account::Offline {
+            name: format!("Player{i}"),
+        })
+        .collect();
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts,
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    // The A14's screen in dp.
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenAccountSwitcher);
+    let visible = |l: &MobileLauncher| -> Vec<usize> {
+        shown(l, size)
+            .into_iter()
+            .filter_map(|id| match id {
+                ButtonId::RemoveAccount(i) => Some(i),
+                _ => None,
+            })
+            .collect()
+    };
+    // Three accounts a page on A14, with page dots under them and no overlaps at any size.
+    assert_eq!(visible(&l), [0, 1, 2]);
+    assert!(shown(&l, size).contains(&ButtonId::AccountsNext));
+    for s in [
+        [856, 384],
+        [914, 411],
+        [800, 360],
+        [1040, 700],
+        [2400, 1080],
+    ] {
+        assert_hits_fit_without_overlap(&l, s, "accounts-pages");
+    }
+    let row = with_ui(size, (0.0, 0.0), |ui| {
+        let hits = l.layout(&mut Canvas::Hit(ui));
+        let h = hits
+            .iter()
+            .find(|h| h.id == ButtonId::RemoveAccount(0))
+            .unwrap();
+        (h.x - 40.0, h.y + h.h * 0.5)
+    });
+    // A swipe left turns one page once past SWIPE; further motion on the same swipe stays put.
+    l.drag_from(row);
+    l.scroll(-25.0, 0.0);
+    assert_eq!(visible(&l), [0, 1, 2]);
+    l.scroll(-25.0, 0.0);
+    assert_eq!(visible(&l), [3, 4, 5]);
+    l.scroll(-400.0, 0.0);
+    assert_eq!(visible(&l), [3, 4, 5]);
+    // A swipe right returns to the previous page; a drag in the header does not turn pages.
+    l.drag_from(row);
+    l.scroll(60.0, 0.0);
+    assert_eq!(visible(&l), [0, 1, 2]);
+    l.drag_from((row.0, 20.0));
+    l.scroll(-400.0, 0.0);
+    assert_eq!(visible(&l), [0, 1, 2]);
+    // Tapping the dots advances through pages and wraps back to the first, panning the dots.
+    click_button(&mut l, size, ButtonId::AccountsNext);
+    assert_eq!(visible(&l), [3, 4, 5]);
+    assert!(l.animating());
+    click_button(&mut l, size, ButtonId::AccountsNext);
+    assert_eq!(visible(&l), [6]);
+    click_button(&mut l, size, ButtonId::AccountsNext);
+    assert_eq!(visible(&l), [0, 1, 2]);
+}
+
+#[test]
+fn a_release_build_without_a_game_owner_says_why_on_the_offline_and_ely_forms() {
+    use crate::launcher_backend::NEEDS_OWNER;
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        allowed: false,
+        ..StubBackend::default()
+    }));
+    // The A14's and the A32's screens: the reason shows whole, without an ellipsis.
+    for size in [[856, 384], [914, 411]] {
+        l.handle_button(ButtonId::OpenOfflineEntry);
+        assert_eq!(l.offline_error.as_deref(), Some(NEEDS_OWNER));
+        assert_hits_fit_without_overlap(&l, size, "offline-needs-owner");
+        let room = with_ui(size, (0.0, 0.0), |ui| {
+            ui.measure(
+                crate::ui_theme::Face::Regular,
+                crate::ui_theme::small(),
+                NEEDS_OWNER,
+            )
+        });
+        assert!(room < size[0] as f32 - 160.0, "{size:?}: {room}");
+        l.handle_button(ButtonId::CancelOffline);
+        l.handle_button(ButtonId::OpenElyEntry);
+        assert_eq!(l.ely_error.as_deref(), Some(NEEDS_OWNER));
+        assert_hits_fit_without_overlap(&l, size, "ely-needs-owner");
+        l.handle_button(ButtonId::CancelEly);
+    }
+    // A development build (or a phone an owner signed in on): the forms open clean.
+    let mut open = MobileLauncher::new(Box::new(StubBackend::default()));
+    open.handle_button(ButtonId::OpenOfflineEntry);
+    assert_eq!(open.offline_error, None);
+}
+
+#[test]
+fn release_build_welcome_gates_offline_until_a_game_owner_signs_in() {
+    use crate::launcher_backend::NEEDS_OWNER;
+    let mut gated = MobileLauncher::new(Box::new(StubBackend {
+        allowed: false,
+        ..StubBackend::default()
+    }));
+    gated.set_safe_insets(SafeInsets::PHONE);
+    for size in [[856, 384], [914, 411], [1040, 700]] {
+        let ids = shown(&gated, size);
+        assert!(
+            ids.contains(&ButtonId::SignInMicrosoft),
+            "{size:?}: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&ButtonId::OpenOfflineEntry)
+                && !ids.contains(&ButtonId::ToggleMoreAuth)
+                && !ids.contains(&ButtonId::OpenElyEntry),
+            "{size:?}: offline and more options must stay hidden before an owner signs in: {ids:?}"
+        );
+        assert_hits_fit_without_overlap(&gated, size, "welcome-owner-gate");
+        // The one-line reason fits inside the welcome card at the regular caption size.
+        with_ui(size, (0.0, 0.0), |ui| {
+            let reason_w = ui.measure(
+                crate::ui_theme::Face::Regular,
+                crate::ui_theme::small(),
+                NEEDS_OWNER,
+            );
+            let card_w =
+                ((ui.w - SafeInsets::PHONE.left - SafeInsets::PHONE.right) - 24.0).min(640.0);
+            assert!(
+                reason_w <= card_w - 56.0,
+                "{size:?}: {reason_w} > {}",
+                card_w - 56.0
+            );
+        });
+    }
+
+    // Once a Microsoft owner has signed in (`allowed: true`), adding an offline or Ely.by account
+    // is reachable again from the welcome card.
+    let mut owned = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Microsoft {
+            name: "Owner".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        allowed: true,
+        ..StubBackend::default()
+    }));
+    let size = [856, 384];
+    click_button(&mut owned, size, ButtonId::OpenAccountSwitcher);
+    click_button(&mut owned, size, ButtonId::AddAccount);
+    let ids = shown(&owned, size);
+    assert!(ids.contains(&ButtonId::SignInMicrosoft));
+    assert!(ids.contains(&ButtonId::OpenOfflineEntry));
+    assert!(ids.contains(&ButtonId::ToggleMoreAuth));
+    assert!(ids.contains(&ButtonId::CancelAddAccount));
+    click_button(&mut owned, size, ButtonId::ToggleMoreAuth);
+    assert!(shown(&owned, size).contains(&ButtonId::OpenElyEntry));
+    click_button(&mut owned, size, ButtonId::OpenOfflineEntry);
+    owned.typed("GuestPlayer");
+    click_button(&mut owned, size, ButtonId::ConfirmOffline);
+    assert_eq!(
+        owned.backend().account(),
+        Some(Account::Offline {
+            name: "GuestPlayer".into()
+        })
+    );
+}
+
+#[test]
+fn a_page_change_moves_until_it_settles_and_animations_off_changes_at_once() {
+    let signed_in = || StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    };
+    let size = [856, 384];
+    let draw = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Draw(ui));
+        })
+    };
+    // Nothing moves at startup; another page fades in, and the host draws frames meanwhile.
+    let l = MobileLauncher::new(Box::new(signed_in()));
+    draw(&l);
+    assert!(!l.animating());
+    let mut l = l;
+    click_button(&mut l, size, ButtonId::OpenMods);
+    draw(&l);
+    assert!(l.animating());
+    // Settings has the switch, and it turns motion off.
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleAnimations));
+    assert_hits_fit_without_overlap(&l, size, "settings-animations");
+    click_button(&mut l, size, ButtonId::ToggleAnimations);
+    assert!(!l.motion.on.get());
+    // Off: a page change is at once.
+    let mut still = MobileLauncher::new(Box::new(signed_in()));
+    still.motion.on.set(false);
+    click_button(&mut still, size, ButtonId::OpenMods);
+    draw(&still);
+    assert!(!still.animating());
+
+    // `changed` gives what a value was before and when it changed.
+    let cell = std::cell::Cell::new((1, 1, super::motion::long_ago()));
+    let (before, _) = super::motion::changed(&cell, 1);
+    assert_eq!(before, 1);
+    let (before, since) = super::motion::changed(&cell, 2);
+    assert_eq!((before, cell.get().0), (1, 2));
+    assert!(since.elapsed().as_secs_f32() < 1.0);
+}
+
+#[test]
+fn motion_polish_closes_popups_rotates_chevrons_and_fades_added() {
+    use std::f32::consts::FRAC_PI_2;
+    use std::f32::consts::PI;
+
+    let size = [856, 384];
+    // 1. `shape_range` turns vertices clockwise around `(cx, cy)` without drifting at 0 or PI.
+    with_ui(size, (0.0, 0.0), |ui| {
+        let k = ui.density / ui.batch.scale;
+        let start = ui.batch.vertices.len();
+        ui.batch.fill_quad(
+            ui.atlas,
+            [
+                [110.0 * k, 50.0 * k],
+                [110.0 * k, 50.0 * k],
+                [110.0 * k, 50.0 * k],
+                [110.0 * k, 50.0 * k],
+            ],
+            0xffff_ffff,
+        );
+        let end = ui.batch.vertices.len();
+        super::motion::shape_range(ui, start..end, 1.0, 0.0, 0.0, 1.0, 100.0, 50.0, FRAC_PI_2);
+        let q = ui.batch.vertices[start].pos;
+        assert!((q[0] - 100.0 * k).abs() < 1e-2, "{q:?}");
+        assert!((q[1] - 60.0 * k).abs() < 1e-2, "{q:?}");
+        super::motion::shape_range(ui, start..end, 1.0, 0.0, 0.0, 1.0, 100.0, 50.0, FRAC_PI_2);
+        let flip = ui.batch.vertices[start].pos;
+        assert!((flip[0] - 90.0 * k).abs() < 1e-2, "{flip:?}");
+        assert!((flip[1] - 50.0 * k).abs() < 1e-2, "{flip:?}");
+        super::motion::shape_range(ui, start..end, 1.0, 0.0, 0.0, 1.0, 100.0, 50.0, PI);
+        let back = ui.batch.vertices[start].pos;
+        assert!((back[0] - 110.0 * k).abs() < 1e-2, "{back:?}");
+        assert!((back[1] - 50.0 * k).abs() < 1e-2, "{back:?}");
+    });
+
+    let signed_in = || {
+        let mut b = StubBackend {
+            accounts: vec![Account::Offline {
+                name: "Steve".into(),
+            }],
+            active: Some(0),
+            setup: Setup::Ready,
+            reclaim: 500_000_000,
+            ..StubBackend::default()
+        };
+        b.profiles.push(Profile {
+            id: "pack".into(),
+            name: "Pack".into(),
+            description: String::new(),
+            mods: 0,
+            size: 0,
+            worlds: 0,
+            state: ProfileState::Installed,
+        });
+        b.selected_profile = "pack".into();
+        b.mods.clear();
+        b
+    };
+    let draw_verts = |l: &MobileLauncher| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Draw(ui));
+            ui.batch.vertices.len()
+        })
+    };
+
+    // 2. Profile pop-up closing draws the closing pop-up without taking taps, and stops when idle.
+    let mut l = MobileLauncher::new(Box::new(signed_in()));
+    let base_verts = draw_verts(&l);
+    assert!(!l.animating());
+    click_button(&mut l, size, ButtonId::ToggleProfilePicker);
+    draw_verts(&l);
+    assert!(l.animating());
+    // Settle the open state, then close it.
+    l.popup_motion.set((true, false, super::motion::long_ago()));
+    l.motion.on.set(false);
+    draw_verts(&l);
+    l.motion.on.set(true);
+    assert!(!l.animating(), "settled open pop-up should be idle");
+    click_button(&mut l, size, ButtonId::CloseProfilePopup);
+    let closing_verts = draw_verts(&l);
+    assert!(l.animating(), "closing profile pop-up runs its 0.13 s exit");
+    assert!(
+        closing_verts > base_verts,
+        "closing profile pop-up still draws while exiting ({closing_verts} vs {base_verts})"
+    );
+    let ids_while_closing = shown(&l, size);
+    assert!(!ids_while_closing.contains(&ButtonId::CloseProfilePopup));
+    assert!(!ids_while_closing.contains(&ButtonId::SelectProfile(0)));
+    assert_hits_fit_without_overlap(&l, size, "profile-popup-closing");
+
+    // 3. Question dialog closing (Delete profile & Free up space) animates out without blocking taps.
+    let mut dlg = MobileLauncher::new(Box::new(signed_in()));
+    click_button(&mut dlg, size, ButtonId::OpenSettings);
+    dlg.page_motion
+        .set((Route::Settings, Route::Settings, super::motion::long_ago()));
+    dlg.rail_motion.set((3, 3, super::motion::long_ago()));
+    draw_verts(&dlg);
+    let settings_verts = draw_verts(&dlg);
+    click_button(&mut dlg, size, ButtonId::FreeSpace);
+    draw_verts(&dlg);
+    assert!(dlg.animating());
+    dlg.dialog_motion
+        .set((true, false, super::motion::long_ago()));
+    dlg.motion.on.set(false);
+    draw_verts(&dlg);
+    dlg.motion.on.set(true);
+    assert!(!dlg.animating(), "settled open dialog should be idle");
+    click_button(&mut dlg, size, ButtonId::ConfirmFreeSpace);
+    let dlg_closing_verts = draw_verts(&dlg);
+    assert!(dlg.animating(), "closing dialog runs its 0.14 s exit");
+    assert!(
+        dlg_closing_verts > settings_verts,
+        "closing dialog still draws while exiting"
+    );
+    assert!(!shown(&dlg, size).contains(&ButtonId::ConfirmFreeSpace));
+
+    // 4. Dock account chevron & registry "Added" fade-in animate on, and stay still when Animations is Off.
+    let mut mods_l = MobileLauncher::new(Box::new(signed_in()));
+    click_button(&mut mods_l, size, ButtonId::OpenMods);
+    draw_verts(&mods_l);
+    // Settle page/rail/tab motion so only adding a mod animates.
+    mods_l
+        .page_motion
+        .set((Route::Mods, Route::Mods, super::motion::long_ago()));
+    mods_l.rail_motion.set((1, 1, super::motion::long_ago()));
+    mods_l.tab_motion.set((
+        mods_l.tab_motion.get().0,
+        mods_l.tab_motion.get().0,
+        super::motion::long_ago(),
+    ));
+    mods_l.motion.on.set(false);
+    draw_verts(&mods_l);
+    mods_l.motion.on.set(true);
+    assert!(!mods_l.animating(), "settled Mods page should be idle");
+    // Add the very first mod to an empty modded profile: both Profile Mods and registry "Added" animate.
+    click_button(&mut mods_l, size, ButtonId::AddRegistryMod(1));
+    draw_verts(&mods_l);
+    assert!(mods_l.animating(), "adding a mod fades in registry Added");
+
+    // With Animations turned off, none of the closing/chevron/Added motions run.
+    let mut still = MobileLauncher::new(Box::new(signed_in()));
+    still.motion.on.set(false);
+    click_button(&mut still, size, ButtonId::ToggleProfilePicker);
+    draw_verts(&still);
+    click_button(&mut still, size, ButtonId::CloseProfilePopup);
+    draw_verts(&still);
+    assert!(!still.animating());
+    click_button(&mut still, size, ButtonId::OpenAccountSwitcher);
+    draw_verts(&still);
+    click_button(&mut still, size, ButtonId::OpenAccountSwitcher);
+    draw_verts(&still);
+    assert!(!still.animating());
+    click_button(&mut still, size, ButtonId::OpenMods);
+    draw_verts(&still);
+    click_button(&mut still, size, ButtonId::AddRegistryMod(1));
+    draw_verts(&still);
+    assert!(!still.animating());
+}
+
+#[test]
+fn vanilla_note_drops_its_badge_then_its_explanation_when_room_runs_short() {
+    let parts = [76.0, 36.0, 30.0];
+    assert_eq!(super::mods::fit_note(200.0, parts), parts);
+    assert_eq!(super::mods::fit_note(100.0, parts), [0.0, 36.0, 30.0]);
+    assert_eq!(super::mods::fit_note(40.0, parts), [0.0, 0.0, 30.0]);
+    assert_eq!(super::mods::fit_note(10.0, parts), [0.0; 3]);
+}
+
+#[test]
+fn a_failed_sign_in_is_forgotten_and_not_approved_offers_the_offline_account() {
+    use crate::launcher_backend::NOT_APPROVED;
+    let size = [914, 411];
+    // Signed in offline, an earlier Microsoft try failed: adding an account shows the ways in.
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        sign_in: SignIn::Failed(NOT_APPROVED.into()),
+        ..StubBackend::default()
+    }));
+    click_button(&mut l, size, ButtonId::OpenAccountSwitcher);
+    click_button(&mut l, size, ButtonId::AddAccount);
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::SignInMicrosoft), "{ids:?}");
+    assert_eq!(l.backend().sign_in(), SignIn::Idle);
+    // Not approved yet: the offline account, not another try.
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        setup: Setup::Ready,
+        sign_in: SignIn::Failed(NOT_APPROVED.into()),
+        ..StubBackend::default()
+    }));
+    let ids = shown(&l, size);
+    assert!(ids.contains(&ButtonId::OpenOfflineEntry) && !ids.contains(&ButtonId::RetrySignIn));
+    for size in [[914, 411], [856, 384], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, size, "not-approved");
+    }
+    click_button(&mut l, size, ButtonId::OpenOfflineEntry);
+    assert!(shown(&l, size).contains(&ButtonId::ConfirmOffline));
+    // Another failure keeps Try Again; Back forgets it.
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        setup: Setup::Ready,
+        sign_in: SignIn::Failed("No connection.".into()),
+        ..StubBackend::default()
+    }));
+    assert!(shown(&l, size).contains(&ButtonId::RetrySignIn));
+    click_button(&mut l, size, ButtonId::CancelSignIn);
+    assert_eq!(l.backend().sign_in(), SignIn::Idle);
+}
+
+#[test]
+fn the_skin_figure_shows_its_front_level_and_turns() {
+    use super::widgets::skin_quads;
+    // Only the head's front, its top-left pixel marked.
+    let mut skin = vec![0u8; 64 * 64 * 4];
+    for y in 8..16 {
+        for x in 8..16 {
+            skin[(y * 64 + x) * 4..][..4].copy_from_slice(&[10, 20, 30, 255]);
+        }
+    }
+    skin[(8 * 64 + 8) * 4..][..4].copy_from_slice(&[250, 0, 0, 255]);
+    let front = skin_quads(&skin, false, 0.0, 0.0);
+    assert_eq!(front.len(), 64);
+    // Its top-left pixel sits at the head's top-left, as the flat front view drew it.
+    let top_left = front
+        .iter()
+        .min_by(|a, b| (a.0[0][0] + a.0[0][1]).total_cmp(&(b.0[0][0] + b.0[0][1])))
+        .unwrap();
+    assert_eq!(top_left.0[0], [-4.0, -16.0]);
+    assert_eq!(front.iter().filter(|q| q.2 == top_left.2).count(), 1);
+    // Turned a little and tilted it still shows; turned around, the front is out of sight.
+    assert_eq!(skin_quads(&skin, false, 0.6, 0.4).len(), 64);
+    assert!(skin_quads(&skin, false, std::f32::consts::PI, 0.2).is_empty());
+    // Farthest first, so nearer pixels draw over them.
+    let turned = skin_quads(&vec![255; 64 * 64 * 4], true, 0.5, 0.2);
+    assert!(turned.windows(2).all(|w| w[0].1 <= w[1].1));
+}
+
+#[test]
+fn a_drag_on_skins_turns_the_figure() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    click_button(&mut l, [914, 411], ButtonId::OpenSkins);
+    let (yaw, pitch) = (l.skin_yaw, l.skin_pitch);
+    l.scroll(100.0, 1000.0);
+    assert!(l.skin_yaw > yaw);
+    assert!(l.skin_pitch > pitch && l.skin_pitch <= 0.6);
+}
+
+#[test]
+fn tabler_outlines_read_as_lines_curves_and_arcs() {
+    use super::widgets::svg_path;
+    let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+    // Relative lines after a move, and a close.
+    let pieces = svg_path("M5 12l-2 0l9 -9z");
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].0, [[5.0, 12.0], [3.0, 12.0], [12.0, 3.0]]);
+    assert!(pieces[0].1);
+    // Across and down, then a curve that ends where its last point says.
+    let pieces = svg_path("M1 1h4v4c.5 0 1 .5 1 1");
+    let points = &pieces[0].0;
+    assert!(near(points[1], [5.0, 1.0]) && near(points[2], [5.0, 5.0]));
+    assert!(near(*points.last().unwrap(), [6.0, 6.0]));
+    // Two half arcs make Tabler's settings hub: every point 3 from its centre, back at the start.
+    let pieces = svg_path("M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0");
+    let ring = &pieces[0].0;
+    assert!(ring.len() > 10);
+    for p in ring {
+        assert!(
+            ((p[0] - 12.0).hypot(p[1] - 12.0) - 3.0).abs() < 1e-3,
+            "{p:?}"
+        );
+    }
+    assert!(near(*ring.last().unwrap(), [9.0, 12.0]));
+    // Two pieces, and a stray number after a close stops the reading.
+    assert_eq!(svg_path("M0 0L1 1M2 2L3 3").len(), 2);
+    assert_eq!(svg_path("M0 0L1 1z 5").len(), 1);
+}
+
+#[test]
+fn settings_diagnostics_row_requests_export_and_shows_outcome() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let draw = |l: &MobileLauncher, size: [u32; 2]| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Draw(ui));
+        });
+    };
+
+    // The list scrolls on short screens: Diagnostics is its last row.
+    let to_bottom = |l: &mut MobileLauncher, size: [u32; 2]| {
+        with_ui(size, (0.0, 0.0), |ui| {
+            l.layout(&mut Canvas::Hit(ui));
+        });
+        l.scroll(0.0, -10_000.0);
+    };
+    let size = [914, 411];
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    for size in [[856, 384], [914, 411], [1040, 700]] {
+        to_bottom(&mut l, size);
+        assert_hits_fit_without_overlap(&l, size, "settings-diagnostics");
+        let (quit_y, diag_y) = with_ui(size, (0.0, 0.0), |ui| {
+            let hits = l.layout(&mut Canvas::Hit(ui));
+            let quit = hits.iter().find(|h| h.id == ButtonId::Quit).unwrap();
+            let diag = hits
+                .iter()
+                .find(|h| h.id == ButtonId::ExportDiagnostics)
+                .unwrap();
+            (quit.y, diag.y)
+        });
+        assert!(
+            diag_y > quit_y,
+            "{size:?}: Diagnostics must sit after Quit Launcher"
+        );
+    }
+
+    // Tapping Export requests the host action, marks moving() while running, and ignores repeats.
+    to_bottom(&mut l, size);
+    assert!(!l.moving());
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportDiagnostics),
+        Some(Action::ExportDiagnostics)
+    );
+    assert!(l.moving());
+    assert!(!shown(&l, size).contains(&ButtonId::ExportDiagnostics));
+    assert_eq!(l.handle_button(ButtonId::ExportDiagnostics), None);
+    draw(&l, size);
+
+    // Success outcome: "Shared <file name>", moving() clears, and Export is available again.
+    l.diagnostics_saved(Ok("meridian-diagnostics-123.zip".into()));
+    assert!(!l.moving());
+    assert_eq!(
+        super::settings::diagnostics_status(l.diagnostics.as_ref().unwrap()),
+        ("Shared meridian-diagnostics-123.zip".into(), true)
+    );
+    assert!(shown(&l, size).contains(&ButtonId::ExportDiagnostics));
+    for size in [[856, 384], [914, 411], [1040, 700]] {
+        draw(&l, size);
+        assert_hits_fit_without_overlap(&l, size, "settings-diagnostics-shared");
+    }
+
+    // Share-sheet failure outcome: error message shown in danger colour.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportDiagnostics),
+        Some(Action::ExportDiagnostics)
+    );
+    l.diagnostics_saved(Err("Couldn't open the share sheet".into()));
+    assert!(!l.moving());
+    assert_eq!(
+        super::settings::diagnostics_status(l.diagnostics.as_ref().unwrap()),
+        ("Couldn't open the share sheet".into(), false)
+    );
+    draw(&l, size);
+
+    // Mock backend's default Err reaches the row with its message intact.
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportDiagnostics),
+        Some(Action::ExportDiagnostics)
+    );
+    let default_err = StubBackend::default().export_diagnostics(&[]).unwrap_err();
+    assert_eq!(default_err, "Diagnostics are unavailable in this launcher.");
+    l.diagnostics_saved(Err(default_err.clone()));
+    assert!(!l.moving());
+    assert_eq!(
+        super::settings::diagnostics_status(l.diagnostics.as_ref().unwrap()),
+        (default_err, false)
+    );
+    draw(&l, size);
+
+    // On the A14 with Free Up Space visible too, scrolling Settings reveals Diagnostics cleanly.
+    let mut with_free = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        reclaim: 500_000_000,
+        ..StubBackend::default()
+    }));
+    let a14 = [856, 384];
+    click_button(&mut with_free, a14, ButtonId::OpenSettings);
+    shown(&with_free, a14);
+    with_free.scroll(0.0, -200.0);
+    assert!(shown(&with_free, a14).contains(&ButtonId::ExportDiagnostics));
+    assert_hits_fit_without_overlap(&with_free, a14, "settings-diagnostics-scrolled");
+}
+
+#[test]
+fn language_picker_lists_all_87_languages_and_falls_back_until_loaded() {
+    for lang in Language::ALL {
+        let extra = match lang {
+            Language::Igbo => "ṅ",
+            Language::Yoruba => "ṣṢǹ",
+            Language::Sakha => "ҥҕ",
+            _ => "",
+        };
+        assert_eq!(
+            lang.bundled_font_supported(),
+            crate::ui_theme::bundled_font_covers(lang.name())
+                && crate::ui_theme::bundled_font_covers(extra),
+            "{lang:?} ({})",
+            lang.name()
+        );
+        assert!(
+            crate::ui_theme::bundled_font_covers(lang.english_name()),
+            "{lang:?} ({})",
+            lang.english_name()
+        );
+    }
+
+    let size = [856, 384];
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    assert!(shown(&l, size).contains(&ButtonId::ToggleLanguagePicker));
+    assert_hits_fit_without_overlap(&l, size, "settings-language-row");
+
+    // Opening the picker shows the top of the list; Chinese (index 4) is unavailable in Phase 1.
+    click_button(&mut l, size, ButtonId::ToggleLanguagePicker);
+    assert!(l.language_popup_open);
+    for s in [[856, 384], [914, 411], [914, 300], [2400, 1080]] {
+        assert_hits_fit_without_overlap(&l, s, "language-popup");
+    }
+    let top_ids = shown(&l, size);
+    assert!(top_ids.contains(&ButtonId::SelectLanguage(1)));
+    assert!(!top_ids.contains(&ButtonId::SelectLanguage(Language::Chinese.index())));
+
+    // Scroll to the bottom of the 87-language list and back up; Down never overshoots `scroll_max`.
+    l.scroll(0.0, -10_000.0);
+    assert!(shown(&l, size).contains(&ButtonId::SelectLanguage(Language::Venetian.index())));
+    let max_scroll = l.scroll_max.get();
+    click_button(&mut l, size, ButtonId::LanguageScrollDown);
+    assert_eq!(l.language_scroll, max_scroll);
+    click_button(&mut l, size, ButtonId::LanguageScrollUp);
+    assert!(l.language_scroll < max_scroll);
+    l.scroll(0.0, 10_000.0);
+    assert!(shown(&l, size).contains(&ButtonId::SelectLanguage(0)));
+
+    // Pick French (index 1): before its table is loaded, `tr` falls back to English.
+    click_button(&mut l, size, ButtonId::SelectLanguage(1));
+    assert!(!l.language_popup_open);
+    assert_eq!(l.backend().language(), Language::French);
+    assert_eq!(i18n::tr("Settings"), "Settings");
+
+    // Once verified and loaded, the UI thread switches to French and every shell screen fits.
+    i18n::load_table_bytes(
+        Language::French,
+        br#"{"Settings":"Param\u00e8tres","Home":"Accueil","Play":"Jouer","Language":"Langue","Game log":"Journal du jeu","All":"Tout","Copy":"Copier","Sign out":"Se d\u00e9connecter"}"#,
+    )
+    .unwrap();
+    shown(&l, size);
+    assert_eq!(i18n::tr("Settings"), "Paramètres");
+    assert_eq!(i18n::tr("Play"), "Jouer");
+    for (btn, label) in [
+        (ButtonId::OpenSettings, "settings-in-french"),
+        (ButtonId::GoHome, "home-in-french"),
+        (ButtonId::OpenMods, "mods-in-french"),
+        (ButtonId::OpenSkins, "skins-in-french"),
+        (ButtonId::OpenAccountSwitcher, "accounts-in-french"),
+    ] {
+        click_button(&mut l, size, btn);
+        assert_hits_fit_without_overlap(&l, size, label);
+    }
+
+    // While a language pack downloads, `moving()` is true; a failed download fits on Settings.
+    let downloading = MobileLauncher::new(Box::new(StubBackend {
+        language: Language::German,
+        language_download: LanguageDownload::Downloading(Language::German),
+        ..StubBackend::default()
+    }));
+    assert!(downloading.moving());
+    let mut failed = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        language: Language::German,
+        language_download: LanguageDownload::Failed("Deutsch did not match its checksum.".into()),
+        ..StubBackend::default()
+    }));
+    click_button(&mut failed, size, ButtonId::OpenSettings);
+    assert_hits_fit_without_overlap(&failed, size, "settings-language-failed");
+    i18n::set(Language::English);
+}
+
+#[test]
+fn full_atlas_unlocks_all_87_languages_including_cjk_and_rtl() {
+    // Minimal prepared pack font atlas (`pack_font_ready == true`) covering A + CJK + Arabic.
+    let root = std::env::temp_dir().join(format!("meridian-pack-font-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let font = root.join("assets/minecraft/font");
+    let tex = root.join("assets/minecraft/textures/font");
+    std::fs::create_dir_all(&font).unwrap();
+    std::fs::create_dir_all(&tex).unwrap();
+    std::fs::write(
+        font.join("default.json"),
+        r#"{"providers":[{"type":"bitmap","file":"minecraft:font/ascii.png","ascent":7,"chars":["A中文設定设置"]}]}"#,
+    )
+    .unwrap();
+    let mut png = Vec::new();
+    let mut enc = png::Encoder::new(&mut png, 56, 8);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .unwrap()
+        .write_image_data(&vec![255; 56 * 8 * 4])
+        .unwrap();
+    std::fs::write(tex.join("ascii.png"), png).unwrap();
+    crate::ui_theme::reset_atlas();
+    let pack_atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        root.clone(),
+    ))
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(crate::ui_theme::pack_font_ready(&pack_atlas));
+
+    let size = [856, 384];
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    assert!(!l.needs_full_atlas());
+
+    // Opening the Language picker requests the full atlas so all 87 scripts render cleanly.
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    click_button(&mut l, size, ButtonId::ToggleLanguagePicker);
+    assert!(l.needs_full_atlas());
+
+    // With the pack font loaded, Chinese (index 4) is selectable right alongside Geist languages.
+    let mut batch = HudBatch::scratch(size);
+    let hits = {
+        let ui = Ui::new(&pack_atlas, &mut batch, (0.0, 0.0));
+        l.layout(&mut Canvas::Hit(&ui))
+    };
+    let zh = hits
+        .iter()
+        .find(|h| h.id == ButtonId::SelectLanguage(Language::Chinese.index()))
+        .expect("Chinese selectable once pack font is ready");
+    let tap = (zh.x + zh.w * 0.5, zh.y + zh.h * 0.5);
+    {
+        let mut batch = HudBatch::scratch(size);
+        let density = Ui::new(&pack_atlas, &mut batch, (0.0, 0.0)).density;
+        let cursor_gui = (tap.0 * density / batch.scale, tap.1 * density / batch.scale);
+        let ui = Ui::new(&pack_atlas, &mut batch, cursor_gui);
+        l.click(&ui);
+    }
+    assert_eq!(l.backend().language(), Language::Chinese);
+    assert!(l.needs_full_atlas());
+
+    // Load Chinese table: active when drawing on the pack atlas, falls back to English without it.
+    i18n::load_table_bytes(Language::Chinese, r#"{"Settings":"设置"}"#.as_bytes()).unwrap();
+    {
+        let mut batch = HudBatch::scratch(size);
+        let mut ui = Ui::new(&pack_atlas, &mut batch, (0.0, 0.0));
+        l.draw(&mut ui);
+        let small_cjk = ui.measure(crate::ui_theme::Face::Medium, 12.0, "设置");
+        let large_cjk = ui.measure(crate::ui_theme::Face::Medium, 24.0, "设置");
+        assert!(small_cjk > 0.0 && large_cjk > small_cjk);
+        assert_ne!(crate::bidi::visual_str("العربية").as_ref(), "العربية");
+        ui.finish();
+    }
+    assert_eq!(i18n::tr("Settings"), "设置");
+    crate::ui_theme::reset_atlas();
+    // Without pack font sheets, `layout` safely falls back to English rather than drawing boxes.
+    shown(&l, size);
+    assert_eq!(i18n::tr("Settings"), "Settings");
+    i18n::set(Language::English);
+}
+
+#[test]
+fn settings_game_tab_toggles_horizon_features() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        ..StubBackend::default()
+    }));
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    assert_hits_fit_without_overlap(&l, size, "settings-launcher-tab");
+    click_button(&mut l, size, ButtonId::SelectSettingsTab(SettingsTab::Game));
+    assert_hits_fit_without_overlap(&l, size, "settings-game-tab");
+    for idx in 0..4u8 {
+        click_button(&mut l, size, ButtonId::ToggleGameOption(idx));
+    }
+    l.scroll(0.0, -100.0);
+    click_button(&mut l, size, ButtonId::ToggleGameOption(4));
+    assert_hits_fit_without_overlap(&l, size, "settings-game-tab-scrolled");
+    assert_eq!(
+        l.backend().game_options(VANILLA),
+        GameOptions {
+            dynamic_lights: true,
+            coords: true,
+            sort: true,
+            far_terrain: true,
+            auto_jump: true,
+        }
+    );
+}
+
+#[test]
+fn settings_files_tab_imports_and_exports_worlds() {
+    let mut l = MobileLauncher::new(Box::new(StubBackend {
+        accounts: vec![Account::Offline {
+            name: "Steve".into(),
+        }],
+        active: Some(0),
+        setup: Setup::Ready,
+        worlds: vec!["Survival".into(), "Creative".into()],
+        ..StubBackend::default()
+    }));
+    let size = [856, 384];
+    click_button(&mut l, size, ButtonId::OpenSettings);
+    click_button(&mut l, size, ButtonId::SelectSettingsTab(SettingsTab::Files));
+    assert_hits_fit_without_overlap(&l, size, "settings-files-tab");
+
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ImportFile(ImportKind::TouchLayout)),
+        Some(Action::ImportFile(ImportKind::TouchLayout))
+    );
+    assert!(l.moving());
+    l.file_transfer_finished(Some(Ok("Imported Pojav layout".into())));
+    assert!(!l.moving());
+
+    l.scroll(0.0, -100.0);
+    click_button(&mut l, size, ButtonId::CycleExportWorld);
+    assert_eq!(
+        click_button(&mut l, size, ButtonId::ExportWorld),
+        Some(Action::ExportWorld("Creative".into()))
+    );
+    l.file_transfer_finished(Some(Ok("Exported Creative".into())));
+    assert_hits_fit_without_overlap(&l, size, "settings-files-tab-scrolled");
+}
+
+#[test]
+fn offline_entry_keeps_same_layout_when_keyboard_opens() {
+    for size in [[914, 411], [914, 213], [914, 200]] {
+        let mut l = MobileLauncher::new(Box::new(StubBackend::default()));
+        click_button(&mut l, size, ButtonId::OpenOfflineEntry);
+        assert_hits_fit_without_overlap(&l, size, "offline-unified");
+        with_ui(size, (0.0, 0.0), |ui| {
+            let hits = l.layout(&mut Canvas::Hit(ui));
+            let find = |id: ButtonId| {
+                hits.iter()
+                    .find(|h| h.id == id)
+                    .unwrap_or_else(|| panic!("missing {id:?} at {size:?}"))
+            };
+            let input = find(ButtonId::FocusOfflineName);
+            let confirm = find(ButtonId::ConfirmOffline);
+            let cancel = find(ButtonId::CancelOffline);
+            assert!(
+                input.y + input.h <= confirm.y + 0.5,
+                "at {size:?}: input ({}, {}) should sit above confirm ({})",
+                input.y,
+                input.h,
+                confirm.y
+            );
+            assert!(
+                (confirm.y - cancel.y).abs() < 1.0,
+                "at {size:?}: confirm.y ({}) != cancel.y ({})",
+                confirm.y,
+                cancel.y
+            );
+            assert!(
+                confirm.x < cancel.x,
+                "at {size:?}: confirm.x ({}) should precede cancel.x ({})",
+                confirm.x,
+                cancel.x
+            );
+        });
+    }
+}
+
+#[test]
+fn signin_progress_starting_and_code_fit_and_copy_code() {
+    for size in [[914, 411], [2400, 1080]] {
+        let mut starting = MobileLauncher::new(Box::new(StubBackend {
+            sign_in: SignIn::Starting,
+            ..StubBackend::default()
+        }));
+        assert_hits_fit_without_overlap(&starting, size, "signin-starting");
+        click_button(&mut starting, size, ButtonId::CancelSignIn);
+        assert_eq!(starting.backend().sign_in(), SignIn::Idle);
+
+        let mut code_screen = MobileLauncher::new(Box::new(StubBackend {
+            sign_in: SignIn::Code {
+                url: "https://www.microsoft.com/link".into(),
+                code: "TESTCODE".into(),
+            },
+            ..StubBackend::default()
+        }));
+        assert_hits_fit_without_overlap(&code_screen, size, "signin-code");
+        assert!(!code_screen.code_copied);
+        assert_eq!(
+            click_button(&mut code_screen, size, ButtonId::CopySignInCode),
+            Some(Action::CopyText("TESTCODE".into()))
+        );
+        assert!(code_screen.code_copied);
+    }
+}

@@ -1,0 +1,928 @@
+//! Mod Manager: profile name tabs, per-mod ON/OFF + Remove controls, and Horizon registry browser.
+
+use super::widgets::{
+    Canvas, HitRect, Tone, draw_button, draw_icon_box, draw_input_box, draw_tab_with_tools,
+    format_size, palette, truncate_to_fit, wrap_lines,
+};
+use super::{ButtonId, MobileLauncher};
+use crate::launcher_backend::{
+    ModSearch, Profile, ProfileMod, VANILLA,
+    i18n::{tr, trf},
+};
+use crate::ui_theme::{self, Face, color};
+use std::time::Instant;
+
+impl MobileLauncher {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_mods_view(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        x: f32,
+        y: f32,
+        w: f32,
+        avail_h: f32,
+        profiles: &[Profile],
+        col_success: u32,
+        col_danger: u32,
+    ) {
+        let ultra_v = avail_h < 150.0;
+        let compact_v = avail_h < 300.0;
+        self.mod_lists.set(None);
+        self.mod_pages.set([1, 1]);
+
+        let ix = x;
+        let iw = w;
+        let mut cy = y + if ultra_v {
+            0.0
+        } else if compact_v {
+            2.0
+        } else {
+            4.0
+        };
+        let top_btn_h = if ultra_v {
+            26.0
+        } else if compact_v {
+            32.0
+        } else {
+            36.0
+        };
+
+        let new_w = if compact_v { 116.0 } else { 128.0 };
+        draw_button(
+            ui,
+            hits,
+            ButtonId::OpenNewProfile,
+            ix + iw - new_w,
+            cy,
+            new_w,
+            top_btn_h,
+            Tone::Secondary,
+            tr("New Profile"),
+        );
+
+        let pid = self.effective_mods_profile_id(profiles);
+        // The tabs keep to one row that a sideways drag scrolls, so the mods below keep their
+        // room. It ends before New Profile.
+        let view_w = iw - new_w - 10.0;
+        let tool_w = top_btn_h;
+        let done_w = 72.0;
+        let field_w = 200.0;
+        // Always show the profile's display name (not its folder id).
+        let tab_ws: Vec<f32> = profiles
+            .iter()
+            .map(|prof| {
+                // At the size the tab draws its name (a long one ends in an ellipsis).
+                (ui.ro()
+                    .measure(Face::Medium, ui_theme::sizes().ui, &prof.name)
+                    + 26.0)
+                    .clamp(72.0, 180.0)
+            })
+            .collect();
+        let widths: Vec<f32> = profiles
+            .iter()
+            .zip(&tab_ws)
+            .map(|(prof, &cw)| {
+                if self
+                    .profile_rename
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == prof.id)
+                {
+                    field_w + 6.0 + done_w
+                } else if prof.id == pid && prof.id != VANILLA {
+                    cw + 2.0 * tool_w
+                } else {
+                    cw
+                }
+            })
+            .collect();
+        let max = (widths.iter().map(|w| w + 6.0).sum::<f32>() - 6.0 - view_w).max(0.0);
+        let mut scroll = self.tab_scroll.get();
+        // A tab newly shown, or opened for its name, is scrolled into view once.
+        let shown = (pid.clone(), self.profile_rename.is_some());
+        if self.tab_revealed.take().as_ref() != Some(&shown)
+            && let Some(i) = profiles.iter().position(|p| p.id == pid)
+        {
+            let left: f32 = widths[..i].iter().map(|w| w + 6.0).sum();
+            scroll = scroll.min(left).max(left + widths[i] - view_w);
+        }
+        let scroll = scroll.clamp(0.0, max);
+        self.tab_scroll.set(scroll);
+        self.tab_revealed.set(Some(shown));
+        self.scroll_max.set(max.ceil() as usize);
+        let (first_hit, first_vertex) = (hits.len(), ui.paint().map(|p| p.batch.vertices.len()));
+        let mut chip_x = ix - scroll;
+        for (i, prof) in profiles.iter().enumerate() {
+            let (at, want) = (chip_x, widths[i]);
+            chip_x += want + 6.0;
+            if at + want <= ix || at >= ix + view_w {
+                continue;
+            }
+            let chip_x = at;
+            let renaming = self
+                .profile_rename
+                .as_ref()
+                .filter(|(id, _)| *id == prof.id);
+            let cw = tab_ws[i];
+            let label = &truncate_to_fit(
+                ui.ro(),
+                Face::Medium,
+                ui_theme::sizes().ui,
+                &prof.name,
+                cw - 16.0,
+            );
+            // The modded profile shown carries its own tools in its cell: rename and delete.
+            let tools = prof.id == pid && prof.id != VANILLA;
+            // Its name typed in place, and Done: with the keyboard up, this row is what shows.
+            if let Some((_, typed)) = renaming {
+                draw_input_box(
+                    ui,
+                    hits,
+                    ButtonId::FocusRenameInput,
+                    chip_x,
+                    cy,
+                    field_w,
+                    top_btn_h,
+                    "",
+                    typed,
+                    false,
+                    true,
+                );
+                // The old name, after the caret, until a new one is typed: it stays if none is.
+                if typed.is_empty()
+                    && let Some(p) = ui.paint()
+                {
+                    let hint = truncate_to_fit(
+                        p,
+                        Face::Regular,
+                        ui_theme::sizes().ui,
+                        &prof.name,
+                        field_w - 36.0,
+                    );
+                    p.text_line(
+                        Face::Regular,
+                        ui_theme::sizes().ui,
+                        top_btn_h,
+                        chip_x + 24.0,
+                        cy,
+                        palette::muted(),
+                        &hint,
+                    );
+                }
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::SaveRenameProfile,
+                    chip_x + field_w + 6.0,
+                    cy,
+                    done_w,
+                    top_btn_h,
+                    Tone::Primary,
+                    tr("Done"),
+                );
+                continue;
+            }
+            if tools {
+                draw_tab_with_tools(
+                    ui,
+                    hits,
+                    ButtonId::ModManagerPickProfile(i),
+                    ButtonId::RenameTabProfile,
+                    ButtonId::DeleteTabProfile,
+                    chip_x,
+                    cy,
+                    cw,
+                    tool_w,
+                    top_btn_h,
+                    label,
+                );
+                continue;
+            }
+            draw_button(
+                ui,
+                hits,
+                ButtonId::ModManagerPickProfile(i),
+                chip_x,
+                cy,
+                cw,
+                top_btn_h,
+                if prof.id == pid {
+                    Tone::Banner
+                } else {
+                    Tone::Ghost
+                },
+                label,
+            );
+        }
+        // Tabs past either end are cut at the row's edges, drawing and taps alike.
+        let (x0, x1) = (ix, ix + view_w);
+        if let (Some(start), Some(p)) = (first_vertex, ui.paint()) {
+            let g = |v: f32| (v * p.density).round() / p.batch.scale;
+            let (gx0, gx1, gy0, gy1) = (g(x0), g(x1), g(y), g(y + avail_h));
+            p.batch.clip_since(start, gx0, gy0, gx1, gy1);
+        }
+        let cut: Vec<HitRect> = hits
+            .drain(first_hit..)
+            .filter_map(|mut h| {
+                let right = (h.x + h.w).min(x1);
+                h.x = h.x.max(x0);
+                h.w = right - h.x;
+                (h.w > 0.0).then_some(h)
+            })
+            .collect();
+        hits.extend(cut);
+        cy += top_btn_h
+            + if ultra_v {
+                4.0
+            } else if compact_v {
+                6.0
+            } else {
+                12.0
+            };
+        if let Some(p) = ui.paint() {
+            p.rounded(x + 1.0, cy, w - 2.0, 1.0, 0.0, palette::border_subtle());
+        }
+        cy += if ultra_v {
+            4.0
+        } else if compact_v {
+            8.0
+        } else {
+            14.0
+        };
+
+        if let Some(err) = &self.mods_error {
+            if let Some(p) = ui.paint() {
+                let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), err, iw);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    18.0,
+                    ix,
+                    cy,
+                    col_danger,
+                    &fit,
+                );
+            }
+            cy += 20.0;
+        }
+
+        if pid == VANILLA {
+            let rem_h = (y + avail_h - cy).max(0.0);
+            draw_vanilla_note(ui, hits, x, cy, w, rem_h, compact_v);
+            return;
+        }
+
+        let profile_mods = self.backend.mods(&pid);
+        let pane_gap = 16.0;
+        let pane_w = ((iw - pane_gap) * 0.5).round();
+        let pane_h = (y + avail_h - cy).max(0.0);
+        let right_x = ix + pane_w + pane_gap;
+        if let Some(p) = ui.paint() {
+            let rule_x = (ix + pane_w + pane_gap * 0.5).round();
+            p.rounded(rule_x, cy, 1.0, pane_h, 0.0, palette::border_subtle());
+        }
+        self.mod_lists.set(Some((cy, right_x - pane_gap * 0.5)));
+
+        // Another profile's tab: its panes fade up 8 dp (0.22 s).
+        let (_, tab_since) = super::motion::changed(&self.tab_motion, tab_key(&pid));
+        // A mod just added slides into Profile Mods and fades "Added" in the registry (0.32 s).
+        let now_mods = (tab_key(&pid), profile_mods.len());
+        let (before_mods, added_since) = super::motion::changed(&self.added_motion, now_mods);
+        let added_id = (before_mods.0 == now_mods.0 && now_mods.1 == before_mods.1 + 1)
+            .then(|| {
+                self.last_added_mod
+                    .as_ref()
+                    .filter(|(p, _)| *p == pid)
+                    .map(|(_, id)| id.as_str())
+                    .or_else(|| profile_mods.last().map(|m| m.info.id.as_str()))
+            })
+            .flatten();
+        let panes_start = super::motion::mark(ui);
+        self.draw_profile_mods_pane(
+            ui,
+            hits,
+            ix,
+            cy,
+            pane_w,
+            pane_h,
+            &profile_mods,
+            added_id,
+            added_since,
+            compact_v,
+        );
+        self.draw_registry_pane(
+            ui,
+            hits,
+            right_x,
+            cy,
+            iw - pane_w - pane_gap,
+            pane_h,
+            &profile_mods,
+            added_id,
+            added_since,
+            compact_v,
+            col_success,
+            col_danger,
+        );
+        let shown = self.motion.ease(tab_since, 0.0, 0.22);
+        let rise = 8.0 * (1.0 - shown);
+        super::motion::shape(ui, panes_start, shown, 0.0, rise, 1.0, 0.0, 0.0);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_profile_mods_pane(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        mods: &[ProfileMod],
+        added_id: Option<&str>,
+        added_since: Instant,
+        compact_v: bool,
+    ) {
+        let px = x;
+        let pw = w;
+        let mut py = y;
+        if let Some(p) = ui.paint() {
+            p.text_line(
+                Face::SemiBold,
+                15.0,
+                22.0,
+                px,
+                py,
+                palette::text(),
+                &trf(
+                    "Profile Mods ({count})",
+                    &[("count", &mods.len().to_string())],
+                ),
+            );
+        }
+        py += 24.0;
+
+        if mods.is_empty() {
+            if let Some(p) = ui.paint() {
+                let cx = x + w * 0.5;
+                let mid_y = py + ((y + h - py) * 0.5).max(52.0);
+                let sz = if compact_v { 36.0 } else { 44.0 };
+                let bx = (cx - sz * 0.5).round();
+                let by = (mid_y - sz - 10.0).max(py + 6.0).round();
+                p.rounded(
+                    bx,
+                    by,
+                    sz,
+                    sz,
+                    11.0,
+                    color::with_alpha(palette::accent(), 0.16),
+                );
+                p.border(
+                    bx,
+                    by,
+                    sz,
+                    sz,
+                    11.0,
+                    color::with_alpha(palette::accent_star(), 0.45),
+                );
+                draw_icon_box(p, cx, by + sz * 0.5, sz * 0.48, palette::accent_star());
+                let title = tr("No mods in this profile yet");
+                let tw = p.measure(Face::Medium, 13.5, title);
+                p.text_line(
+                    Face::Medium,
+                    13.5,
+                    18.0,
+                    (cx - tw * 0.5).round(),
+                    by + sz + 10.0,
+                    palette::text(),
+                    title,
+                );
+                let sub = tr("Add them from Horizon's registry.");
+                let sw = p.measure(Face::Regular, ui_theme::small(), sub);
+                p.text_line(
+                    Face::Regular,
+                    ui_theme::small(),
+                    16.0,
+                    (cx - sw * 0.5).round(),
+                    by + sz + 30.0,
+                    palette::muted(),
+                    sub,
+                );
+            }
+            return;
+        }
+
+        let row_h: f32 = if compact_v { 44.0 } else { 48.0 };
+        let bottom_limit = y + h - 8.0;
+        let total_space = (bottom_limit - py).max(0.0);
+        if total_space < row_h {
+            return;
+        }
+        let (per_page, total_pages, rows_limit) = pages(mods.len(), py, y + h, row_h);
+        self.mod_pages.set([total_pages, self.mod_pages.get()[1]]);
+        let page = self.mods_list_page.min(total_pages - 1);
+        let shown = self.dots_at(0, page);
+        let start = page * per_page;
+        let end = (start + per_page).min(mods.len());
+
+        let rem_w = 78.0;
+        let tog_w = 50.0;
+        for (i, pm) in mods.iter().enumerate().skip(start).take(end - start) {
+            if py + row_h > rows_limit + 0.5 {
+                break;
+            }
+            let row_start = super::motion::mark(ui);
+            if let Some(p) = ui.paint() {
+                p.rounded(px, py + row_h - 1.0, pw, 1.0, 0.0, palette::border_subtle());
+                // A built-in or local mod has no Remove: its file can't be fetched from the registry.
+                let fixed = pm.local || pm.builtin;
+                let max_nw = (pw - if fixed { 0.0 } else { rem_w } - tog_w - 26.0).max(46.0);
+                let fit_n = truncate_to_fit(p, Face::Medium, 14.0, &pm.info.name, max_nw);
+                p.text_line(
+                    Face::Medium,
+                    14.0,
+                    20.0,
+                    px + 10.0,
+                    py + if compact_v { 4.0 } else { 7.0 },
+                    palette::text(),
+                    &fit_n,
+                );
+                let meta = if pm.builtin {
+                    format!("v{}  ·  {}", pm.info.version, tr("Built in"))
+                } else if pm.local {
+                    format!("v{}  ·  {}", pm.info.version, tr("Local"))
+                } else {
+                    format!("v{}  ·  {}", pm.info.version, format_size(pm.info.size))
+                };
+                let fit_m = truncate_to_fit(p, Face::Regular, 11.0, &meta, max_nw);
+                p.text_line(
+                    Face::Regular,
+                    11.0,
+                    16.0,
+                    px + 10.0,
+                    py + if compact_v { 24.0 } else { 30.0 },
+                    palette::muted(),
+                    &fit_m,
+                );
+            }
+            let bh = 32.0;
+            let by = py + ((row_h - bh) * 0.5).round();
+            let tog_right = if pm.local || pm.builtin {
+                px + pw - 6.0
+            } else {
+                draw_button(
+                    ui,
+                    hits,
+                    ButtonId::RemoveProfileMod(i),
+                    px + pw - 6.0 - rem_w,
+                    by,
+                    rem_w,
+                    bh,
+                    Tone::Danger,
+                    tr("Remove"),
+                );
+                px + pw - 12.0 - rem_w
+            };
+            draw_button(
+                ui,
+                hits,
+                ButtonId::ToggleProfileMod(i),
+                tog_right - tog_w,
+                by,
+                tog_w,
+                bh,
+                if pm.enabled {
+                    Tone::Banner
+                } else {
+                    Tone::Secondary
+                },
+                if pm.enabled { tr("ON") } else { tr("OFF") },
+            );
+            if added_id == Some(pm.info.id.as_str()) {
+                let shown = self.motion.ease(added_since, 0.0, 0.32);
+                let slide = 16.0 * (1.0 - shown);
+                super::motion::shape(ui, row_start, shown, slide, 0.0, 1.0, 0.0, 0.0);
+            }
+            py += row_h;
+        }
+
+        draw_page_dots(
+            ui,
+            hits,
+            ButtonId::ProfileModsNext,
+            px,
+            rows_limit,
+            y + h,
+            pw,
+            shown,
+            total_pages,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_registry_pane(
+        &self,
+        ui: &mut Canvas<'_, '_>,
+        hits: &mut Vec<HitRect>,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        profile_mods: &[ProfileMod],
+        added_id: Option<&str>,
+        added_since: Instant,
+        compact_v: bool,
+        col_success: u32,
+        col_danger: u32,
+    ) {
+        let px = x;
+        let pw = w;
+        let ultra_pane = h < 84.0;
+        let mut py = y + if ultra_pane { 6.0 } else { 8.0 };
+
+        if !ultra_pane {
+            if let Some(p) = ui.paint() {
+                p.text_line(
+                    Face::SemiBold,
+                    15.0,
+                    22.0,
+                    px,
+                    py,
+                    palette::text(),
+                    tr("Horizon Registry"),
+                );
+            }
+            py += 22.0;
+        }
+
+        let search_btn_w = 72.0;
+        let search_h = if ultra_pane {
+            32.0_f32.min((h - 12.0).max(30.0))
+        } else if compact_v {
+            30.0
+        } else {
+            36.0
+        };
+        draw_input_box(
+            ui,
+            hits,
+            ButtonId::FocusModSearch,
+            px,
+            py,
+            pw - search_btn_w - 6.0,
+            search_h,
+            if self.mod_search_query.is_empty() && !self.mod_search_focused {
+                tr("Search Horizon mods")
+            } else {
+                ""
+            },
+            &self.mod_search_query,
+            false,
+            self.mod_search_focused,
+        );
+        draw_button(
+            ui,
+            hits,
+            ButtonId::SubmitModSearch,
+            px + pw - search_btn_w,
+            py,
+            search_btn_w,
+            search_h,
+            Tone::Primary,
+            tr("Find"),
+        );
+        py += search_h + 6.0;
+
+        match self.backend.mod_search() {
+            ModSearch::Idle | ModSearch::Searching => {
+                if let Some(p) = ui.paint() {
+                    p.text_line(
+                        Face::Regular,
+                        ui_theme::small(),
+                        22.0,
+                        px,
+                        py + 6.0,
+                        palette::muted(),
+                        tr("Searching Horizon registry..."),
+                    );
+                }
+            }
+            ModSearch::Failed(err) => {
+                if let Some(p) = ui.paint() {
+                    let fit = truncate_to_fit(p, Face::Regular, ui_theme::small(), &err, pw);
+                    p.text_line(
+                        Face::Regular,
+                        ui_theme::small(),
+                        22.0,
+                        px,
+                        py + 6.0,
+                        col_danger,
+                        &fit,
+                    );
+                }
+            }
+            ModSearch::Done(results) => {
+                if results.is_empty() {
+                    if let Some(p) = ui.paint() {
+                        p.text_line(
+                            Face::Regular,
+                            ui_theme::small(),
+                            22.0,
+                            px,
+                            py + 6.0,
+                            palette::muted(),
+                            tr("No mods matched."),
+                        );
+                    }
+                    return;
+                }
+                let row_h: f32 = if compact_v { 40.0 } else { 48.0 };
+                let bottom_limit = y + h - 8.0;
+                let total_space = (bottom_limit - py).max(0.0);
+                if total_space < row_h {
+                    return;
+                }
+                let (per_page, total_pages, rows_limit) = pages(results.len(), py, y + h, row_h);
+                self.mod_pages.set([self.mod_pages.get()[0], total_pages]);
+                let page = self.mod_registry_page.min(total_pages - 1);
+                let shown = self.dots_at(1, page);
+                let start = page * per_page;
+                let end = (start + per_page).min(results.len());
+
+                for (i, m) in results.iter().enumerate().skip(start).take(end - start) {
+                    if py + row_h > rows_limit + 0.5 {
+                        break;
+                    }
+                    let already = profile_mods.iter().any(|pm| pm.info.id == m.id);
+                    if let Some(p) = ui.paint() {
+                        p.rounded(px, py + row_h - 1.0, pw, 1.0, 0.0, palette::border_subtle());
+                        let max_nw = (pw - 82.0).max(46.0);
+                        let fit_n = truncate_to_fit(p, Face::Medium, 14.0, &m.name, max_nw);
+                        p.text_line(
+                            Face::Medium,
+                            14.0,
+                            18.0,
+                            px + 10.0,
+                            py + if compact_v { 3.0 } else { 6.0 },
+                            palette::text(),
+                            &fit_n,
+                        );
+                        let sub = format!("{}  ·  {}", format_size(m.size), m.description);
+                        let fit_s = truncate_to_fit(p, Face::Regular, 11.0, &sub, max_nw);
+                        p.text_line(
+                            Face::Regular,
+                            11.0,
+                            16.0,
+                            px + 10.0,
+                            py + if compact_v { 22.0 } else { 26.0 },
+                            palette::muted(),
+                            &fit_s,
+                        );
+                    }
+                    if already {
+                        let added_start = super::motion::mark(ui);
+                        if let Some(p) = ui.paint() {
+                            let added_lbl = tr("Added");
+                            let aw = p.measure(Face::Regular, 11.0, added_lbl);
+                            p.text_line(
+                                Face::Regular,
+                                11.0,
+                                row_h,
+                                px + pw - 10.0 - aw,
+                                py,
+                                col_success,
+                                added_lbl,
+                            );
+                        }
+                        if added_id == Some(m.id.as_str()) {
+                            let shown = self.motion.ease(added_since, 0.0, 0.32);
+                            super::motion::shape(ui, added_start, shown, 0.0, 0.0, 1.0, 0.0, 0.0);
+                        }
+                    } else {
+                        draw_button(
+                            ui,
+                            hits,
+                            ButtonId::AddRegistryMod(i),
+                            px + pw - 70.0,
+                            py + ((row_h - 30.0) * 0.5).round(),
+                            64.0,
+                            30.0,
+                            Tone::Primary,
+                            tr("+ Add"),
+                        );
+                    }
+                    py += row_h;
+                }
+
+                draw_page_dots(
+                    ui,
+                    hits,
+                    ButtonId::RegistryModsNext,
+                    px,
+                    rows_limit,
+                    y + h,
+                    pw,
+                    shown,
+                    total_pages,
+                );
+            }
+        }
+    }
+}
+
+/// A profile's id as a number, so a change of profile can be told apart from a frame to the next.
+fn tab_key(pid: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    pid.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The page dots' strip at the bottom of a list that doesn't fit.
+const DOTS_H: f32 = 16.0;
+
+/// A list of `count` rows of `row_h` from `top` down to its pane's `bottom`: how many rows a
+/// page shows, how many pages, and where the rows end. One that doesn't fit keeps the pane's
+/// last [`DOTS_H`] for its page dots, when it has the room.
+pub(super) fn pages(count: usize, top: f32, bottom: f32, row_h: f32) -> (usize, usize, f32) {
+    let fits = |end: f32| (((end - top) / row_h).floor() as usize).max(1);
+    let mut end = bottom - 8.0;
+    if count > fits(end) && bottom - DOTS_H - top >= row_h {
+        end = bottom - DOTS_H;
+    }
+    let per_page = fits(end);
+    (per_page, count.max(1).div_ceil(per_page), end)
+}
+
+/// At most this many page dots show; past it the row pans.
+const MAX_DOTS: usize = 5;
+/// How long the dots take to pan to a page turned to.
+pub(super) const DOTS_SECS: f32 = 0.22;
+
+/// The page dots of `pages` pages with the row at `shown` (a page, or between two while it
+/// pans): each dot's page, its place in the row (0 to 4, fractions while panning), its size (1
+/// whole; the row's end dots shrink while more pages lie past them) and how lit it is.
+pub(super) fn dot_row(shown: f32, pages: usize) -> Vec<(usize, f32, f32, f32)> {
+    let span = pages.min(MAX_DOTS) as f32;
+    let past = pages as f32 - span;
+    // The row keeps the page shown in its middle, between its ends.
+    let start = (shown - (span - 1.0) * 0.5).clamp(0.0, past);
+    let (more_left, more_right) = (start.min(1.0), (past - start).clamp(0.0, 1.0));
+    // A dot `d` places from a row end that has more past it: half size at the end, gone past it.
+    let size = |d: f32, more: f32| 1.0 - more * (1.0 - (0.5 + 0.5 * d).clamp(0.0, 1.0));
+    (0..pages)
+        .filter_map(|i| {
+            let at = i as f32 - start;
+            let s = size(at, more_left).min(size(span - 1.0 - at, more_right));
+            let lit = (1.0 - (i as f32 - shown).abs()).max(0.0);
+            (at > -1.0 && at < span && s > 0.05).then_some((i, at, s, lit))
+        })
+        .collect()
+}
+
+/// Under a list of more than one page, between the rows' `end` and the pane's `bottom`: up to
+/// five dots, the page shown lit ([`dot_row`], at `shown`). A swipe on the list turns its page;
+/// a tap here shows the next, for a controller or mouse.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_page_dots(
+    ui: &mut Canvas<'_, '_>,
+    hits: &mut Vec<HitRect>,
+    id: ButtonId,
+    x: f32,
+    end: f32,
+    bottom: f32,
+    w: f32,
+    shown: f32,
+    pages: usize,
+) {
+    if pages < 2 || bottom - end < DOTS_H - 0.5 {
+        return;
+    }
+    let y = bottom - DOTS_H;
+    hits.push(HitRect {
+        id,
+        x,
+        y,
+        w,
+        h: DOTS_H,
+    });
+    let Some(p) = ui.paint() else { return };
+    let (dot, step) = (6.0, 14.0);
+    let span = pages.min(MAX_DOTS) as f32;
+    let left = x + (w - (span - 1.0) * step) * 0.5;
+    let mid = y + DOTS_H * 0.5;
+    for (_, at, size, lit) in dot_row(shown, pages) {
+        let (d, cx) = (dot * size, left + at * step);
+        let dim = color::with_alpha(palette::muted(), 0.45);
+        p.rounded(cx - d * 0.5, mid - d * 0.5, d, d, d * 0.5, dim);
+        if lit > 0.0 {
+            let col = color::with_alpha(palette::text(), lit);
+            p.rounded(cx - d * 0.5, mid - d * 0.5, d, d, d * 0.5, col);
+        }
+    }
+}
+
+/// Vanilla's explanation and "Create Modded Profile" button, centered in `(x, y, w, rem_h)`
+/// (either across the full page when no built-in mods exist, or in the right pane beside them).
+fn draw_vanilla_note(
+    ui: &mut Canvas<'_, '_>,
+    hits: &mut Vec<HitRect>,
+    x: f32,
+    y: f32,
+    w: f32,
+    rem_h: f32,
+    compact_v: bool,
+) {
+    let center_x = x + w * 0.5;
+    let badge_sz = if compact_v { 44.0 } else { 58.0 };
+    let sub = tr("Mods go in their own profiles, so Vanilla worlds stay untouched.");
+    let sub_max = (w - 24.0).clamp(120.0, 460.0);
+    let mut sub_lines: Vec<String> =
+        wrap_lines(ui.ro(), Face::Regular, ui_theme::small(), sub, sub_max)
+            .into_iter()
+            .take(2)
+            .collect();
+    let cta_w = 216.0_f32.min((w - 16.0).max(120.0));
+    let cta_h = if compact_v { 38.0 } else { 44.0 };
+    let badge_gap = if compact_v { 10.0 } else { 18.0 };
+    let [badge_h, sub_h, heading_h] = fit_note(
+        rem_h - 20.0 - 14.0 - cta_h,
+        [
+            badge_sz + badge_gap,
+            sub_lines.len() as f32 * 18.0,
+            if compact_v { 24.0 } else { 30.0 },
+        ],
+    );
+    if sub_h == 0.0 {
+        sub_lines.clear();
+    }
+    let text_h = badge_h + heading_h + sub_h;
+    let block_h = text_h + 14.0 + cta_h;
+    let mut ey = y + ((rem_h - block_h) * 0.5).max(4.0).round();
+    let cta_y = (ey + text_h + 14.0).min((y + rem_h - cta_h - 10.0).max(y));
+
+    if let Some(p) = ui.paint() {
+        if badge_h > 0.0 {
+            draw_icon_box(
+                p,
+                center_x,
+                ey + badge_sz * 0.5,
+                badge_sz * 0.46,
+                palette::muted(),
+            );
+        }
+        ey += badge_h;
+
+        if heading_h > 0.0 {
+            let heading =
+                truncate_to_fit(p, Face::SemiBold, if compact_v { 17.0 } else { 19.0 }, tr("Vanilla plays without mods"), (w - 12.0).max(80.0));
+            let h_sz = if compact_v { 17.0 } else { 19.0 };
+            let hw = p.measure(Face::SemiBold, h_sz, &heading);
+            p.text_line(
+                Face::SemiBold,
+                h_sz,
+                24.0,
+                (center_x - hw * 0.5).round(),
+                ey,
+                palette::text(),
+                &heading,
+            );
+        }
+        ey += heading_h;
+
+        for (li, line) in sub_lines.iter().enumerate() {
+            let lw = p.measure(Face::Regular, ui_theme::small(), line);
+            p.text_line(
+                Face::Regular,
+                ui_theme::small(),
+                18.0,
+                (center_x - lw * 0.5).round(),
+                ey + li as f32 * 18.0,
+                palette::muted(),
+                line,
+            );
+        }
+    }
+    draw_button(
+        ui,
+        hits,
+        ButtonId::OpenNewProfile,
+        (center_x - cta_w * 0.5).round(),
+        cta_y,
+        cta_w,
+        cta_h,
+        Tone::Primary,
+        tr("Create Modded Profile"),
+    );
+}
+
+/// Vanilla's note within `room` above its button: on a short screen,
+/// the badge goes first, then the explanation, then the heading.
+pub(super) fn fit_note(room: f32, mut parts: [f32; 3]) -> [f32; 3] {
+    let mut i = 0;
+    while i < parts.len() && parts.iter().sum::<f32>() > room {
+        parts[i] = 0.0;
+        i += 1;
+    }
+    parts
+}
