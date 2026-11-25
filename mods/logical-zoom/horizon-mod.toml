@@ -1,0 +1,12 @@
+id = "logical_zoom"
+name = "Smooth Zoom"
+version = "0.1.0"
+description = "Hold C to zoom the world, hide your hands and smooth mouse movement."
+authors = ["Meridian contributors"]
+license = "MIT"
+api = "0.2"
+side = "client"
+capabilities = ["registries"]
+
+[discouraged]
+zoom = { version = "*", reason = "Both mods change the field of view while held.", side = "client" }
