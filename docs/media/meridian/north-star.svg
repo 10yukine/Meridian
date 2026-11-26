@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="308.1 313.05 640 640" role="img" aria-labelledby="title">
+  <title id="title">Meridian Logo - North Star</title>
+  <defs>
+    <radialGradient id="background" cx="51%" cy="48%" r="74%">
+      <stop stop-color="#100719"/>
+      <stop offset="0.56" stop-color="#0c0414"/>
+      <stop offset="1" stop-color="#08020f"/>
+    </radialGradient>
+    <linearGradient id="white" x2="100%" y2="100%">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#f9f9fa"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="265" y1="778" x2="993" y2="413" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a575f6"/>
+      <stop offset="0.55" stop-color="#a876fa"/>
+      <stop offset="1" stop-color="#a677f6"/>
+    </linearGradient>
+  </defs>
+  <rect width="1254" height="1254" fill="url(#background)"/>
+
+  <!-- Stack from back to front: white bar, sweep, gray bar, accent. -->
+  <path fill="url(#white)" transform="translate(628.1 633.05) scale(0.86) translate(-628.1 -633.05)" d="M708.56 511.685 789.38 454.625 V754.415 L708.56 811.475 Z"/>
+  <path fill="url(#violet)" transform="translate(1256.2 18) scale(-1 1) rotate(52.5 628.1 609)" d="
+    M567.62 526.37
+    C476.06 510.41 382.82 506.21 368.54 537.29
+    C350.90 575.09 474.38 633.05 612.98 667.49
+    C745.70 700.25 885.14 689.33 888.50 660.77
+    C891.86 630.53 785.18 586.85 684.38 561.65
+    C771.74 595.25 862.46 629.69 861.62 648.17
+    C860.78 678.41 733.10 672.53 609.62 645.65
+    C481.94 617.09 393.74 570.89 405.50 544.85
+    C416.42 520.49 480.26 512.93 567.62 526.37 Z"/>
+  <path fill="#706c79" transform="translate(628.1 633.05) scale(0.86) translate(-628.1 -633.05)" d="M467.18 454.625 547.64 511.685 V811.475 L467.18 754.415 Z"/>
+  <g transform="translate(308.1 313.05) scale(1.25)">
+    <path fill="#a990ff" d="M253 178 C256 204 263 210 289 214 C263 218 256 225 253 250 C250 225 242 218 217 214 C242 210 250 204 253 178 Z"/>
+  </g>
+</svg>
